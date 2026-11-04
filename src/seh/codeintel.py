@@ -47,7 +47,7 @@ def text_fallback(root:Path,query:str,limit:int=30)->dict:
     for file in root.rglob("*"):
         if len(results)>=limit or count>1200:break
         if any(x in skip for x in file.relative_to(root).parts) or not file.is_file() or file.is_symlink():continue
-        if file.suffix not in (".py",".js",".jsx",".mjs",".ts",".tsx",".mts",".cs",".fs",".go",".rs",".java",".kt",".kts",".swift",".rb",".php",".dart",".c",".h",".cpp",".hpp",".cc",".gd",".ex",".exs",".zig",".lua",".sh",".md",".json",".toml",".yaml",".yml") or file.stat().st_size>300000:continue
+        if file.suffix not in (".py",".js",".ts",".tsx",".cs",".go",".rs",".java",".md",".gd",".json",".toml") or file.stat().st_size>300000:continue
         count+=1
         try:lines=file.read_text(encoding="utf-8").splitlines()
         except UnicodeError:continue

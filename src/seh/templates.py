@@ -9,16 +9,14 @@ SKILLS = {
     "Use only for harness setup, maintenance or diagnosing harness configuration.",
     """# Harness initialization
 
-Inspect the repository and use `seh setup --root .` for guided, safe preview. Apply only with user approval (`seh setup --root . --yes`) or run `seh sync --root . --apply` to refresh generated files.
+Inspect the repository and call `seh init --root .` to preview configuration. Apply only with user approval via `seh init --root . --apply` or `seh sync --root . --apply`.
 
-Run `seh status --root .` after applying and `seh doctor --root .` for deeper diagnostics. Use `seh uninstall --root .` to preview removal. Never remove user-created files. Do not overwrite user-owned files. Do not install external tools without informed consent. Prefer an existing CLI/MCP instead of adding redundant skills.
+Run `seh doctor --root .` after applying. Do not overwrite user-owned files. Do not install external tools without informed consent. Prefer an existing CLI/MCP instead of adding redundant skills.
 """),
 "work": (
     "Plan and implement coding tasks with evidence-based checks and bounded repair. "
     "Use for feature development, bug fixes and structured code changes, not for casual questions.",
     """# Work
-
-Support the project's languages, frameworks and build tools (not only Python). First inspect `seh project detect --root .` or the existing manifests. For a multi-project repository, choose the relevant project/check; never assume a single root-level Python test command. Preview checks with `seh project checks --root .`, and execute repository scripts only with approval.
 
 For small low-risk changes, work natively and run the narrowest relevant tests. For larger, parallel or higher-risk changes, create a TaskSpec and use `seh work run --task <json> --host <host> --root . --apply` only after explaining the exact edits.
 
@@ -36,8 +34,8 @@ AGENTS = {
 }
 
 RULES = {
-    "engineering": "Preserve the repository's languages, framework conventions, package managers, lockfiles and platform-specific toolchains. Do not rewrite another language in Python by default. For monorepos identify the affected subproject. Prefer existing patterns. Keep changes focused. Do not change unrelated files. No secrets in code or logs. Verify actual diff before reporting completion.\n",
-    "testing": "Use project-defined test/build/lint commands for the correct ecosystem; preview via `seh project checks`. Do not install dependencies or execute repository scripts without approval. Select relevant unit tests first, then broaden as needed. Report executed commands and exit statuses. FAIL/UNKNOWN must not be called PASS.\n"
+    "engineering": "Prefer existing patterns. Keep changes focused. Do not change unrelated files. No secrets in code or logs. Verify actual diff before reporting completion.\n",
+    "testing": "Select relevant unit tests first, then broaden as needed. Report executed commands and exit statuses. FAIL/UNKNOWN must not be called PASS.\n"
 }
 
 def skill_md(name: str) -> str:
@@ -96,7 +94,7 @@ def instruction_block(cfg: Config) -> str:
             "## Self-Evolve Harness (short contract)\n"
             "Use existing tools and small prompts before introducing a new Skill. "
             "For Skill/prompt changes follow Explore -> Plan -> Baseline -> Edit -> Verify -> Compare -> Approve. "
-            "Detect the target language/toolchain and run project-specific checks, not assumed Python commands. Use deterministic tests instead of guessing. Keep edits scoped; seek approval for privileged changes. "
+            "Use deterministic tests instead of guessing. Keep edits scoped; seek approval for privileged changes. "
             "Only invoke `seh optimize` on explicit request. "
             "Use `seh doctor` for capability diagnostics; unsupported tools are not assumed available.\n"
             f"Configured code intelligence: {cfg.code_intelligence}. Memory: {cfg.memory}.\n"

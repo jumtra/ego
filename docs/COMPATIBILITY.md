@@ -24,6 +24,10 @@
 - **Safety**: `--trusted-local` means you explicitly accept a lower isolation guarantee. Sandbox detection does not auto-certify a Docker/podman binary as safe. `require_metered` blocks because the code does not yet implement a pre-execution dollar hard cap.
 - **Unverified X reference**: The second user-supplied social post was not accessible in verified text, so the optional module is declared `SPEC_UNVERIFIED` and OFF. It is deliberately not implemented based on guessed content.
 
-## Project languages
+## v1.4.1 capability extensions
 
-The harness Python runtime does not restrict the programming language of managed repositories. Native toolchain detection covers Node/TypeScript, Go, Rust, .NET, Java/Kotlin, Swift, Ruby, PHP, Dart/Flutter, C/C++, Godot/Unity/Unreal and others. Toolchain command execution is opt-in, and dependencies need to be prepared by the user. See [LANGUAGE_SUPPORT.md](LANGUAGE_SUPPORT.md).
+- Task and individual DAG nodes can select `host`, `model`, `models`, and `strategy`. Multi-host `fallback` handles unavailable/rate-limited/timed-out CLIs; `compare` does not apply results. Independent DAG nodes can run in parallel with distinct hosts. These are **offline-tested adapters**, not authenticated production E2E claims.
+- `seh hosts inspect|refresh` checks installed version/flags and invalidates the cache after binary replacement. Known flag variants can be chosen automatically; unknown new semantics require a reviewed adapter release.
+- `seh models list|refresh` caches model inventories/aliases. `auto` delegates to native defaults; pinned model IDs do not change without editing the Task.
+- `harness update` is implemented with a publisher-pinned GitHub Releases API, SHA256 verification, wheel METADATA checks and user approval. Its remote channel is functional **only after a matching official wheel is published to the specified repository**; v1.4.0 needs an initial pip upgrade.
+- `--autonomy auto` is the unattended-but-sandboxed default; raw `--yolo` and `--dangerously-skip-permissions` require an explicit external-isolation attestation and `--trust-cli`. The harness does not prove the external sandbox exists.

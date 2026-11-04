@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "goal": "Add an example TypeScript frontend and Go backend endpoint with tests",
+  "instructions": "Prefer minimal changes; do not change unrelated files or credentials.",
+  "instructions_file": "requirements.md",
+  "defaults": {
+    "hosts": ["claude"],
+    "strategy": "single",
+    "model": "auto"
+  },
+  "nodes": [
+    {
+      "id": "design",
+      "kind": "agent",
+      "role": "architect",
+      "host": "claude",
+      "model": "sonnet",
+      "prompt": "Write a short change plan to docs/feature-plan.md. Do not modify application files.",
+      "write_allowlist": ["docs/feature-plan.md"]
+    },
+    {
+      "id": "frontend",
+      "kind": "agent",
+      "role": "implementer",
+      "depends_on": ["design"],
+      "host": "codex",
+      "model": "auto",
+      "prompt": "Implement the frontend part of docs/feature-plan.md and update related TypeScript tests.",
+      "write_allowlist": ["web/src/*", "web/tests/*"],
+      "checks": [["npm", "test", "--", "--runInBand"]]
+    },
+    {
+      "id": "backend",
+      "kind": "agent",
+      "role": "implementer",
+      "depends_on": ["design"],
+      "host": "opencode",
+      "model": "auto",
+      "prompt": "Implement the Go backend part of docs/feature-plan.md and update related tests.",
+      "write_allowlist": ["server/*.go", "server/**/*.go"],
+      "checks": [["go", "test", "./..."]]
+    },
+    {
+      "id": "review",
+      "kind": "agent",
+      "depends_on": ["frontend", "backend"],
+      "hosts": ["claude", "codex"],
+      "strategy": "compare",
+      "models": {"claude": "sonnet", "codex": "auto"},
+      "prompt": "Review the final diff and report defects. Compare results; do not edit files.",
+      "write_allowlist": ["reports/*.md"]
+    }
+  ]
+}

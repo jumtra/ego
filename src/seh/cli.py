@@ -10,32 +10,6 @@ from .util import SEHError, read_json, write_json, now
 def _print(data):print(json.dumps(data,indent=2,ensure_ascii=False,default=str))
 def _root(args):return Path(getattr(args,"root", ".")).resolve()
 
-def _cmd_setup(args):
-    from .setup import setup_command
-    result, exit_code = setup_command(_root(args), profile=args.profile, hosts=args.hosts,
-          graph=args.graph, memory=args.memory, detect_tests=args.detect_tests,
-          yes=args.yes, non_interactive=args.non_interactive,
-          json_format=args.json, scan=not args.skip_scan)
-    if args.json: _print(result)
-    return exit_code
-
-
-def _cmd_uninstall(args):
-    from .setup import uninstall_command
-    result, exit_code = uninstall_command(_root(args), yes=args.yes,
-        non_interactive=args.non_interactive, json_format=args.json)
-    if args.json: _print(result)
-    return exit_code
-
-
-def _cmd_status(args):
-    from .setup import status_command, display_status
-    result = status_command(_root(args))
-    if args.json: _print(result)
-    else: print(display_status(result))
-    return 0
-
-
 def _cmd_init(args):
     from .config import Config, load_config
     from .install import installation_plan,apply_install
@@ -53,36 +27,6 @@ def _cmd_init(args):
     if not args.apply:result.pop("wanted",None)
     result["detection"]=detection
     _print(result);return 0
-
-def _cmd_project(args):
-    """All language discovery is read-only; running project scripts is opt-in."""
-    from .toolchains import detect_projects, resolve_check
-    from .detect import detect
-    root = _root(args)
-    if args.action == "detect":
-        _print(detect(root)); return 0
-    if args.action == "checks":
-        projects = detect_projects(root)
-        _print({"projects": [{"path": p["path"], "ecosystem": p["ecosystem"],
-                              "languages": p["languages"], "checks": p["checks"]}
-                             for p in projects], "executed": False})
-        return 0
-    check = resolve_check(root, args.kind, project=args.project, ecosystem=args.ecosystem)
-    if not args.execute:
-        _print({**check, "executed": False, "note": "No test/build/lint was executed; --execute --approve is required"})
-        return 0
-    if not args.approve:
-        raise SEHError("APPROVAL_REQUIRED", "Running repository scripts requires --execute --approve", 4)
-    if not check["available"]:
-        raise SEHError("CHECK_TOOL_UNAVAILABLE", "Missing executable: " + check["argv"][0], 3)
-    from .config import load_config
-    from .runner import run_checked_command
-    cfg = load_config(root)
-    result = run_checked_command(check["argv"], Path(check["cwd"]),
-                                 timeout=min(args.timeout, cfg.timeout_seconds), allow=cfg.allow_commands)
-    _print({**check, "executed": True, "result": result.as_dict()})
-    return 0 if result.status == "PASS" else 5
-
 
 def _cmd_sync(args):
     from .config import load_config
@@ -140,9 +84,20 @@ def _cmd_work(args):
                 "instructions":"Use /work in the host, or seh work run for bounded graph execution"});return 0
     task=read_json(Path(args.task))
     if not task:raise SEHError("TASK_MISSING",str(args.task),3)
+    if any(getattr(args,attr,None) for attr in ("hosts","strategy","model","models")):
+        task=dict(task)
+        defaults=dict(task.get("defaults",{}))
+        if args.hosts:defaults["hosts"]=[h.strip() for h in args.hosts.split(",")]
+        if args.strategy:defaults["strategy"]=args.strategy
+        if args.model:defaults["model"]=args.model
+        if args.models:
+            try:defaults["models"]=json.loads(args.models)
+            except json.JSONDecodeError as exc:raise SEHError("INVALID_MODEL",str(exc),2) from exc
+        task["defaults"]=defaults
     result=execute(root,task,host=args.host,apply=args.apply,approve=args.approve,trust_cli=args.trust_cli,
-                   run_id=args.run_id if args.action=="resume" else None,resume=args.action=="resume")
-    _print(result);return 0 if result["final_status"]=="PASSED" else 5
+                   run_id=args.run_id if args.action=="resume" else None,resume=args.action=="resume",
+                   autonomy=args.autonomy,isolated=args.attest_external_sandbox)
+    _print(result);return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
 
 def _cmd_eval(args):
     from .evals import run_eval,compare
@@ -290,29 +245,54 @@ def _cmd_bench(args):
             "baseline_note":"This measures SEH CLI dispatch only, not native Claude/Codex/OpenCode task execution"})
     return 0
 
+def _cmd_hosts(args):
+    from .hostcompat import list_host_capabilities, inspect_host
+    if args.host:
+        _print(inspect_host(args.host, refresh=args.action=="refresh"))
+    else:
+        _print(list_host_capabilities(refresh=args.action=="refresh"))
+    return 0
+
+
+def _cmd_models(args):
+    from .models import list_models,refresh_catalog
+    root=_root(args)
+    if args.action=="refresh":
+        _print(refresh_catalog(root,hosts=[args.host] if args.host else None))
+    else:
+        _print(list_models(root,host=args.host,refresh_if_stale=not args.no_refresh))
+    return 0
+
+
+def _cmd_update(args):
+    from .selfupdate import self_update, update_from_local_wheel
+    if args.wheel:
+        if not args.sha256:
+            raise SEHError("DIGEST_REQUIRED","--wheel requires --sha256",2)
+        result=update_from_local_wheel(Path(args.wheel),args.sha256,__version__,yes=args.yes)
+    else:
+        if args.sha256:
+            raise SEHError("INVALID_UPDATE","--sha256 requires --wheel",2)
+        result=self_update(__version__,apply=not args.check,yes=args.yes)
+    if args.sync and result.get("status")=="INSTALLED":
+        import subprocess
+        project=_root(args)
+        if not (project/".harness"/"config.toml").exists():
+            raise SEHError("PROJECT_NOT_INITIALIZED","--sync requires existing .harness/config.toml",3)
+        # Launch the just-installed version in a new process; no stale templates.
+        p=subprocess.run([sys.executable,"-m","seh","sync","--root",str(project),"--apply"],capture_output=True,text=True,timeout=90)
+        if p.returncode:
+            raise SEHError("PROJECT_SYNC_FAILED",p.stderr[-1600:] or p.stdout[-1600:],3)
+        result["project_sync"]=json.loads(p.stdout)
+    _print(result)
+    return 0
+
+
 def build_parser()->argparse.ArgumentParser:
     p=argparse.ArgumentParser(prog="seh",description="Standalone CLI-first self-evolve-harness")
     p.add_argument("--version",action="version",version=f"seh {__version__}")
     sub=p.add_subparsers(dest="command",required=True)
     def common(sp):sp.add_argument("--root",default=".")
-    setup=sub.add_parser("setup",help="One-command, safe interactive or --yes setup");common(setup)
-    setup.add_argument("--profile",choices=["minimal","balanced","full"])
-    setup.add_argument("--hosts",help="auto, all, or claude,codex,opencode,agy")
-    setup.add_argument("--graph",choices=["none","codegraph","graphify"])
-    setup.add_argument("--memory",choices=["file","engram"])
-    setup.add_argument("--detect-tests",action="store_true",help="Store suggested test commands without executing them")
-    setup.add_argument("--skip-scan",action="store_true",help="Skip multi-language project scan")
-    setup.add_argument("--yes",action="store_true",help="Explicitly approve and apply safe file changes")
-    setup.add_argument("--non-interactive",action="store_true",help="Never prompt; preview unless --yes")
-    setup.add_argument("--json",action="store_true",help="Machine-readable output, no prompts")
-    setup.set_defaults(func=_cmd_setup)
-    sp=sub.add_parser("status",help="Human-friendly, read-only installation status");common(sp)
-    sp.add_argument("--json",action="store_true");sp.set_defaults(func=_cmd_status)
-    sp=sub.add_parser("uninstall",help="Preview/removes only SEH-managed files, preserving user data");common(sp)
-    sp.add_argument("--yes",action="store_true",help="Explicit removal approval")
-    sp.add_argument("--non-interactive",action="store_true")
-    sp.add_argument("--json",action="store_true")
-    sp.set_defaults(func=_cmd_uninstall)
     init=sub.add_parser("init",help="Preview/create minimal portable harness (dry-run default)");common(init)
     init.add_argument("--profile",choices=["minimal","balanced","full"])
     init.add_argument("--hosts",help="Comma-separated claude,codex,opencode,agy")
@@ -320,19 +300,25 @@ def build_parser()->argparse.ArgumentParser:
     init.add_argument("--memory",choices=["file","engram"])
     init.add_argument("--detect-tests",action="store_true",help="Add verified test command candidates to config")
     init.add_argument("--apply",action="store_true");init.set_defaults(func=_cmd_init)
-    sp=sub.add_parser("project",help="Discover languages and review/run project-specific checks");common(sp)
-    actions=sp.add_subparsers(dest="action",required=True)
-    actions.add_parser("detect",help="Detect projects, ecosystems and frameworks without executing commands")
-    actions.add_parser("checks",help="List project test/lint/typecheck/build/format argv proposals")
-    r=actions.add_parser("check",help="Preview (default) or explicitly execute one check")
-    r.add_argument("--kind",choices=["test","lint","typecheck","build","format"],required=True)
-    r.add_argument("--project",help="Repo-relative project path, e.g. apps/web")
-    r.add_argument("--ecosystem",help="Disambiguate projects with several toolchains")
-    r.add_argument("--timeout",type=int,default=120)
-    r.add_argument("--execute",action="store_true");r.add_argument("--approve",action="store_true")
-    sp.set_defaults(func=_cmd_project)
     sp=sub.add_parser("sync",help="Re-render host configurations");common(sp);sp.add_argument("--apply",action="store_true");sp.set_defaults(func=_cmd_sync)
     sp=sub.add_parser("doctor");common(sp);sp.set_defaults(func=_cmd_doctor)
+    sp=sub.add_parser("hosts",help="Inspect installed host CLI versions and supported flags");common(sp)
+    s=sp.add_subparsers(dest="action",required=True)
+    for name in ("inspect","refresh"):
+        q=s.add_parser(name);q.add_argument("--host",choices=["claude","codex","opencode","agy"])
+    sp.set_defaults(func=_cmd_hosts)
+    sp=sub.add_parser("models",help="List or refresh host model catalogs; no refresh during Fast work");common(sp)
+    s=sp.add_subparsers(dest="action",required=True)
+    q=s.add_parser("list");q.add_argument("--host",choices=["claude","codex","opencode","agy"]);q.add_argument("--no-refresh",action="store_true")
+    q=s.add_parser("refresh");q.add_argument("--host",choices=["claude","codex","opencode","agy"])
+    sp.set_defaults(func=_cmd_models)
+    sp=sub.add_parser("update",help="Fetch and verify latest trusted GitHub Release; install with confirmation");common(sp)
+    sp.add_argument("--check",action="store_true",help="Check availability only; do not install")
+    sp.add_argument("--yes",action="store_true",help="Approve verified update in non-interactive mode")
+    sp.add_argument("--wheel",help="Offline wheel upgrade from an explicitly trusted local file")
+    sp.add_argument("--sha256",help="Expected SHA256 digest for --wheel")
+    sp.add_argument("--sync",action="store_true",help="After install, synchronize owned host config in --root project")
+    sp.set_defaults(func=_cmd_update)
     sp=sub.add_parser("modules");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("list");r=s.add_parser("resolve");r.add_argument("modules");r=s.add_parser("scaffold");r.add_argument("name");r.add_argument("--apply",action="store_true");sp.set_defaults(func=_cmd_modules)
     sp=sub.add_parser("migrate");common(sp);s=sp.add_subparsers(dest="action",required=True)
@@ -344,6 +330,12 @@ def build_parser()->argparse.ArgumentParser:
     for name in ("run","resume"):
         r=s.add_parser(name);r.add_argument("--task",required=True);r.add_argument("--host",choices=["mock","claude","codex","opencode","agy"],default="mock")
         r.add_argument("--apply",action="store_true");r.add_argument("--approve",action="store_true");r.add_argument("--trust-cli",action="store_true")
+        r.add_argument("--hosts", help="Comma-separated task default hosts; per-node settings take precedence")
+        r.add_argument("--strategy",choices=["single","fallback","compare"])
+        r.add_argument("--model", help="Single-host explicit model ID; omit for native host default")
+        r.add_argument("--models",help='JSON object of host to model overrides, e.g. {"claude":"sonnet"}')
+        r.add_argument("--autonomy",choices=["auto","safe","bypass"],default="auto")
+        r.add_argument("--attest-external-sandbox",action="store_true",help="Assert externally hardened OS sandbox; needed for bypass mode")
         if name=="resume":r.add_argument("run_id")
     sp.set_defaults(func=_cmd_work)
     sp=sub.add_parser("eval");common(sp);s=sp.add_subparsers(dest="action",required=True)

@@ -24,18 +24,19 @@ class RunResult:
     tokens: int | None = None
     cost_usd: float | None = None
     reason: str = ""
+    model: str | None = None
 
     def as_dict(self): return asdict(self)
 
 
-def run_process(argv: list[str], cwd: Path, timeout: int, *, env: dict[str,str] | None = None) -> tuple[int,str,str,float]:
+def run_process(argv: list[str], cwd: Path, timeout: int, *, env: dict[str,str] | None = None, input_text: str | None = None) -> tuple[int,str,str,float]:
     start = time.monotonic()
     if not argv: raise SEHError("INVALID_ARGV", "Empty command")
     if timeout <= 0: raise SEHError("INVALID_TIMEOUT", str(timeout), 2)
-    proc = subprocess.Popen(argv, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+    proc = subprocess.Popen(argv, cwd=str(cwd), stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, errors="replace", start_new_session=True, env=env)
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        stdout, stderr = proc.communicate(input=input_text, timeout=timeout)
         return proc.returncode or 0, stdout[-1024*1024:], stderr[-256*1024:], elapsed(start)
     except subprocess.TimeoutExpired:
         try: os.killpg(proc.pid, signal.SIGTERM)
@@ -82,21 +83,26 @@ def parse_host_response(host: str, raw: str) -> tuple[str,int|None,float|None]:
 
 
 def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: str|None = None,
-              read_only: bool = True, max_turns: int = 4) -> RunResult:
+              read_only: bool = True, max_turns: int = 4, autonomy: str = "auto", isolated: bool = False) -> RunResult:
     start = time.monotonic()
     if host == "mock":
         # Offline deterministic test driver; it never edits a file and is not an LLM.
         matched = re.search(r"\[\[MOCK:(.*?)\]\]", prompt, re.S)
         output = matched.group(1) if matched else prompt
-        return RunResult("PASS", output, "", 0, elapsed(start), "mock", 0, 0.0)
-    command = build_command(host, prompt, model=model, read_only=read_only, max_turns=max_turns)
-    code,stdout,stderr,seconds = run_process(command, cwd, timeout)
+        return RunResult("PASS", output, "", 0, elapsed(start), "mock", 0, 0.0, model="mock")
+    stdin_supported = host in ("claude", "codex")
+    command = build_command(host, prompt, model=model, read_only=read_only, max_turns=max_turns, use_stdin=stdin_supported, autonomy=autonomy, isolated=isolated)
+    try:
+        code,stdout,stderr,seconds = run_process(command, cwd, timeout, input_text=prompt if stdin_supported else None)
+    except OSError as exc:
+        return RunResult("UNAVAILABLE", "", redact(str(exc)), 127, elapsed(start), host, reason="CLI process unavailable", model=model or "native-default")
     output,tokens,cost = parse_host_response(host,stdout)
-    return RunResult("PASS" if code == 0 else "TIMEOUT" if code == 124 else "FAIL", redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error")
+    error_text = stderr.lower() + " " + output.lower()
+    status = "PASS" if code == 0 else "TIMEOUT" if code == 124 else "RATE_LIMIT" if ("rate limit" in error_text or "429" in error_text) else "FAIL"
+    return RunResult(status, redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error", model=model or "native-default")
 
 
 def run_checked_command(argv: list[str], cwd: Path, *, timeout: int = 90, allow: list[str] | None = None) -> RunResult:
-    from .config import Config
-    check_command(argv, Config().allow_commands if allow is None else allow)
+    check_command(argv, allow or ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"])
     code, out, err, secs = run_process(argv, cwd, timeout)
     return RunResult("PASS" if code == 0 else "TIMEOUT" if code == 124 else "FAIL", redact(out),redact(err),code,secs,"local",0,0.0)

@@ -1,10 +1,8 @@
-# self-evolve-harness 1.4.2 スタンドアロン実装（多言語対応）
+# self-evolve-harness 1.4.1 スタンドアロン実装
 
 **本ZIPには設計書だけでなく、実行可能なPythonソース、CLI、4ホスト向けテンプレート、サンプル、テストを含めています。**
 
-Pythonは**ハーネス本体の実行言語**です。開発対象はPythonに限らず、JavaScript/TypeScript、Go、Rust、Java/Kotlin、C#/F#、Swift、Ruby、PHP、Dart/Flutter、C/C++、Godot/Unity/Unrealなどに対応します。モノレポのサブプロジェクト単位でビルド・テスト候補を検出でき、未知の言語もTOMLで追加できます。詳細は [多言語対応ガイド](docs/LANGUAGE_SUPPORT.md) を参照してください。
-
-これは `jumtra/self-evolve-harness` のGit checkoutではなく、本会話の要件に基づいた独立した実装です。既存プロジェクトを上書きする前に、`setup`の差分表示とGitバックアップで確認してください。
+これは `jumtra/self-evolve-harness` のGit checkoutではなく、本会話の要件に基づいた独立した実装です。既存プロジェクトを上書きする前に、`init`の差分表示とGitバックアップで確認してください。
 
 ## 必要なもの
 
@@ -13,57 +11,36 @@ Pythonは**ハーネス本体の実行言語**です。開発対象はPythonに�
 - **AGYは設定・Skill・Agentファイル生成のみ対応**。外部CLIによる自動呼び出しは利用条件を理由に無効化しています。
 - CodeGraph・Graphify・Engram MCP・GitHub CLIは選択制。未導入時に存在すると偽りません。
 
-## かんたん導入（pip不要・対話式）
+## 1分で試す（pip不要）
 
 ```bash
-unzip seh_standalone_easy_setup.zip
-cd seh_standalone_easy_setup
-./setup.sh /path/to/your/project
+unzip seh_v141_autoupdate.zip
+cd seh_v141_autoupdate
+python3 run_seh.py --version
+python3 run_seh.py modules list
+python3 run_seh.py optimize status
 ```
 
-セットアップは言語・モノレポ構成・インストール済みのAIコーディングCLIを自動検出し、Host・Profile・CodeGraph/Graphify・Memoryを選んで、**変更予定ファイルを確認してから適用**できます。非対話環境ではプレビューだけを表示し、ファイルを書きません。
+他の既存プロジェクトへ導入するときは、まず**変更内容を確認**します。
 
 ```bash
-./setup.sh /path/to/your/project --yes --hosts auto   # 明示承認で一括適用
-./setup.sh /path/to/your/project --yes --hosts all    # 4ホスト向けファイルを生成
-./bin/seh status --root /path/to/your/project       # 設定の確認
-./bin/seh project checks --root /path/to/your/project # テスト候補（実行しない）
+python3 run_seh.py init --root /path/to/project --profile balanced --hosts claude,codex,opencode,agy --graph none
+python3 run_seh.py init --root /path/to/project --profile balanced --hosts claude,codex,opencode,agy --graph none --apply
+python3 run_seh.py doctor --root /path/to/project
 ```
 
-既存の`CLAUDE.md`・`AGENTS.md`は**専用管理ブロックだけ**追加し、ユーザーの内容を維持します。再実行は冪等で、衝突時は安全に停止します。元に戻すには:
-
-```bash
-./bin/seh uninstall --root /path/to/your/project     # 削除プレビュー
-./bin/seh uninstall --root /path/to/your/project --yes
-# 実行後に表示されるsnapshot IDで復元可能
-./bin/seh migrate rollback snapshot-XXXXXXXXXXXX --root /path/to/your/project
-```
-
-**自動では行いません：** 外部ツールのインストール、AIモデルの呼び出し、プロジェクトのテスト実行、Harness²最適化の有効化。詳細は[かんたん導入ガイド](docs/EASY_SETUP.md)。
+`balanced`は不要な常駐フックや自動LLM呼び出しを追加しません。最適化は初期OFFです。
 
 ## CLIをオフラインでインストールする（任意）
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --no-index ./dist/self_evolve_harness_standalone-1.4.2-py3-none-any.whl
+python -m pip install --no-index ./dist/self_evolve_harness_standalone-1.4.1-py3-none-any.whl
 seh --version
 ```
 
 これでホスト内のSkillから`seh`コマンドを呼び出せます。pipを使わない場合は`./bin/seh`または`python3 run_seh.py`が使用できますが、ホストから`seh`として呼ぶなら`bin`をPATHへ追加してください。
-
-## 多言語プロジェクトの検出・チェック
-
-```bash
-python3 run_seh.py project detect --root /path/to/project
-python3 run_seh.py project checks --root /path/to/project
-# レビュー用プレビュー（実行しません）
-python3 run_seh.py project check --root /path/to/project --kind test --project services/api --ecosystem go
-# 確認後のみ実行（リポジトリのスクリプトは任意の処理を実行し得ます）
-python3 run_seh.py project check --root /path/to/project --kind test --project services/api --ecosystem go --execute --approve
-```
-
-Pythonだけに依存する指示・テストコマンドは生成せず、言語とプロジェクト構成に合わせます。依存インストールは自動化しません。
 
 ## オフラインの実動デモ
 
@@ -71,7 +48,7 @@ Pythonだけに依存する指示・テストコマンドは生成せず、言�
 
 ```bash
 cp -R examples/demo_project /tmp/seh-demo
-python3 run_seh.py setup --root /tmp/seh-demo --yes --hosts claude
+python3 run_seh.py init --root /tmp/seh-demo --apply
 python3 run_seh.py work run --root /tmp/seh-demo --task /tmp/seh-demo/work-task.json --host mock --apply --approve
 python3 run_seh.py eval run --root /tmp/seh-demo --suite /tmp/seh-demo/eval-suite.json --host mock
 cat /tmp/seh-demo/result.txt
@@ -99,3 +76,37 @@ cat /tmp/seh-demo/result.txt
 不確定な2件目X投稿のオプション機能は、内容が確定できていないため推測で実装していません。
 
 詳細は [README.md](README.md)、[機能一覧](docs/IMPLEMENTATION_MATRIX.md)、[制約と互換性](docs/COMPATIBILITY.md)、[セキュリティ](docs/SECURITY.md)、[テスト](docs/TESTING.md) を参照してください。
+
+## v1.4.1: Task単位のHost/Model選択と更新機構
+
+- **Task/NodeでHost・Modelを指定**: `goal`・`instructions_file`・`nodes[].prompt`・`host`・`model`・`models`、DAG並列、条件付きFallback、Compare。
+- **CLIのバージョン差分検出**: `seh hosts inspect` / `seh hosts refresh`。実行ファイル変更で自動再検査。未知の互換性差分は安全に停止。
+- **Model一覧更新**: `seh models list`（TTLで自動更新）/ `seh models refresh`。`model=auto`はHostの最新デフォルトに委譲します。
+- **自動化の許可モード**: `--autonomy auto`が通常既定。危険な`--yolo`/`--dangerously-skip-permissions`は外部Sandbox下での明示的な使用に限定。
+- **更新コマンド**: v1.4.1以降は`harness update --check` / `harness update` / `harness update --yes --sync --root PROJECT`。公開リリースと検証可能なWheelが前提。
+- **Python以外のコードも対象**: TypeScript、Go、Rust、C#、Swift、Javaなどのプロジェクト検出と検証コマンド候補を拡充。
+
+詳細: [Host/Task/Model/更新の完全仕様](docs/HOST_TASK_MODEL_UPDATES.md) / [Task JSON例](examples/multihost/task.json)。
+
+## 最新CLI・ハーネスを更新する場合
+
+```bash
+# 互換性情報を再取得（通常のTaskではモデル一覧を更新しない）
+harness hosts refresh
+harness models refresh --host opencode
+
+# 現在公開されている最新版を確認
+harness update --check
+
+# 公開済みの検証可能なwheelがある場合のみ、確認付きで更新
+harness update
+
+# 更新後にプロジェクトの管理対象ファイルも再同期
+harness update --yes --sync --root /path/to/project
+```
+
+- 外部のClaude/Codex/OpenCode自体はこれらのコマンドで更新しません。各ベンダーの正規アップデーターで更新してください。更新後、実行ファイルの変化を検知してCLI引数を再評価します。
+- 未知の引数変更に対しては動作を推測せず停止します。対応版を公開後、`harness update`で導入してください。
+- `harness update`はこの独立版のホイールが `jumtra/self-evolve-harness` のGitHub Releasesへ正しいタグとダイジェスト付きで公開されて初めて利用できます。**現状、リモート更新の成功は未検証**です。
+- 低摩擦の既定値は`--autonomy auto`です。`--yolo` / `--dangerously-skip-permissions` 相当を使う場合は、外部で隔離した環境に限定し、`--autonomy bypass --attest-external-sandbox --trust-cli` を指定してください。
+- 既存プロジェクト内のユーザー管理ファイルは自動で上書きせず、差分・バックアップ・ロールバックを確認してください。

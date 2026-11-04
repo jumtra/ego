@@ -30,16 +30,3 @@
 ## CI
 
 `.github/workflows/ci.yml` runs the offline tests on Python 3.11, 3.12 and 3.13. It does not require any paid AI service, cannot certify a real AI CLI workflow, and should be supplemented with opt-in credential-backed CI only in a sandbox and with a spending budget.
-
-## v1.4.2 onboarding regression tests
-
-The following tests verify the easy-install path without real AI credentials:
-
-```bash
-PYTHONPATH=src python3 -m pytest -q tests/test_easy_setup.py tests/test_config_install.py
-PYTHONPATH=src python3 -m pytest -q tests/test_multilanguage.py
-./setup.sh /tmp/example --non-interactive    # preview only
-./setup.sh /tmp/example --yes --hosts all  # apply only with consent
-```
-
-All 86 collected test cases were verified passing across 3 isolated groups (36 + 29 + 21). See `docs/EASY_SETUP_VALIDATION.md`. External AI CLI execution and the Fast p50/p95 performance budget require a separately authenticated real-host benchmark.

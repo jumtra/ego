@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "self-evolve-harness-standalone"
-version = "1.4.2"
+version = "1.4.1"
 description = "CLI-first self-evolving coding harness with offline testing and optional agent integrations"
 requires-python = ">=3.11"
 dependencies = []
@@ -16,6 +16,7 @@ dev = ["pytest>=8", "jsonschema>=4.0", "PyYAML>=6"]
 
 [project.scripts]
 seh = "seh.cli:main"
+harness = "seh.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

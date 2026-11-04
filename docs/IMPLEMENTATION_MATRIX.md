@@ -25,3 +25,15 @@ Symbols: **offline tested** means a deterministic test covers the code path. **A
 | Unknown X optional feature | specification not verified | not implemented; never enable guessed functionality |
 
 The phrase "standalone" means the project itself is installable and its core offline workflows run without importing the original harness or agent SDK. It does **not** imply that it bundles proprietary AI models, paid vendor CLIs, CodeGraph, Graphify or Engram.
+
+
+## v1.4.1 additions
+
+| Feature | Implementation | Offline verification | Real vendor E2E |
+|---|---|---|---|
+| Task- and DAG-node-level host/model routing | `task_routing.py`, `work.py` | Unit/behavioral tests | Not verified |
+| Fallback and terminal comparison | `work.py` | Fake-host tests | Not verified |
+| CLI version-specific flag selection | `hostcompat.py`, `hosts.py` | Cache/flag tests | Not verified |
+| Lazy model catalog refresh | `models.py` | Parser and CLI tests | Not verified |
+| Verified wheel updater and `harness` alias | `selfupdate.py`, `cli.py` | Checksum tests + venv upgrade | Release channel not yet published |
+| Non-Python project detection | `detect.py`, `config.py` | Manifest-level tests | Needs project-specific smoke |

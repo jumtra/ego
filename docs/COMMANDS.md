@@ -9,7 +9,6 @@ Run `seh <command> --help` for the authoritative current flags. All commands sup
 | `doctor` | check host tools, providers, config | missing optional components reported |
 | `modules` | list, resolve, scaffold | conflicts/missing dependency |
 | `migrate` | plan, remove-legacy, restore-legacy, rollback | hash mismatch, missing approval |
-| `project` | detect, checks, check (preview by default; `--execute --approve` to run) | missing/ambiguous toolchain, unapproved script, timeout |
 | `work` | native, plan, run, resume, status, cancel | invalid DAG, check failure, trust boundary |
 | `eval` | run, compare | failed cases, incompatible suites |
 | `author` | lint, plan, candidate, gate, promote, rollback | invalid skill, missing evidence, approval |
@@ -26,17 +25,17 @@ Run `seh <command> --help` for the authoritative current flags. All commands sup
 
 Status and output fields are JSON. Nonzero statuses distinguish validation, missing dependency, safety/policy refusal and failed validation. Paths in examples are relative to where the command is run unless an explicit absolute path is used. In `optimize`, all active experiments require a separately configured mode; normal development never starts optimization implicitly.
 
-## Simple onboarding (v1.4.2)
+## Task routing and host / model compatibility (v1.4.1)
 
-```sh
-./setup.sh /path/to/project            # guided if interactive, otherwise preview
-seh setup --root . --yes --hosts auto  # explicit application
-seh setup --root . --yes --hosts all   # render all host formats
-seh setup --root . --json             # preview for automation
-seh status --root .                    # fast installation status
-seh uninstall --root .                # removal preview
-seh uninstall --root . --yes          # remove only SEH-managed files
-seh migrate rollback snapshot-ID --root .  # restore previous snapshot
+```bash
+seh hosts inspect
+seh hosts refresh --host claude
+seh models list --host opencode
+seh models refresh
+seh work run --task task.json --hosts claude,codex --strategy fallback --models '{"claude":"sonnet","codex":"auto"}' --trust-cli
+seh work run --task task.json --autonomy bypass --attest-external-sandbox --trust-cli  # external OS isolation REQUIRED
+harness update --check
+harness update --yes --sync --root /your/project
 ```
 
-The `setup` command auto-detects project languages and installed AI host CLIs. It never executes project code or contacts an AI model. `init` / `sync` remain available as low-level JSON-oriented commands. See `docs/EASY_SETUP.md` for ownership rules and troubleshooting.
+For Task JSON (including per-node models and instruction files), failover/compare, automatic host flag probing, model catalog freshness, and release validation, see [HOST_TASK_MODEL_UPDATES.md](HOST_TASK_MODEL_UPDATES.md). `harness` becomes a console command after installing v1.4.1; the zip also provides `./bin/harness`.

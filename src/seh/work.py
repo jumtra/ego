@@ -13,6 +13,7 @@ from .config import load_config
 from .policy import check_write
 from .runner import run_agent, run_checked_command
 from .util import SEHError, ident, now, read_json, write_json, snapshot, simple_copy_tree, filehash, safe_path, exclusive_lock
+from .task_routing import validate_task_context, resolve_routes, build_task_prompt
 
 KINDS={"worker","agent","code","gate","splitter"}
 
@@ -28,15 +29,6 @@ def validate_task(spec: dict) -> list[dict]:
         if n.get("kind","agent") not in KINDS: raise SEHError("INVALID_TASK", "Unknown kind", 2)
         if not isinstance(n.get("depends_on",[]),list) or any(d not in amap for d in n.get("depends_on",[])):
             raise SEHError("INVALID_TASK", "Missing dependency", 2)
-        if ('argv' in n and n['argv'] is not None) or ('checks' in n and n['checks'] is not None):
-            from .toolchains import CHECK_KINDS
-            if 'checks' in n and not isinstance(n['checks'], list):
-                raise SEHError('INVALID_TASK','checks must be a list',2)
-            candidates = ([n['argv']] if n.get('argv') is not None else []) + n.get('checks', [])
-            for candidate in candidates:
-                if isinstance(candidate,list) and candidate and all(isinstance(x,str) and x for x in candidate):continue
-                if isinstance(candidate,dict) and set(candidate)<={'toolchain','project','ecosystem'} and candidate.get('toolchain') in CHECK_KINDS and all(isinstance(candidate.get(k),str) for k in ('project','ecosystem') if k in candidate):continue
-                raise SEHError('INVALID_TASK','Invalid command or toolchain check',2)
         if n.get("kind","agent") in ("code","gate") and not (n.get("argv") or n.get("checks")):
             raise SEHError("INVALID_TASK", "Code/gate nodes need argv or checks", 2)
         if n.get("kind","agent") not in ("code","gate") and not isinstance(n.get("prompt"),str):
@@ -53,86 +45,117 @@ def validate_task(spec: dict) -> list[dict]:
         for d in amap[nid].get("depends_on",[]):visit(d)
         temp.remove(nid);done.add(nid)
     for nid in ids:visit(nid)
+    validate_task_context(spec, nodes)
     return nodes
-
-
-def _check_spec(value: object, work: Path) -> tuple[list[str], Path]:
-    """Accept raw argv, or a toolchain selection with a safe subproject cwd."""
-    if isinstance(value, list) and value and all(isinstance(s, str) and s for s in value):
-        return value, work
-    if isinstance(value, dict) and isinstance(value.get('toolchain'), str):
-        from .toolchains import resolve_check
-        if set(value) - {'toolchain', 'project', 'ecosystem'}:
-            raise SEHError('INVALID_TASK', 'Unknown toolchain check fields', 2)
-        resolved = resolve_check(work, value['toolchain'], project=value.get('project'),
-                                 ecosystem=value.get('ecosystem'))
-        return resolved['argv'], Path(resolved['cwd'])
-    raise SEHError('INVALID_TASK', 'Expected argv array or toolchain check object', 2)
 
 
 def _changed(before:dict[str,str],after:dict[str,str])->list[str]:
     return sorted({p for p in before.keys()|after.keys() if before.get(p)!=after.get(p)})
 
 
-def _run_node(node:dict, staging:Path, host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False)->dict:
-    """Each node sees a private copy. No edits to the stable workspace in this function."""
+def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
+              autonomy: str="auto", isolated:bool=False)->dict:
+    """A task node sees a private copy; fallback never reuses failed edits.
+
+    Compare runs have their own isolated copies and never merge any candidate.
+    """
     start=time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="seh-unit-") as temp:
-        work=Path(temp)/"src"
-        simple_copy_tree(staging,work)
-        before=snapshot(work)
-        kind=node.get("kind","agent")
-        attempts=[];success=False
-        max_attempts = min(int(node.get("max_attempts",cfg.max_attempts)),cfg.max_attempts)
-        last_output=""
-        for attempt in range(1,max_attempts+1):
+    kind=node.get("kind","agent")
+    if kind in ("code","gate"):
+        strategy,routes,fallback_on="single",[],frozenset()
+    else:
+        strategy,routes,fallback_on=resolve_routes(node,spec,default_host)
+    attempts=[]
+    max_attempts=min(int(node.get("max_attempts",cfg.max_attempts)),cfg.max_attempts)
+    outputs=[]
+    def attempt_one(chosen_host:str, chosen_model:str|None, iteration:int) -> dict:
+        nonlocal feedback
+        with tempfile.TemporaryDirectory(prefix="seh-node-") as tmp:
+            work=Path(tmp)/"src"
+            simple_copy_tree(staging,work)
+            before=snapshot(work)
             if kind in ("code","gate"):
-                argv,cwd=_check_spec(node.get("argv") or node["checks"][0],work)
-                r=run_checked_command(argv,cwd,timeout=timeout,allow=cfg.allow_commands)
+                r=run_checked_command(node.get("argv") or node["checks"][0],work,timeout=timeout,allow=cfg.allow_commands)
             else:
-                if host != "mock" and not trust_cli: raise SEHError("UNTRUSTED_AGENT_EXEC", "Real CLI agent may execute arbitrary code; require --trust-cli")
-                prompt=node["prompt"] + ("\nVerifier feedback: " + feedback if feedback else "")
-                r=run_agent(host,prompt,work,timeout,read_only=kind=="splitter")
-            last_output=r.output
+                if chosen_host!="mock" and not trust_cli:
+                    raise SEHError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
+                prompt=build_task_prompt(spec,node,work,feedback=feedback)
+                try:
+                    r=run_agent(chosen_host,prompt,work,timeout,model=chosen_model,read_only=kind=="splitter",
+                                autonomy=autonomy,isolated=isolated)
+                except SEHError as exc:
+                    if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
+                        raise
+                    from .runner import RunResult
+                    r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model)
             checks=[]
             if r.status=="PASS":
-                # A code/gate node using its first check as its primary command
-                # must not waste time running the same test twice.
-                remaining_checks = node.get('checks', [])
-                if kind in ('code','gate') and not node.get('argv'):
-                    remaining_checks = remaining_checks[1:]
-                for argv in remaining_checks:
-                    check_argv,check_cwd=_check_spec(argv,work)
-                    cr=run_checked_command(check_argv,check_cwd,timeout=min(timeout,120),allow=cfg.allow_commands)
+                for argv in node.get("checks",[]):
+                    cr=run_checked_command(argv,work,timeout=min(timeout,120),allow=cfg.allow_commands)
                     checks.append(cr.as_dict())
                     if cr.status!="PASS":feedback=cr.output+" "+cr.stderr;break
             ok=(r.status=="PASS" and all(c["status"]=="PASS" for c in checks))
-            after=snapshot(work)
-            changed=_changed(before,after)
+            changed=_changed(before,snapshot(work))
             try:
                 for rel in changed:check_write(work,rel,node.get("write_allowlist",[]))
-                if kind=="gate" and changed:raise SEHError("GATE_WRITE", "A gate may not modify source")
+                if kind=="gate" and changed:raise SEHError("GATE_WRITE","A gate may not modify source")
             except SEHError as exc:
                 ok=False;feedback=str(exc)
-            attempts.append({"attempt":attempt,"status":"PASS" if ok else "FAIL","execution":r.as_dict(),"checks":checks,"changed":changed,"feedback":feedback})
+            record={"attempt":iteration,"host":chosen_host,"model":chosen_model or "native-default",
+                    "status":"PASS" if ok else "FAIL", "execution":r.as_dict(),"checks":checks,
+                    "changed":changed,"feedback":feedback}
+            edits={}
             if ok:
-                success=True;break
-            if not feedback:feedback=r.stderr or r.output or "Execution failed"
-        # Only copy allowed post-change files to staging on PASS. Output record includes bytes for merging.
-        edits={}
-        if success:
-            for rel in _changed(before,snapshot(work)):
-                path=safe_path(work,rel)
-                edits[rel] = path.read_bytes() if path.exists() else None
-        return {"id":node["id"],"status":"PASSED" if success else "FAILED","attempts":attempts,"edits":edits,"elapsed":round(time.monotonic()-start,4),"output":last_output}
+                for rel in changed:
+                    path=safe_path(work,rel)
+                    edits[rel]=path.read_bytes() if path.exists() else None
+            return {"ok":ok,"record":record,"edits":edits,"output":r.output,"execution_status":r.status}
+
+    if strategy=="compare":
+        results=[]
+        for route in routes:
+            res=attempt_one(route.host,route.model,1)
+            attempts.append(res["record"])
+            outputs.append({"host":route.host,"model":route.model or "native-default",
+                            "status":res["record"]["status"],"changed":res["record"]["changed"]})
+        return {"id":node["id"],"status":"PASSED","attempts":attempts,"edits":{},
+                "elapsed":round(time.monotonic()-start,4),"comparison":outputs,
+                "review_required":True,"output":"Compare finished; no candidate automatically selected"}
+
+    route_pos=0
+    success=False;edits={};last_output=""
+    for iteration in range(1,max_attempts+len(routes)+1):
+        chosen=routes[route_pos] if routes else None
+        r=attempt_one(chosen.host if chosen else "local",chosen.model if chosen else None,iteration)
+        attempts.append(r["record"])
+        last_output=r["output"]
+        if r["ok"]:
+            success=True;edits=r["edits"];break
+        if strategy=="fallback" and r["execution_status"] in fallback_on and route_pos<len(routes)-1:
+            route_pos+=1
+            feedback="Previous host was unavailable; start from the original task state."
+            continue
+        # A task evaluation failure must not silently switch vendors.
+        if iteration>=max_attempts+route_pos:
+            break
+        if r["execution_status"] in ("UNAVAILABLE","TIMEOUT","RATE_LIMIT"):
+            break
+        feedback=r["record"].get("feedback") or r["record"]["execution"].get("stderr") or "Verification failed"
+    return {"id":node["id"],"status":"PASSED" if success else "FAILED", "attempts":attempts,
+            "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":last_output}
 
 
 def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bool=False,
-            trust_cli:bool=False,run_id:str|None=None,resume:bool=False)->dict:
+            trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False)->dict:
     root=root.resolve();cfg=load_config(root)
     nodes=validate_task(spec)
     if apply and not approve:raise SEHError("APPROVAL_REQUIRED", "--apply requires --approve")
-    if host=="agy":raise SEHError("HOST_POLICY_BLOCKED", "AGY is configuration only",3)
+    if any(r.host=="agy" for n in nodes if n.get("kind","agent") not in ("gate","code") for r in resolve_routes(n,spec,host)[1]):
+        raise SEHError("HOST_POLICY_BLOCKED", "AGY managed execution is disabled",3)
+    if autonomy=="bypass" and not isolated:
+        raise SEHError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)
+    if any(resolve_routes(n,spec,host)[0]=="compare" for n in nodes if n.get("kind","agent") not in ("gate","code")) and apply:
+        raise SEHError("COMPARE_NO_APPLY","Compare never applies unreviewed changes",3)
     run_id=run_id or ident("run")
     if not all(c.isalnum() or c in "-_" for c in run_id):raise SEHError("INVALID_ID",run_id,2)
     runroot=root/".harness"/"state"/"runs"/run_id
@@ -163,7 +186,7 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                 record["final_status"]="BLOCKED_DEPENDENCY";break
             wave=ready[:cfg.max_parallel]
             with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-                results=list(pool.map(lambda n:_run_node(n,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),trust_cli=trust_cli),wave))
+                results=list(pool.map(lambda n:_run_node(n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated),wave))
             # Atomic wave merge: two nodes may not write the same relative path.
             edit_owners={}
             for result in results:
@@ -188,7 +211,8 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
             write_json(record_path,record)
             if failed:
                 record["final_status"]="FAILED";break
-        if not pending and not failed:record["final_status"]="PASSED"
+        if not pending and not failed:
+            record["final_status"]="COMPARISON_READY" if any(v.get("review_required") for v in record["results"].values()) else "PASSED"
         record["changed_files"]=_changed(record["base_snapshot"],snapshot(staging))
         if record["final_status"]=="PASSED" and apply:
             # Actual workspace may not have drifted since start.

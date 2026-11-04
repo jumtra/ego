@@ -18,41 +18,14 @@ PROTECTED = (
 def check_command(argv: list[str], allow: list[str]) -> None:
     if not argv or not all(isinstance(x, str) for x in argv): raise SEHError("INVALID_ARGV", "Commands must be argv arrays")
     exe = Path(argv[0]).name
-    if argv[0] != exe or exe in {'.','..'}:
-        raise SEHError("COMMAND_DENIED", "Executable must be an approved name in PATH, not a custom path")
     if exe not in allow: raise SEHError("COMMAND_DENIED", f"Not an approved command: {exe}")
     if exe in {"sh", "bash", "zsh"}: raise SEHError("COMMAND_DENIED", "Shell execution is not allowed")
     joined = " ".join(argv)
     if any(re.search(p, joined, flags=re.I) for p in BLOCK_PATTERNS): raise SEHError("DANGEROUS_COMMAND", joined)
-    # Prevent package installation, publication and deployment in a check node.
-    # Even a test script may execute arbitrary repository code: callers must approve.
-    denied = {
-        "npm": {"install", "i", "ci", "publish", "unpublish", "link", "exec", "npx"},
-        "pnpm": {"install", "i", "add", "remove", "publish", "deploy", "dlx", "exec"},
-        "yarn": {"install", "add", "remove", "publish", "dlx"},
-        "bun": {"install", "add", "remove", "publish", "x"},
-        "cargo": {"install", "publish", "yank", "login"},
-        "mvn": {"deploy", "release:perform"},
-        "gradle": {"publish", "publishToMavenLocal"},
-        "dotnet": {"publish", "nuget", "tool", "add", "remove"},
-        "go": {"install", "get"},
-        "composer": {"install", "update", "require", "remove"},
-        "bundle": {"install", "update", "add"},
-        "gem": {"install", "push"},
-        "flutter": {"pub", "install"},
-        "dart": {"pub"},
-        "swift": {"package"},
-        "mix": {"deps.get", "hex.publish"},
-        "pip": {"install", "uninstall"},
-    }
-    if any(arg in denied.get(exe, set()) for arg in argv[1:]):
-        raise SEHError("COMMAND_DENIED", "Package modification/publishing is not allowed as a check")
     if exe == "git" and any(x in argv for x in ("push", "reset", "clean", "rebase")):
         raise SEHError("COMMAND_DENIED", "Mutating remote or destructive Git commands need a separate manual process")
-    inline_flags = {"python": {"-c"}, "python3": {"-c"}, "node": {"-e", "--eval"},
-                    "ruby": {"-e"}, "php": {"-r"}, "swift": {"-e"}, "deno": {"eval"}}
-    if any(arg in inline_flags.get(exe,set()) for arg in argv[1:]):
-        raise SEHError("COMMAND_DENIED", "Inline executable code is forbidden in check commands")
+    if exe in {"python", "python3"} and "-c" in argv:
+        raise SEHError("COMMAND_DENIED", "Inline Python code is forbidden in check commands")
 
 
 def check_write(root: Path, rel: str, allow: list[str] | None = None) -> Path:

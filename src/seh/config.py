@@ -23,10 +23,7 @@ class Config:
     max_attempts: int = 3
     timeout_seconds: int = 300
     tests: list[list[str]] = field(default_factory=list)
-    allow_commands: list[str] = field(default_factory=lambda: ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "deno",
-        "node", "cargo", "rustc", "go", "dotnet", "mvn", "gradle", "java", "javac", "swift",
-        "cmake", "ctest", "meson", "ninja", "make", "clang", "clang++", "gcc", "g++",
-        "bundle", "ruby", "php", "composer", "dart", "flutter", "mix", "zig"])
+    allow_commands: list[str] = field(default_factory=lambda: ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"])
 
     def validate(self) -> None:
         if self.schema_version != 1 or self.profile not in {"minimal", "balanced", "full"}:
@@ -37,8 +34,6 @@ class Config:
             raise SEHError("INVALID_CONFIG", "Invalid provider/runtime", 2)
         if not 1 <= self.max_parallel <= 8 or not 1 <= self.max_attempts <= 5 or not 5 <= self.timeout_seconds <= 7200:
             raise SEHError("INVALID_CONFIG", "Invalid runtime limits", 2)
-        if not isinstance(self.allow_commands, list) or any(not isinstance(x, str) or not x or "/" in x or "\\" in x for x in self.allow_commands):
-            raise SEHError("INVALID_CONFIG", "allow_commands must be executable names, not paths", 2)
         if any(not isinstance(cmd, list) or not cmd or any(not isinstance(x, str) for x in cmd) for cmd in self.tests):
             raise SEHError("INVALID_CONFIG", "Tests must be argv arrays", 2)
 

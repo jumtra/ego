@@ -1,1 +1,0 @@
-{"name":"seh-web-demo","private":true,"scripts":{"test":"node tests.js","build":"node build.js"}}

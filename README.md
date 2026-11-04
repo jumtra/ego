@@ -6,20 +6,6 @@ A standalone Python coding harness with built-in templates, a bounded workflow r
 
 > **Scope and compatibility:** This distribution is an independently implemented, self-contained version of the design discussed for `jumtra/self-evolve-harness`. It is **not a git checkout or byte-for-byte upgrade of that upstream repository**. Before migrating an existing workspace, inspect the generated diff and retain a Git backup. See [compatibility and limitations](docs/COMPATIBILITY.md).
 
-## Simple one-command onboarding (v1.4.2)
-
-```bash
-unzip seh_standalone_easy_setup.zip
-cd seh_standalone_easy_setup
-./setup.sh /path/to/project                    # guided TTY setup; otherwise preview
-./setup.sh /path/to/project --yes --hosts auto  # explicit apply without prompts
-./bin/seh status --root /path/to/project       # fast read-only status
-```
-
-The setup detects installed Claude/Codex/OpenCode CLIs and project languages, asks for profile and optional CodeGraph/Graphify/Memory, then previews files before approval. `--hosts all` renders 4-host configuration; AGY remains config-only. Rerunning is safe and idempotent. Host instruction blocks are tracked and user notes are preserved; unowned or edited generated files cause `OWNERSHIP_CONFLICT` rather than overwrite.
-
-For uninstall: `./bin/seh uninstall --root /path/to/project` (preview), then `--yes` (remove managed files only), or undo with `seh migrate rollback <snapshot-id>`. No package installs, model calls, test execution or Harness² optimization run during setup. Read [EASY_SETUP.md](docs/EASY_SETUP.md) for full steps.
-
 ## Requirements
 
 - Python **3.11+**, macOS or Linux. Windows is not a tested target.
@@ -32,8 +18,8 @@ For uninstall: `./bin/seh uninstall --root /path/to/project` (preview), then `--
 **No installation or network required:**
 
 ```bash
-unzip seh_standalone_easy_setup.zip
-cd seh_standalone_easy_setup
+unzip seh_full_standalone.zip
+cd seh_full_standalone
 python3 run_seh.py --version
 python3 run_seh.py modules list
 ```
@@ -53,9 +39,8 @@ Runtime dependencies: **Python standard library only**. For the included automat
 ## First use (dry-run first)
 
 ```bash
-seh setup --root /path/to/your/project --hosts all --profile balanced --graph none # TTY wizard / non-TTY preview
-seh setup --root /path/to/your/project --hosts all --yes   # explicit non-interactive apply
-seh status --root /path/to/your/project
+seh init --root /path/to/your/project --profile balanced --hosts claude,codex,opencode,agy --graph none
+seh init --root /path/to/your/project --profile balanced --hosts claude,codex,opencode,agy --graph none --apply
 seh doctor --root /path/to/your/project
 seh sync --root /path/to/your/project      # diff only
 seh sync --root /path/to/your/project --apply
@@ -74,7 +59,7 @@ Profile `balanced` installs two Skills (`harness-init`, `work`), four Subagent d
 For a fully offline end-to-end example:
 
 ```bash
-seh setup --root examples/demo_project --yes --hosts claude
+seh init --root examples/demo_project --apply
 seh work run --root examples/demo_project --task examples/demo_project/work-task.json --host mock
 seh work run --root examples/demo_project --task examples/demo_project/work-task.json --host mock --apply --approve
 seh eval run --root examples/demo_project --suite examples/demo_project/eval-suite.json --host mock
@@ -151,12 +136,7 @@ For full capabilities, examples and explicit external limitations, see [COMPATIB
 
 This package implements original standalone code based on concepts from the user's `self-evolve-harness` and Google's [Harness²](https://github.com/google-research/harness2) research, plus the supplied videos. The full upstream repository was not cloned in this environment; no upstream source files were copied. It uses the **MIT license** for its new code. Vendor tools and third-party providers have their own licenses and terms.
 
-## Polyglot coding support (1.4.2)
 
-Python 3.11+ runs the harness itself; **target repositories may use other languages**.
-Use `seh project detect --root .` to detect multiple subprojects,
-`seh project checks --root .` to preview project-specific test/lint/build commands,
-and `seh project check --kind test --project apps/web --execute --approve`
-to deliberately run a check. The harness never installs dependencies implicitly.
-Additional ecosystems can be registered in `.harness/toolchains.toml` without changing the harness.
-Read [language support and monorepo instructions](docs/LANGUAGE_SUPPORT.md).
+## v1.4.1: Task routing and verified self-update
+
+Task-level / DAG node-level host and model routing (`single`, `fallback`, `compare`), version-sensitive local CLI flag probing, cached model discovery, and the `harness update` / `seh update` command are documented in [the host/task/model/update contract](docs/HOST_TASK_MODEL_UPDATES.md). The new version supports multiple project languages without requiring Python code in the target project. No external vendor CLI was authenticated for this build; offline tests do not imply vendor E2E compliance.

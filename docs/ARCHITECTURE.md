@@ -48,8 +48,8 @@
 `TaskSpec` JSON contains `goal` and a non-empty `nodes` array. Each node has:
 
 - `id`, `kind=agent|worker|splitter|code|gate`, `depends_on` as concrete node IDs.
-- Agent-like nodes: `prompt`, `write_allowlist` (scope required), optional `checks` (argv arrays or `{"toolchain":"test","project":"services/api"}` objects).
-- Code/gate nodes: `argv` or checks and an allowlist if they write. Toolchain references resolve to the specified subproject directory in the staging copy.
+- Agent-like nodes: `prompt`, `write_allowlist` (scope required), optional `checks` (arrays of argv).
+- Code/gate nodes: `argv` or checks and an allowlist if they write.
 - Optional `max_attempts`, `timeout_seconds` within global bounds.
 
 Cycles/missing IDs/unknown kinds are rejected. Ready nodes run in separate workspace copies, at most `max_parallel`. Each node is checked by allowed commands and a before/after file snapshot. Scope violations are rejected. Parallel edits of the same path are rejected rather than guessed. A successful wave is merged into a run-staging directory. The **real project is not changed by default**; `--apply --approve` is required and rechecks original file digests. State and evidence live under `.harness/state/runs/<run-id>/` (gitignored). `resume` relies on the saved task and staging data; `cancel` is cooperative at wave boundaries.
@@ -79,7 +79,3 @@ The ordinary task Repair loop is **within** a work unit; the DAG connects **betw
 - Short `CLAUDE.md` / `AGENTS.md` contracts; full instructions in on-demand Skills.
 - No automatic CodeGraph/Graphify indexing at session start; external indexing is explicit.
 - Benchmark `seh bench` measures lightweight CLI dispatch only. For the v1.3-native vs v1.4-fast p50<=5%, p95<=10% goals, run a representative benchmark using the user's actual host CLI and hardware: they cannot be established from an offline mock.
-
-## Language-agnostic execution
-
-`seh project` is read-only by default and detects toolchains across supported language ecosystems; checks execute only with explicit approval. Project-specific `toolchains.toml` supports new languages without adding Python code. Native Fast mode remains passive. See [LANGUAGE_SUPPORT.md](LANGUAGE_SUPPORT.md).
