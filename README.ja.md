@@ -36,7 +36,7 @@ python3 run_seh.py doctor --root /path/to/project
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --no-index ./dist/self_evolve_harness_standalone-1.4.1-py3-none-any.whl
+python -m pip install --no-index ./dist/self_evolve_harness_standalone-0.0.1-py3-none-any.whl
 seh --version
 ```
 
