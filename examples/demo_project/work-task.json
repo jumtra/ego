@@ -1,0 +1,18 @@
+{
+  "goal": "Generate result.txt and check its contents",
+  "nodes": [
+    {
+      "id": "generate",
+      "kind": "code",
+      "argv": ["python3", "generate.py"],
+      "write_allowlist": ["result.txt"],
+      "checks": [["python3", "check.py"]]
+    },
+    {
+      "id": "verify",
+      "kind": "gate",
+      "depends_on": ["generate"],
+      "argv": ["python3", "check.py"]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+*.egg-info/
+build/
+dist/
+*.log
+.harness/state/
+.harness/artifacts/
+.harness/backups/
+.harness/locks/
