@@ -6,7 +6,7 @@ BINDIR ?= $(PREFIX)/bin
 install:
 	@mkdir -p "$(BINDIR)"
 	@ln -sf "$(CURDIR)/bin/ego" "$(BINDIR)/ego"
-	@ln -sf "$(CURDIR)/bin/harness" "$(BINDIR)/harness"
+	@rm -f "$(BINDIR)/harness"
 	@test -e "$(BINDIR)/seh" || ln -sf "$(CURDIR)/bin/seh" "$(BINDIR)/seh"
 	@echo "Installed: $(BINDIR)/ego"
 

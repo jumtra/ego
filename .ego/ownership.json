@@ -1,299 +1,36 @@
 {
   "files": {
-    ".agents/agents/evolver.md": {
-      "generator": "host:antigravity",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "b9a0ac21b6033db589b354cca0c1d03f1a015673cfeaa83da71be6a3068b4c92"
-    },
-    ".agents/agents/fixer.md": {
-      "generator": "host:antigravity",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "c7c4f7dab2489dcd920b4221da72014a067a1d5caace48e411cf40bc8bf0a08a"
-    },
-    ".agents/agents/implementer.md": {
-      "generator": "host:antigravity",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "bdc5f4e8e86100ab6e87a6dfb45ad3825184fdd4918b0b2c93286574d53ff94b"
-    },
-    ".agents/agents/reviewer.md": {
-      "generator": "host:antigravity",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "a4567175b71a524c2f3a5d7e44fafb537d50adee8008b6a33dbdbaa2b30e4123"
-    },
-    ".agents/hooks.json": {
-      "generator": "host:antigravity",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "88de915bd644f1d5bf3058c9fab053f31cfb7816851fb2372021f0f208591ccc"
-    },
-    ".agents/rules/engineering.md": {
-      "generator": "host:antigravity",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "c649ee7ff98d9fdd97f421f734e7609c51c3092dec03fc2f0b01079ed28c52c2"
-    },
-    ".agents/rules/testing.md": {
-      "generator": "host:antigravity",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "ee514642b55ece94931717383fbccf158f629823acd5fdee9fc860755341be56"
-    },
-    ".agents/skills/harness-init/SKILL.md": {
-      "generator": "host:antigravity,host:codex,host:opencode",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "b696dc65c23945743334f96ded7dab5021032a8343c833fa9feb162a682dd669"
-    },
-    ".agents/skills/work/SKILL.md": {
-      "generator": "host:antigravity,host:codex,host:opencode",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "e1e1eb9d1265c28480f4a14bb7ffbdd90387aad2fc51d6fa6e1ef03305871a8c"
-    },
-    ".agents/skills/work/references/managed-task.md": {
-      "generator": "host:antigravity,host:codex,host:opencode",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "1c52f6f1d52cb4dafb013eaa0f66b3bcabeef1e0d4fa104a401fca725cd65b55"
-    },
-    ".claude/agents/evolver.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "1f4521e981e8a4981da27bfe24ea37e14a4ffac2beb2720de9665341d82b4588"
-    },
-    ".claude/agents/fixer.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "15e09f457c9669638d56d0ea2885a27ffa576a6dcbaa7133e2aee0e4e7eccc5a"
-    },
-    ".claude/agents/implementer.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "35554a17be0a7650e0aab7285575d70c126628e3a99e5b16d014bd68d6407e6e"
-    },
-    ".claude/agents/reviewer.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "a17939ee32801fb9d8d75b640495196c74d2f22ed8b78ad42fec7132b2b24708"
-    },
-    ".claude/rules/engineering.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "9fcfe900cbc71b0453ef4984e81a9e263c68d1e372f617f0e9fee1fa14483d1e"
-    },
-    ".claude/rules/testing.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "127fe492a569ecc10154086927052e1e04d2bc8dc146c61cfe03344959e495c8"
-    },
-    ".claude/settings.json": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "f45734c384abb97108248b19a465d0c470da370b95d8cff3d11c3e1674491e0e"
-    },
-    ".claude/skills/harness-init/SKILL.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "2888c02755541e76c6faacf08ef35b7f40c33a675fd543d8784a4ddbb8ed68b9"
-    },
-    ".claude/skills/work/SKILL.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "e1e1eb9d1265c28480f4a14bb7ffbdd90387aad2fc51d6fa6e1ef03305871a8c"
-    },
-    ".claude/skills/work/references/managed-task.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "1c52f6f1d52cb4dafb013eaa0f66b3bcabeef1e0d4fa104a401fca725cd65b55"
-    },
-    ".codex/agents/evolver.toml": {
-      "generator": "host:codex",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "b7f53e6b471553fab2012436968c42d6c825ee105bf1aa67408fe4901a0cb713"
-    },
-    ".codex/agents/fixer.toml": {
-      "generator": "host:codex",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "e15e6f8f8d9a56404c64579e7877cb21427a49d6fcc3ef8c82d054ca18f280ec"
-    },
-    ".codex/agents/implementer.toml": {
-      "generator": "host:codex",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "3f89c3b4f6680512d0f9e399a7016a7421b85d37508f3323d12c981f3e93b7ed"
-    },
-    ".codex/agents/reviewer.toml": {
-      "generator": "host:codex",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "dbf8f1eeb4d9d01f41fdf2c5f6398028eea2c4cac3e62c1deee92fc65aa8991a"
-    },
-    ".codex/hooks.json": {
-      "generator": "host:codex",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "6c7b4a2e6dcae102ab24aed07da062154fb1655cbada5dbe9708115d40b4ed39"
-    },
-    ".ego/spec/agents/evolver.yaml": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "5a0c86972bf72c48627cadbcbba8a32bd85065a8141ac57eb7f6c0e4d9a67c16"
-    },
-    ".ego/spec/agents/fixer.yaml": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "26631c405978d60add2e051682cddeb19d57e7da6320ab4949d7242b1ecfba6b"
-    },
-    ".ego/spec/agents/implementer.yaml": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "50d92cbcb7bb6fccaa13a1c901855603eb1716cfc06c51f231f12c5f7f58e257"
-    },
-    ".ego/spec/agents/reviewer.yaml": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "2eba4c438eb5f75f6200061d2b998cb2d0e489376f18fe39bd3542309b49ab43"
-    },
-    ".ego/spec/instructions/core.md": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "eb079862b334b40b7ae0718c552eaeff104b7e7127164eb98d453cd8e11d8fdd"
-    },
-    ".ego/spec/rules/engineering.md": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "7b2d78d2c1da92d4e1adadf252a72ab5e14686c4ac724ee8505db0d33e93110a"
-    },
-    ".ego/spec/rules/testing.md": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "1bc3cdb1582f39bfd9d95de88a1c1ea79c6a1353e3c8a892044abc3217c73b2d"
-    },
-    ".ego/spec/skills/harness-init/SKILL.md": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "92cf6804262aabcb1c42b5bcf1aa21b95de3ad976eac62e8e041465193e53f62"
-    },
-    ".ego/spec/skills/work/SKILL.md": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "cfc1e79d406dd48853cd6d5f39df548851bbc03308c70a2019b630572f5d984d"
-    },
-    ".ego/spec/skills/work/references/managed-task.md": {
-      "generator": "init",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "1c52f6f1d52cb4dafb013eaa0f66b3bcabeef1e0d4fa104a401fca725cd65b55"
-    },
-    ".opencode/agents/evolver.md": {
-      "generator": "host:opencode",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "e7260ae8e042eefaba288de67c30af6b3ddef9ea87f10a7276df7368edac2320"
-    },
-    ".opencode/agents/fixer.md": {
-      "generator": "host:opencode",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "adfda320de0eb540b0a53f2b31d0b4d3560913e1fe18e3d525ac29e764777410"
-    },
-    ".opencode/agents/implementer.md": {
-      "generator": "host:opencode",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "fd00211e67f2a5f69977adf35f85a7688ac4b95fe77504dfeebe4d8b8c58ec07"
-    },
-    ".opencode/agents/reviewer.md": {
-      "generator": "host:opencode",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "f919b940278e9f908ae89849a427d78e536ab51533edf3153e9dd78c91c2d354"
-    },
-    ".opencode/plugins/seh-guard.ts": {
-      "generator": "host:opencode",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "962f3cb9d1a1a2bc625a5a0db0beb8955d7953f15a6a504a6295b721782cbfbf"
-    },
-    "AGENTS.md": {
-      "generator": "host:claude,host:antigravity,host:codex,host:opencode",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "387c06400164a8804cb7345c50aced3feda05c0a0bd6a7a71408e39493b5e05c"
-    },
-    "CLAUDE.md": {
-      "generator": "host:claude",
-      "kind": "file",
-      "owner": "seh",
-      "seh_version": "2.0.0a0",
-      "sha256": "d8a0ddc08c77cc2129333be4c1a75e5d98a489d0895b9a181bb90db8197d2742"
-    }
+    ".agents/agents/evolver.md": "91ec2fa2afde11085150a51e92b548d222f0c9db92825949b179db6b9dca7754",
+    ".agents/agents/fixer.md": "e94c491f898648249332a9b0621ad1027fdc014dbfa9c2ee91ecf1c653eb1f69",
+    ".agents/agents/implementer.md": "6b22f90ce41bbc6ba78250da03de3d2acb2ee821e7263815ddbbe8d9e4b74155",
+    ".agents/agents/reviewer.md": "12e765d3847caf20c391a174c8d0d9b85fe9139460bdec26b848aa5c3ae0c9fe",
+    ".agents/skills/harness-init/SKILL.md": "92cf6804262aabcb1c42b5bcf1aa21b95de3ad976eac62e8e041465193e53f62",
+    ".agents/skills/work/SKILL.md": "07e68e668b7cb4e47eb6cd65235f2c0c0e65fcd1b59295b32d8e6373ae53427b",
+    ".claude/agents/evolver.md": "3c73cdb9f321075dff14287a4b6a2c7b0a13c769a90843c10e558408603bd983",
+    ".claude/agents/fixer.md": "d6e82a4d79a62e830ef38d1c757cec6504e1a4cea5285417dfb73b7d123d9b71",
+    ".claude/agents/implementer.md": "9219c4b06bae5afa9ad62a682e45381c7cbc393b0ec07b8630386f0e82a7b41c",
+    ".claude/agents/reviewer.md": "3a4beeff7249dae1d421de829a1da08c5f6527b33301d615401b70d205b5e0f8",
+    ".claude/rules/engineering.md": "7aeae81d2e5b3ee0b6fe38db405aa4d1ac8eb3d2fea47acbc09c95d3f75be73b",
+    ".claude/rules/testing.md": "9fa38b058e632942482ff59e33ebd30b3b973ee0e55a9a1c34b93ea56b74a622",
+    ".claude/skills/harness-init/SKILL.md": "92cf6804262aabcb1c42b5bcf1aa21b95de3ad976eac62e8e041465193e53f62",
+    ".claude/skills/work/SKILL.md": "07e68e668b7cb4e47eb6cd65235f2c0c0e65fcd1b59295b32d8e6373ae53427b",
+    ".codex/agents/evolver.toml": "ce0839ba51c01150b75b509edb26a444683b9de484b13e42c5a96b4bcf703acd",
+    ".codex/agents/fixer.toml": "f431867569486c3e3c30e4e92031072510d0d05029448879dc18a6b568194605",
+    ".codex/agents/implementer.toml": "6019b8bbfd1f93ccda162ba2d271ccc29341e167241140ac6e9cb9761f5f8bab",
+    ".codex/agents/reviewer.toml": "88231dab036189c4eb3e1a2562242bf9a18b9b89177ff24876d2e21b244fdff7",
+    ".ego/config.toml": "1828aac756b134eb4aed1b2dad15e22f948740ca8adbe52758d8d12fd3e4a188",
+    ".ego/knowledge/domain.md": "dac79facaf166adcdde8612c7548e0b186857bc251a43ee379a7ef380bfaefd4",
+    ".ego/spec/prompts/tool-guide.md": "89ec40ab313ef3e7da0776752db979306093de3a15de0cc68f8c20b404f07b41",
+    ".ego/spec/skills/harness-init/SKILL.md": "92cf6804262aabcb1c42b5bcf1aa21b95de3ad976eac62e8e041465193e53f62",
+    ".ego/spec/skills/work/SKILL.md": "07e68e668b7cb4e47eb6cd65235f2c0c0e65fcd1b59295b32d8e6373ae53427b",
+    ".opencode/agents/evolver.md": "152c60b7a2b639dbb553e486a31e586ea264c82852fc9396f955318c91a0cb19",
+    ".opencode/agents/fixer.md": "db7e289002cf601d92dfbffe8538075b09213ba45abaa25778fdf50ede810d42",
+    ".opencode/agents/implementer.md": "59c52f6931e48dc865226690e91b83c6920ebc0a8ce376a1a381eb9390d14c00",
+    ".opencode/agents/reviewer.md": "a6bc0b2232980b388d066620a61f5fcea8e3b0311b3d83ea0b5432396a8b6b52",
+    "AGENTS.md": "195c2a9e06ba84ef685557cccfe119485b3ceffab1744ece85ecee0f1ae99f12",
+    "CLAUDE.md": "195c2a9e06ba84ef685557cccfe119485b3ceffab1744ece85ecee0f1ae99f12"
   },
+  "installed_version": "0.0.1",
+  "last_snapshot_id": "snapshot-bd26ee460261",
   "schema_version": 1
 }

@@ -10,22 +10,44 @@ from .util import SEHError, safe_path, filehash, sha256, read_json, write_json, 
 
 OWNERSHIP = ".ego/ownership.json"
 
+LEGACY_MARKERS = (
+    ("<!-- seh:begin -->", "<!-- seh:end -->"),
+    ("<!-- SEH:BEGIN managed; edit .harness/config.toml and run seh sync -->", "<!-- SEH:END managed -->"),
+)
+
 
 def _apply_block(previous: str, block: str) -> str:
+    if MARK_BEGIN in previous and MARK_END in previous:
+        if previous.count(MARK_BEGIN) != 1 or previous.count(MARK_END) != 1:
+            raise SEHError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
+        a = previous.index(MARK_BEGIN)
+        b = previous.index(MARK_END) + len(MARK_END)
+        return previous[:a] + block.rstrip("\n") + previous[b:]
+    for legacy_begin, legacy_end in LEGACY_MARKERS:
+        if legacy_begin in previous and legacy_end in previous:
+            if previous.count(legacy_begin) != 1 or previous.count(legacy_end) != 1:
+                raise SEHError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
+            a = previous.index(legacy_begin)
+            b = previous.index(legacy_end) + len(legacy_end)
+            return previous[:a] + block.rstrip("\n") + previous[b:]
     if MARK_BEGIN not in previous and MARK_END not in previous:
         return previous.rstrip() + ("\n\n" if previous.strip() else "") + block
-    if previous.count(MARK_BEGIN) != 1 or previous.count(MARK_END) != 1:
-        raise SEHError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
-    a = previous.index(MARK_BEGIN)
-    b = previous.index(MARK_END) + len(MARK_END)
-    return previous[:a] + block.rstrip("\n") + previous[b:]
+    raise SEHError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
 
 
 def installation_plan(root: Path, cfg: Config) -> dict:
     cfg.validate()
     root = root.resolve()
-    ownership = read_json(root / OWNERSHIP, {"files": {}})
-    prev = ownership.get("files", {})
+    ownership_path = root / OWNERSHIP
+    if not ownership_path.exists() and (root / ".harness" / "ownership.json").exists():
+        ownership = read_json(root / ".harness" / "ownership.json", {"files": {}})
+    else:
+        ownership = read_json(ownership_path, {"files": {}})
+    raw_prev = ownership.get("files", {})
+    prev = {
+        k.replace(".harness/", ".ego/"): (v.get("sha256") if isinstance(v, dict) else v)
+        for k, v in raw_prev.items()
+    }
     wanted = generated_files(cfg)
     # The canonical skill files are authoritative after first installation.
     for skill in ("harness-init", "work"):
@@ -64,7 +86,7 @@ def installation_plan(root: Path, cfg: Config) -> dict:
             action = "create"
         elif rel == ".ego/config.toml":
             action = "update_config"
-        elif rel in ("CLAUDE.md", "AGENTS.md") and MARK_BEGIN in path.read_text(encoding="utf-8"):
+        elif rel in ("CLAUDE.md", "AGENTS.md") and any(mb in path.read_text(encoding="utf-8") for mb in (MARK_BEGIN, *(b for b, _ in LEGACY_MARKERS))):
             action = "update_block"
         elif rel in ("CLAUDE.md", "AGENTS.md"):
             action = "append_block"
@@ -76,7 +98,10 @@ def installation_plan(root: Path, cfg: Config) -> dict:
     for rel, old_digest in prev.items():
         if rel not in wanted and rel not in ("CLAUDE.md", "AGENTS.md"):
             path = safe_path(root, rel)
-            changes.append({"path": rel, "action": "remove_owned" if filehash(path) == old_digest else "conflict_orphan", "previous_sha256": filehash(path), "desired_sha256": None})
+            current_hash = filehash(path)
+            if current_hash is None:
+                continue
+            changes.append({"path": rel, "action": "remove_owned" if current_hash == old_digest else "conflict_orphan", "previous_sha256": current_hash, "desired_sha256": None})
     return {"root": str(root), "changes": changes, "conflicts": [x for x in changes if x["action"].startswith("conflict")], "wanted": wanted}
 
 
@@ -110,6 +135,9 @@ def apply_install(root: Path, cfg: Config) -> dict:
             write_json(ownership_path, {"schema_version": 1, "installed_version": __version__, "last_snapshot_id": snapshot_id, "files": files})
             meta["previous_ownership"] = old_data
             write_json(backup / "meta.json", meta)
+            legacy_harness = root / ".harness"
+            if legacy_harness.exists() and legacy_harness.is_dir():
+                shutil.rmtree(legacy_harness, ignore_errors=True)
         except Exception:
             for rel, existed in meta["paths"].items():
                 path = safe_path(root, rel)
@@ -218,6 +246,10 @@ def uninstall_project(root: Path) -> dict:
     if ego_dir.exists() and ego_dir.is_dir():
         shutil.rmtree(ego_dir, ignore_errors=True)
         removed.append(".ego")
+    legacy_harness = root / ".harness"
+    if legacy_harness.exists() and legacy_harness.is_dir():
+        shutil.rmtree(legacy_harness, ignore_errors=True)
+        removed.append(".harness")
     return {"status": "UNINSTALLED", "root": str(root), "removed": removed}
 
 

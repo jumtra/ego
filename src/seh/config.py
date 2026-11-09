@@ -108,7 +108,12 @@ def _normalize_loaded_data(raw: dict[str, Any]) -> dict[str, Any]:
 
 def load_config(root: Path) -> Config:
     path = root / ".ego" / "config.toml"
-    if not path.exists(): return Config()
+    if not path.exists():
+        legacy = root / ".harness" / "config.toml"
+        if legacy.exists():
+            path = legacy
+        else:
+            return Config()
     try: raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc: raise SEHError("INVALID_CONFIG", str(exc), 2) from exc
     data = _normalize_loaded_data(raw)

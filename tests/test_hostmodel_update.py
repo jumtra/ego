@@ -217,7 +217,7 @@ def test_bin_wrappers_work_via_symlink(tmp_path):
     repo_root=Path(__file__).resolve().parent.parent
     bin_dir=tmp_path/'local'/'bin'
     bin_dir.mkdir(parents=True)
-    for name in ('harness','seh'):
+    for name in ('ego','seh'):
         link=bin_dir/name
         link.symlink_to(repo_root/'bin'/name)
         proc=subprocess.run([str(link),'--version'],capture_output=True,text=True,timeout=10,check=False)
@@ -250,14 +250,16 @@ def test_make_install_creates_symlinks_without_clobbering_existing_seh(tmp_path)
     existing_seh.chmod(0o755)
     proc=subprocess.run(['make','install',f'BINDIR={bin_dir}'],cwd=repo_root,capture_output=True,text=True,timeout=10,check=False)
     assert proc.returncode==0, proc.stderr
-    assert (bin_dir/'harness').is_symlink()
+    assert (bin_dir/'ego').is_symlink()
+    assert not (bin_dir/'harness').exists()
     assert not existing_seh.is_symlink() and existing_seh.read_text()=='#!/bin/sh\necho existing\n'
-    ver=subprocess.run([str(bin_dir/'harness'),'--version'],capture_output=True,text=True,timeout=10,check=False)
+    ver=subprocess.run([str(bin_dir/'ego'),'--version'],capture_output=True,text=True,timeout=10,check=False)
     assert ver.returncode==0 and 'seh ' in ver.stdout
     clean_bin=tmp_path/'clean_bin'
     proc2=subprocess.run(['make','install',f'BINDIR={clean_bin}'],cwd=repo_root,capture_output=True,text=True,timeout=10,check=False)
     assert proc2.returncode==0, proc2.stderr
-    assert (clean_bin/'harness').is_symlink() and (clean_bin/'seh').is_symlink()
+    assert (clean_bin/'ego').is_symlink() and (clean_bin/'seh').is_symlink()
+    assert not (clean_bin/'harness').exists()
 
 
 def test_load_config_accepts_v2_nested_config(tmp_path):
