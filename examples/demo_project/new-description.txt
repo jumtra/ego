@@ -1,0 +1,1 @@
+Plan and implement scoped software tasks with deterministic tests, strict authorization, regression evidence and bounded repairs.

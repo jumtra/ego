@@ -1,0 +1,41 @@
+name: Publish standalone wheel for verified updater
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+permissions:
+  contents: write
+jobs:
+  test-build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pytest -q
+      - name: Build wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel
+          python -m pip install --force-reinstall --no-deps dist/self_evolve_harness_standalone-*.whl
+          harness --version
+      - name: Check tag matches wheel version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import glob, os, re
+          match=re.fullmatch(r'v(\d+\.\d+\.\d+)', os.environ['TAG'])
+          assert match, 'Release tag must be stable vX.Y.Z'
+          wheel=glob.glob('dist/self_evolve_harness_standalone-*-py3-none-any.whl')
+          assert len(wheel)==1 and f'-{match.group(1)}-' in wheel[0], (wheel,match.group(1))
+          PY
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/self_evolve_harness_standalone-*.whl --verify-tag --generate-notes

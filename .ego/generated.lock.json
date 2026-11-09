@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "seh_version": "2.0.0a0",
+  "hosts": {
+    "claude": {
+      "cli": "claude",
+      "version": "2.1.318"
+    },
+    "antigravity": {
+      "cli": "antigravity",
+      "version": "1.5.0"
+    },
+    "codex": {
+      "cli": "codex",
+      "version": "0.166.0"
+    },
+    "opencode": {
+      "cli": "opencode",
+      "version": "1.19.5"
+    }
+  },
+  "files": 32
+}

@@ -1,0 +1,8 @@
+{
+  "cases": [
+    {"id": "positive", "split": "training", "prompt": "[[MOCK:OK]]", "checks": {"exit_code": 0, "contains": ["OK"]}},
+    {"id": "regression", "split": "regression", "prompt": "[[MOCK:PASS]]", "checks": {"contains": ["PASS"], "not_contains": ["FAIL"]}},
+    {"id": "holdout", "split": "holdout", "prompt": "[[MOCK:{\"ok\": true}]]", "checks": {"json": {"ok": true}}},
+    {"id": "security", "split": "security", "prompt": "[[MOCK:SAFE]]", "checks": {"contains": ["SAFE"], "not_contains": ["SECRET"]}}
+  ]
+}

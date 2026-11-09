@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=65"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ego"
+version = "0.0.1"
+description = "CLI-first self-evolving coding harness with offline testing and optional agent integrations"
+requires-python = ">=3.11"
+dependencies = []
+authors = [{name="Ego Community"}]
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "jsonschema>=4.0", "PyYAML>=6"]
+
+[project.scripts]
+ego = "seh.cli:main"
+seh = "seh.cli:main"
+harness = "seh.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

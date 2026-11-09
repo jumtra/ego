@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="840" viewBox="0 0 1120 840" role="img" aria-labelledby="title desc">
+<title id="title">One request.Changes you can verify.</title>
+<desc id="desc">“Add a feature to the frontend and API, with tests.” → Plan → Build the UI → Build the API → Verify → Approve &amp; apply.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101827"/><stop offset="1" stop-color="#172a40"/></linearGradient><linearGradient id="accent"><stop stop-color="#5eead4"/><stop offset="1" stop-color="#93c5fd"/></linearGradient><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#7b94b1" stroke-width="1.5"/></marker></defs>
+<rect width="1120" height="840" rx="24" fill="url(#bg)"/>
+<g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans JP','Hiragino Kaku Gothic ProN',Meiryo,sans-serif">
+<text x="32" y="38" font-size="12" fill="#7dd3fc" font-weight="700">AI CODING, WITH A WORKFLOW.</text>
+<text x="32" y="88" font-size="36" fill="#f8fafc" font-weight="750">One request.</text>
+<text x="32" y="134" font-size="36" fill="#5eead4" font-weight="750">Changes you can verify.</text>
+<text x="32" y="168" font-size="17" fill="#b7c9dd" font-weight="400">Plan, split work, test, and approve in one workflow.</text>
+<rect x="704" y="48" width="384" height="30" rx="8" fill="#20344c" stroke="#37516e"/>
+<text x="724" y="69" font-size="12" fill="#dbeafe" font-weight="600">CLAUDE CODE</text>
+<rect x="704" y="87" width="384" height="30" rx="8" fill="#20344c" stroke="#37516e"/>
+<text x="724" y="108" font-size="12" fill="#dbeafe" font-weight="600">CODEX</text>
+<rect x="704" y="126" width="384" height="30" rx="8" fill="#20344c" stroke="#37516e"/>
+<text x="724" y="147" font-size="12" fill="#dbeafe" font-weight="600">OPENCODE</text>
+<rect x="32" y="196" width="1056" height="88" rx="14" fill="#20344c" stroke="#37516e"/>
+<text x="52" y="222" font-size="11" fill="#7dd3fc" font-weight="700">YOUR TASK / EXAMPLE</text>
+<text x="52" y="258" font-size="24" fill="#fff" font-weight="600">“Add a feature to the frontend and API, with tests.”</text>
+<path d="M560 284 V310" fill="none" stroke="#7b94b1" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="32" y="314" width="1056" height="290" rx="14" fill="#f0f5fa" stroke="none"/>
+<text x="52" y="343" font-size="12" fill="#52657b" font-weight="700">MANAGED WORKFLOW / EXAMPLE TASK ROUTING</text>
+<rect x="52" y="414" width="172" height="94" rx="14" fill="#fff" stroke="#dbe4ef"/>
+<rect x="66" y="428" width="26" height="26" rx="8" fill="#2563eb" stroke="none"/>
+<text x="73" y="447" font-size="14" fill="#fff" font-weight="700">1</text>
+<text x="102" y="448" font-size="19" fill="#14263e" font-weight="700">Plan</text>
+<text x="68" y="485" font-size="14" fill="#52657b" font-weight="400">Scope &amp; dependencies</text>
+<rect x="284" y="366" width="230" height="94" rx="14" fill="#fff" stroke="#dbe4ef"/>
+<rect x="298" y="380" width="26" height="26" rx="8" fill="#2563eb" stroke="none"/>
+<text x="305" y="399" font-size="14" fill="#fff" font-weight="700">2</text>
+<text x="334" y="400" font-size="19" fill="#14263e" font-weight="700">Build the UI</text>
+<text x="300" y="437" font-size="14" fill="#52657b" font-weight="400">Codex · model: auto</text>
+<rect x="284" y="482" width="230" height="94" rx="14" fill="#fff" stroke="#dbe4ef"/>
+<rect x="298" y="496" width="26" height="26" rx="8" fill="#7c3aed" stroke="none"/>
+<text x="305" y="515" font-size="14" fill="#fff" font-weight="700">2</text>
+<text x="334" y="516" font-size="19" fill="#14263e" font-weight="700">Build the API</text>
+<text x="300" y="553" font-size="14" fill="#52657b" font-weight="400">OpenCode · model: auto</text>
+<rect x="570" y="414" width="232" height="94" rx="14" fill="#fff" stroke="#dbe4ef"/>
+<rect x="584" y="428" width="26" height="26" rx="8" fill="#0f766e" stroke="none"/>
+<text x="591" y="447" font-size="14" fill="#fff" font-weight="700">3</text>
+<text x="620" y="448" font-size="19" fill="#14263e" font-weight="700">Verify</text>
+<text x="586" y="485" font-size="14" fill="#52657b" font-weight="400">Tests &amp; bounded repairs</text>
+<rect x="846" y="414" width="222" height="94" rx="14" fill="#fff" stroke="#dbe4ef"/>
+<rect x="860" y="428" width="26" height="26" rx="8" fill="#0f766e" stroke="none"/>
+<text x="867" y="447" font-size="14" fill="#fff" font-weight="700">4</text>
+<text x="896" y="448" font-size="19" fill="#14263e" font-weight="700">Approve &amp; apply</text>
+<text x="862" y="485" font-size="14" fill="#52657b" font-weight="400">Apply successful changes</text>
+<path d="M224 461 H250 V413 H278" fill="none" stroke="#7b94b1" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M250 461 V529 H278" fill="none" stroke="#7b94b1" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M514 413 H540 V461 H564" fill="none" stroke="#7b94b1" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M514 529 H540 V461" fill="none" stroke="#7b94b1" stroke-width="2"/>
+<path d="M802 461 H840" fill="none" stroke="#7b94b1" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="284" y="591" font-size="13" fill="#52657b" font-weight="400">Independent tasks run in parallel</text>
+<rect x="32" y="630" width="518" height="142" rx="14" fill="#1c3047" stroke="#37516e"/>
+<rect x="50" y="650" width="4" height="30" rx="2" fill="url(#accent)" stroke="none"/>
+<text x="68" y="675" font-size="23" fill="#f8fafc" font-weight="700">Keep everyday work light.</text>
+<text x="52" y="713" font-size="15" fill="#cbd5e1" font-weight="400">AI CLI: /work → Implement &amp; test</text>
+<text x="52" y="746" font-size="13" fill="#7dd3fc" font-weight="400">No extra optimization calls</text>
+<rect x="570" y="630" width="518" height="142" rx="14" fill="#1c3047" stroke="#37516e"/>
+<rect x="588" y="650" width="4" height="30" rx="2" fill="url(#accent)" stroke="none"/>
+<text x="606" y="675" font-size="23" fill="#f8fafc" font-weight="700">Improve how you work.</text>
+<text x="590" y="713" font-size="15" fill="#cbd5e1" font-weight="400">Skill / prompt candidate → Evaluate &amp; compare → Approve</text>
+<text x="590" y="746" font-size="13" fill="#7dd3fc" font-weight="400">Optimization OFF by default · No auto-promotion</text>
+<text x="32" y="811" font-size="14" fill="#9cb1ca" font-weight="400">Works beyond Python · Local memory · Code search</text>
+</g></svg>

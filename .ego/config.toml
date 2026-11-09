@@ -1,0 +1,62 @@
+schema_version = 1
+profile = "balanced"
+
+[hosts]
+enabled = [
+    "claude",
+    "antigravity",
+    "codex",
+    "opencode",
+]
+
+[hosts.antigravity]
+surface = "auto"
+managed_cli = "disabled"
+
+[runtime]
+mode = "native"
+backend = "cli"
+selected_host = "auto"
+max_parallel = 2
+max_attempts_per_unit = 3
+max_seconds_per_unit = 600
+max_total_seconds = 3600
+
+[runtime.security]
+require_worktree = true
+command_allowlist = [
+    "git",
+    "python",
+    "pytest",
+]
+allow_network = false
+trust_external_repo = false
+
+[code_intelligence]
+provider = "none"
+fallback = "source"
+
+[memory]
+provider = "file"
+path = ".agent-memory"
+
+[evaluation]
+mode = "required"
+trials = 3
+promotion_requires_holdout = true
+
+[evolution]
+mode = "propose"
+
+[authoring]
+policy = "required"
+require_eval_for_behavior_change = true
+required_hosts = [
+    "claude",
+    "codex",
+    "opencode",
+]
+require_ci_for_promote = true
+
+[sdk]
+enabled = false

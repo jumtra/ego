@@ -1,0 +1,48 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments and secrets
+.venv/
+.env
+*.env
+*.log
+
+# Build and distribution
+*.egg-info/
+build/
+dist/
+*.whl
+*.tar.gz
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+scratch/
+*.local
+
+# Ego runtime state and handoffs
+.ego/state/
+.ego/artifacts/
+.ego/backups/
+.ego/locks/
+.ego/memory/handoffs/
+
+# Legacy harness paths
+.harness/
+
+# AI host generated configs & instructions (generated from .ego/spec)
+.claude/
+.codex/
+.opencode/
+.agents/
+CLAUDE.md
+AGENTS.md
+
