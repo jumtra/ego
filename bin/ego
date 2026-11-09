@@ -10,4 +10,4 @@ while [ -L "$target" ]; do
   esac
 done
 here=$(CDPATH= cd -- "$(dirname -- "$target")/.." && pwd)
-exec python3 "$here/run_seh.py" "$@"
+exec python3 "$here/run_ego.py" "$@"

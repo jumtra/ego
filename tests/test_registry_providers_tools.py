@@ -1,12 +1,12 @@
 import pytest
-from seh.registry import resolve,discover
-from seh.util import SEHError
-from seh.codeintel import health,search,symbol
-from seh.tools import invoke
-from seh.memory import FileMemory
-from seh.hosts import capability,build_command
-from seh.policy import check_command,check_hook_payload
-from seh.runner import run_agent,parse_host_response
+from ego.registry import resolve,discover
+from ego.util import SEHError
+from ego.codeintel import health,search,symbol
+from ego.tools import invoke
+from ego.memory import FileMemory
+from ego.hosts import capability,build_command
+from ego.policy import check_command,check_hook_payload
+from ego.runner import run_agent,parse_host_response
 
 def test_modules(project):
     assert "evaluation" in resolve(project,["evolve"])["capabilities"]

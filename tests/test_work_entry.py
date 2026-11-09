@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from seh.config import Config
-from seh.install import apply_install
-from seh.templates import skill_md
-from seh.util import sha256, write_json
+from ego.config import Config
+from ego.install import apply_install
+from ego.templates import skill_md
+from ego.util import sha256, write_json
 
 
 def test_work_entry_delegates_managed_execution_and_keeps_approvals():
@@ -18,7 +18,7 @@ def test_work_entry_delegates_managed_execution_and_keeps_approvals():
 
 
 def test_standard_work_skill_upgrade_refreshes_all_host_copies(tmp_path: Path):
-    from seh.templates import LEGACY_WORK_HASHES
+    from ego.templates import LEGACY_WORK_HASHES
     cfg = Config()
     apply_install(tmp_path, cfg)
     canonical = tmp_path / '.ego/spec/skills/work/SKILL.md'
@@ -49,7 +49,7 @@ def test_owned_custom_work_skill_is_preserved(tmp_path: Path):
 
 
 def test_managed_python_checks_ignore_nested_bytecode_caches(tmp_path: Path):
-    from seh.work import execute
+    from ego.work import execute
     (tmp_path / 'src').mkdir()
     (tmp_path / 'src/value.py').write_text('VALUE = 42\n')
     (tmp_path / 'check.py').write_text(

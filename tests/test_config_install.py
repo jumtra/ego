@@ -1,13 +1,14 @@
 from pathlib import Path
 import tomllib
 import pytest
-from seh.config import Config,load_config,save_config,OptConfig,load_opt,save_opt
-from seh.install import apply_install,installation_plan,rollback,legacy_plan,remove_legacy
-from seh.util import SEHError,filehash
-from seh.author import lint
+from ego.config import Config,load_config,save_config,OptConfig,load_opt,save_opt
+from ego.install import apply_install,installation_plan,rollback,legacy_plan,remove_legacy
+from ego.util import SEHError,filehash
+from ego.author import lint
 
 def test_initial_setup(project):
     assert load_config(project).profile=="balanced"
+    assert load_config(project).timeout_seconds==3600
     assert (project/".claude/skills/work/SKILL.md").exists()
     assert (project/".agents/skills/work/SKILL.md").exists()
     assert len(list((project/".claude/agents").glob("*.md")))==4

@@ -5,10 +5,10 @@ from pathlib import Path
 import subprocess
 import sys
 
-from seh.config import load_config
-from seh.apply_wizard import should_prompt
+from ego.config import load_config
+from ego.apply_wizard import should_prompt
 
-ENTRY = Path(__file__).resolve().parents[1] / "run_seh.py"
+ENTRY = Path(__file__).resolve().parents[1] / "run_ego.py"
 
 
 def cli(root: Path, *argv: str, answers: str | None = None):

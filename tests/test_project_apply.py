@@ -6,11 +6,11 @@ import os
 import subprocess
 import sys
 
-from seh.cli import _project_target
-from seh.util import SEHError
+from ego.cli import _project_target
+from ego.util import SEHError
 import pytest
 
-ENTRY = Path(__file__).resolve().parents[1] / "run_seh.py"
+ENTRY = Path(__file__).resolve().parents[1] / "run_ego.py"
 
 
 def cmd(root: Path, *argv: str, answers: str | None = None, env: dict | None = None):

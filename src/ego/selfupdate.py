@@ -132,7 +132,7 @@ def install_wheel(path: Path, version: str, *, approved: bool=False) -> dict:
                         capture_output=True,text=True,timeout=180,check=False)
     if proc.returncode:
         raise SEHError("UPDATE_INSTALL_FAILED",(proc.stderr or proc.stdout)[-1600:],3)
-    check=subprocess.run([sys.executable,"-m","seh","--version"],capture_output=True,text=True,timeout=15,check=False)
+    check=subprocess.run([sys.executable,"-m","ego","--version"],capture_output=True,text=True,timeout=15,check=False)
     good=check.returncode==0 and version in check.stdout
     if not good:
         raise SEHError("UPDATE_HEALTHCHECK_FAILED","New package installed but version check failed. Reinstall previous wheel from local backup; project data was not modified.",3)

@@ -1,9 +1,9 @@
 from pathlib import Path
 import json
 import pytest
-from seh.work import execute,validate_task,status
-from seh.evals import run_eval,compare,load_suite
-from seh.util import SEHError
+from ego.work import execute,validate_task,status
+from ego.evals import run_eval,compare,load_suite
+from ego.util import SEHError
 
 def test_code_workflow_staged_apply(project):
     (project/"generate.py").write_text("from pathlib import Path\nPath('output.txt').write_text('ok')\n")

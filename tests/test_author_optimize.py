@@ -1,12 +1,12 @@
 from pathlib import Path
 import json
 import pytest
-from seh.author import lint,plan,gate
-from seh.candidates import new_candidate,validate_candidate,promote,rollback_promotion
-from seh.evolve import observe,propose,lesson
-from seh.optimize import plan as opt_plan,propose as opt_propose,run as opt_run,doctor as opt_doctor,report as opt_report
-from seh.config import OptConfig,save_opt
-from seh.util import SEHError, read_json
+from ego.author import lint,plan,gate
+from ego.candidates import new_candidate,validate_candidate,promote,rollback_promotion
+from ego.evolve import observe,propose,lesson
+from ego.optimize import plan as opt_plan,propose as opt_propose,run as opt_run,doctor as opt_doctor,report as opt_report
+from ego.config import OptConfig,save_opt
+from ego.util import SEHError, read_json
 
 def author_suite(project):
     suite=project/"author_suite.json"

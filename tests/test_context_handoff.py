@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from seh.cli import main
-from seh.session import (save_checkpoint, load_checkpoint, resume_prompt,
+from ego.cli import main
+from ego.session import (save_checkpoint, load_checkpoint, resume_prompt,
                          rotation_instructions, managed_checkpoint, completion_message)
-from seh.task_routing import build_task_prompt
-from seh.templates import skill_md, instruction_block
-from seh.config import Config
-from seh.util import SEHError
-from seh.work import execute
+from ego.task_routing import build_task_prompt
+from ego.templates import skill_md, instruction_block
+from ego.config import Config
+from ego.util import SEHError
+from ego.work import execute
 
 
 def test_checkpoint_is_compact_redacted_atomic_and_revisioned(tmp_path: Path):

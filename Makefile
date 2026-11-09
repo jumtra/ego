@@ -18,9 +18,9 @@ test:
 	PYTHONPATH=src python3 -m pytest -q
 
 smoke:
-	PYTHONPATH=src python3 -m seh --version
-	PYTHONPATH=src python3 -m seh modules list
-	PYTHONPATH=src python3 -m seh optimize status
+	PYTHONPATH=src python3 -m ego --version
+	PYTHONPATH=src python3 -m ego modules list
+	PYTHONPATH=src python3 -m ego optimize status
 
 bench:
-	PYTHONPATH=src python3 -m seh bench --trials 10
+	PYTHONPATH=src python3 -m ego bench --trials 10

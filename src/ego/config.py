@@ -23,7 +23,7 @@ class Config:
     runtime_mode: str = "native"
     max_parallel: int = 2
     max_attempts: int = 3
-    timeout_seconds: int = 300
+    timeout_seconds: int = 3600
     models: dict[str, str] = field(default_factory=dict)
     tests: list[list[str]] = field(default_factory=list)
     allow_commands: list[str] = field(default_factory=lambda: ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"])

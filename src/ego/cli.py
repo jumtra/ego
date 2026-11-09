@@ -390,13 +390,13 @@ def _cmd_bench(args):
     samples=[]
     for _ in range(args.trials):
         start=time.perf_counter()
-        p=subprocess.run([sys.executable,"-m","seh","work","native","--root",str(root)],capture_output=True,text=True)
+        p=subprocess.run([sys.executable,"-m","ego","work","native","--root",str(root)],capture_output=True,text=True)
         if p.returncode:raise SEHError("BENCH_FAILED",p.stderr,5)
         samples.append((time.perf_counter()-start)*1000)
     results=sorted(samples)
-    _print({"metric":"seh work native no-agent dispatch","count":len(results),"p50_ms":round(statistics.median(results),3),
+    _print({"metric":"ego work native no-agent dispatch","count":len(results),"p50_ms":round(statistics.median(results),3),
             "p95_ms":round(results[min(len(results)-1,int(len(results)*.95))],3),
-            "baseline_note":"This measures SEH CLI dispatch only, not native Claude/Codex/OpenCode task execution"})
+            "baseline_note":"This measures ego CLI dispatch only, not native Claude/Codex/OpenCode task execution"})
     return 0
 
 def _cmd_hosts(args):
@@ -434,7 +434,7 @@ def _cmd_update(args):
         if not (project/".ego"/"config.toml").exists():
             raise SEHError("PROJECT_NOT_INITIALIZED","--sync requires existing .ego/config.toml",3)
         # Launch the just-installed version in a new process; no stale templates.
-        p=subprocess.run([sys.executable,"-m","seh","sync","--root",str(project),"--apply"],capture_output=True,text=True,timeout=90)
+        p=subprocess.run([sys.executable,"-m","ego","sync","--root",str(project),"--apply"],capture_output=True,text=True,timeout=90)
         if p.returncode:
             raise SEHError("PROJECT_SYNC_FAILED",p.stderr[-1600:] or p.stdout[-1600:],3)
         result["project_sync"]=json.loads(p.stdout)

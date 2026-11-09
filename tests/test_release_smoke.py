@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-ENTRY = ROOT / 'run_seh.py'
+ENTRY = ROOT / 'run_ego.py'
 DEMO = ROOT / 'examples' / 'demo_project'
 
 

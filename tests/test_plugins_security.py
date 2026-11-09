@@ -3,13 +3,13 @@ import json
 import sys
 import os
 import pytest
-from seh.util import SEHError,safe_path
-from seh.registry import scaffold,discover,resolve
-from seh.tools import available_tools,invoke_registered
-from seh.config import Config,load_config,save_config
-from seh.policy import check_command,check_write
-from seh.evals import run_eval,compare
-from seh.work import execute,cancel
+from ego.util import SEHError,safe_path
+from ego.registry import scaffold,discover,resolve
+from ego.tools import available_tools,invoke_registered
+from ego.config import Config,load_config,save_config
+from ego.policy import check_command,check_write
+from ego.evals import run_eval,compare
+from ego.work import execute,cancel
 
 
 def test_declarative_tool_and_scaffold(project):
@@ -63,7 +63,7 @@ def test_eval_infra_is_not_a_pass(project):
 def test_config_manual_toml_is_authoritative(project):
     cfg=load_config(project)
     cfg.memory="file";cfg.profile="minimal";save_config(project,cfg)
-    from seh.install import installation_plan,apply_install
+    from ego.install import installation_plan,apply_install
     diff=installation_plan(project,cfg)
     assert all(z["action"]!="conflict" for z in diff["changes"])
     apply_install(project,cfg)

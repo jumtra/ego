@@ -1,7 +1,7 @@
 from pathlib import Path
 import pytest
-from seh.config import Config
-from seh.install import apply_install
+from ego.config import Config
+from ego.install import apply_install
 
 @pytest.fixture
 def project(tmp_path):

@@ -9,11 +9,11 @@ import sys
 import zipfile
 import pytest
 
-from seh import hostcompat, selfupdate
-from seh.hosts import build_command
-from seh.task_routing import resolve_routes, build_task_prompt
-from seh.work import execute
-from seh.util import SEHError
+from ego import hostcompat, selfupdate
+from ego.hosts import build_command
+from ego.task_routing import resolve_routes, build_task_prompt
+from ego.work import execute
+from ego.util import SEHError
 
 
 def fake_hosts(monkeypatch, tmp_path, *, claude_exit=0):
@@ -166,7 +166,7 @@ def test_update_requires_approval_and_venv(tmp_path):
 
 
 def test_node_precedence_over_task_and_code_node_under_compare_defaults(project):
-    from seh.task_routing import resolve_routes
+    from ego.task_routing import resolve_routes
     spec={"defaults":{"hosts":["claude","codex"],"strategy":"fallback","models":{"codex":"default-codex"}}}
     n={"id":"x","host":"codex","model":"node-codex","prompt":"x","write_allowlist":["x.txt"]}
     strategy,routes,_=resolve_routes(n,spec)
@@ -204,7 +204,7 @@ def test_local_wheel_requires_integrity_and_newer_version(tmp_path):
 
 
 def test_host_models_do_not_refresh_on_task(monkeypatch,tmp_path,project):
-    from seh import models
+    from ego import models
     def unwanted(*args,**kwargs):raise AssertionError('Work path triggered a model refresh')
     monkeypatch.setattr(models,'refresh_catalog',unwanted)
     spec={'defaults':{'model':'auto'},'nodes':[{'id':'noop','kind':'agent','prompt':'[[MOCK:hello]]',
@@ -263,7 +263,7 @@ def test_make_install_creates_symlinks_without_clobbering_existing_seh(tmp_path)
 
 
 def test_load_config_accepts_v2_nested_config(tmp_path):
-    from seh.config import load_config
+    from ego.config import load_config
     h=tmp_path/'.ego'
     h.mkdir()
     (h/'config.toml').write_text('''schema_version = "2.0"
@@ -309,7 +309,7 @@ def test_codex_approve_for_me_and_agy_models_parsing(monkeypatch,tmp_path):
     script.write_text(script.read_text().replace('--ask-for-approval','--approve-for-me'))
     cmd=build_command('codex','hello',read_only=False,autonomy='auto')
     assert '--approve-for-me' in cmd
-    from seh.models import parse_agy_models
+    from ego.models import parse_agy_models
     parsed=parse_agy_models('gemini-4-argon-medium\tGemini 4 Argon (Medium)\nclaude-opus-5-5-high\tClaude Opus 5.5 (High)\n')
     assert parsed==['claude-opus-5-5-high','gemini-4-argon-medium']
 

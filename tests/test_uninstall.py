@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
-from seh.install import apply_install, uninstall_project, uninstall_cli
-from seh.config import Config
+from ego.install import apply_install, uninstall_project, uninstall_cli
+from ego.config import Config
 
 
 def test_uninstall_project_cleans_owned_files(tmp_path):

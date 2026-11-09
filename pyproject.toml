@@ -15,8 +15,8 @@ license = {text = "MIT"}
 dev = ["pytest>=8", "jsonschema>=4.0", "PyYAML>=6"]
 
 [project.scripts]
-ego = "seh.cli:main"
-seh = "seh.cli:main"
+ego = "ego.cli:main"
+seh = "ego.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -5,20 +5,20 @@ import sys
 import subprocess
 import tomllib
 import pytest
-from seh.util import SEHError,read_json,filehash
-from seh.config import load_config,save_config,OptConfig,save_opt
-from seh.install import apply_install,legacy_plan,remove_legacy,restore_legacy
-from seh.codeintel import impact,affected_tests,search,health
-from seh.hosts import capability
-from seh.author import gate
-from seh.candidates import new_candidate,promote
-from seh.planner import plan_work
-from seh.prompting import extract_reply,register_prompt,get_prompt
-from seh.detect import detect
-from seh.optimize import plan as optplan,propose as optpropose,run as optrun,full as optfull
-from seh.events import emit,tail
-from seh.runner import parse_host_response
-from seh.memory import MCPStdio
+from ego.util import SEHError,read_json,filehash
+from ego.config import load_config,save_config,OptConfig,save_opt
+from ego.install import apply_install,legacy_plan,remove_legacy,restore_legacy
+from ego.codeintel import impact,affected_tests,search,health
+from ego.hosts import capability
+from ego.author import gate
+from ego.candidates import new_candidate,promote
+from ego.planner import plan_work
+from ego.prompting import extract_reply,register_prompt,get_prompt
+from ego.detect import detect
+from ego.optimize import plan as optplan,propose as optpropose,run as optrun,full as optfull
+from ego.events import emit,tail
+from ego.runner import parse_host_response
+from ego.memory import MCPStdio
 
 
 def test_host_agent_formats(project):
@@ -88,14 +88,14 @@ def test_full_opt_in_budget(project):
     assert len(result["rounds"][0]["experiment_ids"])==3
 
 def test_cli_root_after_action(project):
-    cmd=[sys.executable,"-m","seh","memory","add","some note","--root",str(project)]
+    cmd=[sys.executable,"-m","ego","memory","add","some note","--root",str(project)]
     env={**os.environ,"PYTHONPATH":str(Path(__file__).resolve().parents[1]/"src")}
     res=subprocess.run(cmd,capture_output=True,text=True,env=env,timeout=20)
     assert res.returncode==0,res.stderr
     assert json.loads(res.stdout)["text"]=="some note"
 
 def test_cli_fast_does_not_import_optimizer():
-    script="import sys; import seh.cli; print('seh.optimize' in sys.modules)"
+    script="import sys; import ego.cli; print('ego.optimize' in sys.modules)"
     env={**os.environ,"PYTHONPATH":str(Path(__file__).resolve().parents[1]/"src")}
     r=subprocess.run([sys.executable,"-c",script],capture_output=True,text=True,env=env)
     assert r.stdout.strip()=="False"
