@@ -9,7 +9,7 @@ The harness is not a general-purpose OS sandbox. A copied folder or worktree pro
 - Env settings, agent outputs and external text are untrusted. Tool subprocesses use argv not a shell, no implicit `curl | sh`, and a redactor removes typical credentials from persisted run results. Credentials embedded in arbitrary source files, diagrams or badly formatted transcripts may not be detected: handle sensitive projects with stronger controls.
 - An `approval_ref` is a **local operator acknowledgement/audit identifier**, not proof of identity. Production multi-user approval would need an external authentication and policy service.
 - The optional Engram MCP provider starts an explicit trusted external command from `SEH_ENGRAM_MCP_COMMAND`. Tool names are configured separately by the user. Its compatibility is not presumed until a real server handshake passes.
-- The AGY consumer-plan limitation is respected: no `agy -p` automatic wrapping. Generated Skill/Agent files can still be used in the Antigravity app.
+- AGY is run through its CLI like the other hosts when the `agy` binary is installed. Whether your AGY plan permits automated CLI use is the operator's responsibility to confirm.
 - External CodeGraph/Graphify are never silently installed. `ego code index --execute` uses their documented commands and may write local indexes. External generated Skill/Hook files should not be layered on top of harness-owned files without inspecting conflicts.
 
 ### Deployment guidance

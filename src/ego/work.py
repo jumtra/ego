@@ -234,8 +234,6 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
     should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
     nodes=validate_task(spec)
     if apply and not approve:raise SEHError("APPROVAL_REQUIRED", "--apply requires --approve")
-    if any(r.host=="agy" for n in nodes if n.get("kind","agent") not in ("gate","code") for r in resolve_routes(n,spec,host,default_models=cfg.models)[1]):
-        raise SEHError("HOST_POLICY_BLOCKED", "AGY managed execution is disabled",3)
     if autonomy=="bypass" and not isolated:
         raise SEHError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)
     if any(resolve_routes(n,spec,host,default_models=cfg.models)[0]=="compare" for n in nodes if n.get("kind","agent") not in ("gate","code")) and apply:

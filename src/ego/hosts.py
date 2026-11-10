@@ -24,7 +24,6 @@ def capability(host: str) -> HostCapability:
     if host not in BINARIES: raise SEHError("UNKNOWN_HOST",host,2)
     if host=="mock":return HostCapability(host,None,True,True,"offline","Deterministic test adapter")
     path=shutil.which(BINARIES[host] or "")
-    if host=="agy":return HostCapability(host,path,bool(path),False,"configuration-only","AGY managed CLI execution disabled")
     return HostCapability(host,path,bool(path),bool(path),"cli","ready" if path else "CLI not installed")
 
 
