@@ -12,7 +12,7 @@ import pytest
 from ego import hostcompat, selfupdate
 from ego.hosts import build_command
 from ego.task_routing import resolve_routes, build_task_prompt
-from ego.work import execute
+from ego.work import execute, validate_task
 from ego.util import SEHError
 
 
@@ -351,3 +351,28 @@ def test_codex_approve_for_me_and_agy_models_parsing(monkeypatch,tmp_path):
 
 
 
+
+
+def test_node_notes_reach_worker_and_successor_prompts(tmp_path):
+    task={'goal':'Add endpoint','nodes':[
+        {'id':'design','prompt':'Write the contract','write_allowlist':['docs/*'],
+         'intent':'Both halves need one contract','provides':['docs/plan.md']},
+        {'id':'build','prompt':'Implement it','depends_on':['design'],'write_allowlist':['src/*'],
+         'intent':'Users need the endpoint','done_when':['GET /x returns 200'],
+         'non_goals':['Refactoring the router'],'assumptions':['Auth middleware exists']}]}
+    validate_task(task)
+    prompt=build_task_prompt(task,task['nodes'][1],tmp_path)
+    assert 'Users need the endpoint' in prompt and '- GET /x returns 200' in prompt
+    assert '- Refactoring the router' in prompt and '- Auth middleware exists' in prompt
+    # The successor learns what the prior stage was for and what it left behind.
+    assert '- design: Both halves need one contract; provides: docs/plan.md' in prompt
+    first=build_task_prompt(task,task['nodes'][0],tmp_path)
+    assert 'Later stages rely on this stage for\n- docs/plan.md' in first and 'Done when' not in first
+
+
+@pytest.mark.parametrize('notes',[{'intent':''},{'intent':['why']},{'intent':'x'*401},
+                                  {'done_when':'passes'},{'done_when':['']},{'provides':['a']*7}])
+def test_node_notes_are_bounded(notes):
+    task={'goal':'g','nodes':[{'id':'a','prompt':'p','write_allowlist':['src/*'],**notes}]}
+    with pytest.raises(SEHError,match='INVALID_TASK|must be'):
+        validate_task(task)

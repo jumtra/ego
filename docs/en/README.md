@@ -145,6 +145,8 @@ Launch your favorite AI CLI inside the project and describe your goal:
 
 **Use `/work` as your everyday entry point.** The AI automatically operates internal `ego` subcommands:
 - Investigate → plan & split tasks → implement → test & verify → report diff
+- Before editing, it confirms why the change is wanted and how completion is judged. It asks one question at a time only when an unresolved point would change what gets built and a wrong guess would be costly; otherwise it proceeds and lists its assumptions in the report
+- Large or multi-host runs carry each stage's `intent`, `done_when`, `non_goals`, `assumptions` and `provides` into the worker prompts, so a stage knows why it exists and what later stages rely on
 
 ---
 

@@ -6,7 +6,8 @@ from .config import Config
 
 # Refresh only exact, unmodified earlier defaults (v0.0.4, v0.0.5); preserve authored skills.
 LEGACY_WORK_HASHES = {"b9369f340f37af0f731e8eb03f0c8e1e6529be80ce1b63941bada4b6ea52ee88",
-                      "f14c28b7aa27cb52873960a1efda8b6618e6e9c1f006ce3c246c4ce8dcad3844"}
+                      "f14c28b7aa27cb52873960a1efda8b6618e6e9c1f006ce3c246c4ce8dcad3844",
+                      "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a"}
 
 SKILLS = {
 "harness-init": (
@@ -34,6 +35,8 @@ Choose the **smallest useful workflow** and keep context small: read only the fi
 
 Prefer direct user instructions over ceremonial workflow. Write formal documents only when requested or needed for a decision.
 
+**Intent first, questions only when needed:** at any size, before editing you can state in one line each why the user wants this and what will show it is done. When the request, the code and memory answer both, proceed without asking. Ask when an open point would change what you build and a wrong guess would be costly to undo: one question at a time, each with your recommended answer. Stop asking once the remaining points have safe defaults, and state those assumptions in the report. In a managed run, put the answers in task-level `instructions`.
+
 **Always:**
 - You operate the harness for the user. `/work` is the entry point; do not ask the user to compose task JSON or type routine CLI commands.
 - Never infer approval from a successful test. Applying staged changes needs authorization.
@@ -54,7 +57,7 @@ WORK_REFERENCES = {
 For large or cross-component work needing dependency scheduling or several hosts. Check `ego work run --help` before first use.
 
 1. Inspect the project and choose an available authenticated host and a narrow write scope. Run `ego work plan --root . --goal "<goal>" --host <host> --scope '<paths>' --execute --out <task-file>`. This invokes an external planning CLI; respect existing execution permissions. Do not use mock for real implementation.
-2. Read the generated task JSON. Verify prompts, dependencies, host/model routes, write_allowlist and checks. Node prompts say what to achieve and why, with acceptance criteria; they do not dictate implementation. Add focused test commands as argv arrays in each node's checks, and a final gate with integration checks depending on all implementation nodes. Explain the short plan in conversation and obtain any required approval.
+2. Read the generated task JSON. Verify prompts, dependencies, host/model routes, write_allowlist and checks. Node prompts say what to achieve; they do not dictate implementation. Each node carries `intent` (one sentence: why the goal needs it); agent nodes carry `done_when` (observable acceptance criteria) and, only where they apply, `non_goals`, `assumptions` and `provides` (what dependent nodes rely on). Keep them short, correct any that misread the user's intent, and put answers the user gave during clarification into task-level `instructions` so every worker sees them. Add focused test commands as argv arrays in each node's checks, and a final gate with integration checks depending on all implementation nodes. Explain the short plan in conversation and obtain any required approval.
 3. Run `ego work run --root . --task <task-file> --host <host> --trust-cli`. The output is a compact summary: run_id, final_status, node_status, changed_files, clipped failures and usage. Open `record_path` or pass `--verbose` only when the summary is not enough. A PASSED run without applied=true is verified but unapplied. Report failures; do not apply failed runs.
 4. After reviewing a PASSED result and obtaining authorization to apply, run `ego work resume <run-id> --root . --task <task-file> --host <host> --trust-cli --apply --approve`. Keep the task JSON unchanged. Never infer approval from a successful test or bypass STALE_BASE. Inspect the applied diff and report evidence.
 

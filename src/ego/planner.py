@@ -19,7 +19,7 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
     scope=scope or ["src/**","tests/**"]
     # Model output is treated as a structured proposal, never executed without separate approval.
     if host=="mock":
-        obj={"goal":goal,"nodes":[{"id":"implement","kind":"agent","prompt":goal,"write_allowlist":scope,"max_attempts":2}]}
+        obj={"goal":goal,"nodes":[{"id":"implement","kind":"agent","intent":"Deliver the goal in one stage","prompt":goal,"write_allowlist":scope,"max_attempts":2}]}
     else:
         if not execute:raise SEHError("EXPLICIT_EXECUTION_REQUIRED","Planning via model requires --execute")
         cfg=load_config(root)
@@ -36,8 +36,13 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
                 "in a final gate depending on all required implementations. "
                 "Return raw JSON without Markdown fences. "
                 "Use the fewest nodes and only real dependencies. No unapproved commands. "
-                "State in each prompt what to achieve and why, with acceptance criteria; "
-                "leave implementation detail to the worker. "
+                "State in each prompt what to achieve; leave implementation detail to the worker. "
+                "Every node also has intent: one sentence on why the goal needs this node. "
+                "Agent nodes have done_when: 1-4 observable acceptance criteria. "
+                "Add only when they apply: non_goals (tempting work this node must not do), "
+                "assumptions (unverified facts the node relies on; the worker stops if one is false), "
+                "provides (files or interfaces that dependent nodes rely on). "
+                "These are lists of short strings; keep each under 200 characters and omit empty ones. "
                 f"Allowed write scope: {json.dumps(scope)}. Goal: {goal}. "
                 f"Candidate files to inspect (pointers, not full content): {json.dumps(ctx)[:3000]}")
         if history:
