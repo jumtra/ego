@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from .config import HOSTS
+from .config import HOSTS, VALID_EFFORTS
 from .util import SEHError, safe_path
 
 ROUTABLE = set(HOSTS) | {"mock"}
@@ -20,6 +20,7 @@ MAX_CONTEXT_FILES = 24
 class Route:
     host: str
     model: str | None  # None means host's current default, not a frozen model ID.
+    effort: str | None = None  # None or validated effort level (e.g. "low", "medium", "max")
 
 
 def _strict_hosts(value: Any) -> list[str]:
@@ -30,7 +31,30 @@ def _strict_hosts(value: Any) -> list[str]:
     return value
 
 
-def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_model: str | None = None, default_models: dict[str, str] | None = None):
+def _parse_model_entry(entry: Any) -> tuple[str | None, str | None]:
+    """Parse a model specification (str or dict) into (model, effort)."""
+    if entry is None:
+        return None, None
+    if isinstance(entry, str):
+        val = entry.strip()
+        if not val or len(val) > 128:
+            raise SEHError("INVALID_MODEL", "model must be a valid non-empty string <= 128 chars", 2)
+        model = None if val in ("auto", "native-default") else val
+        return model, None
+    if isinstance(entry, dict):
+        raw_m = entry.get("model")
+        if not isinstance(raw_m, str) or not raw_m.strip() or len(raw_m) > 128:
+            raise SEHError("INVALID_MODEL", "model in table must be a valid non-empty string <= 128 chars", 2)
+        model = None if raw_m.strip() in ("auto", "native-default") else raw_m.strip()
+        raw_e = entry.get("effort")
+        if raw_e is not None and (not isinstance(raw_e, str) or raw_e not in VALID_EFFORTS):
+            raise SEHError("INVALID_MODEL", f"effort must be one of {sorted(VALID_EFFORTS)}", 2)
+        effort = None if raw_e in (None, "auto") else raw_e
+        return model, effort
+    raise SEHError("INVALID_MODEL", "model config must be a string or table", 2)
+
+
+def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_model: str | None = None, default_models: dict[str, Any] | None = None):
     """Node > task defaults > explicit CLI default > config defaults > host-native default.
 
     A multi-host node requires an explicit strategy to prevent surprise cost.
@@ -58,18 +82,21 @@ def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_m
     configured_map = default_models or {}
     default_map = dict(configured_map)
     default_map.update(defaults.get("models", {}))
-    if not isinstance(node_map,dict) or not isinstance(defaults.get("models", {}),dict):
+    if not isinstance(node_map, dict) or not isinstance(defaults.get("models", {}), dict):
         raise SEHError("INVALID_MODEL", "models must be an object", 2)
-    for mapping in (default_map,node_map):
-        if any(h not in ROUTABLE or not isinstance(m,str) or not m.strip() or len(m)>128 for h,m in mapping.items()):
-            raise SEHError("INVALID_MODEL", "models must map hosts to valid model names", 2)
-    for model_value in (node.get("model"),defaults.get("model"),default_model):
-        if model_value is not None and (not isinstance(model_value,str) or not model_value.strip() or len(model_value)>128):
-            raise SEHError("INVALID_MODEL", "model must be a valid model ID or 'auto'", 2)
-    routes=[]
+    for mapping in (default_map, node_map):
+        for h, m in mapping.items():
+            if h not in ROUTABLE:
+                raise SEHError("INVALID_MODEL", f"Unknown host in models: {h}", 2)
+            _parse_model_entry(m)
+    for model_value in (node.get("model"), defaults.get("model"), default_model):
+        if model_value is not None:
+            _parse_model_entry(model_value)
+    routes = []
     for h in hosts:
-        raw_model = node_map[h] if h in node_map else node["model"] if "model" in node else default_map[h] if h in default_map else defaults.get("model",default_model)
-        routes.append(Route(h, None if raw_model in (None, "auto", "native-default") else raw_model))
+        raw_entry = node_map[h] if h in node_map else node["model"] if "model" in node else default_map[h] if h in default_map else defaults.get("model", default_model)
+        m, eff = _parse_model_entry(raw_entry)
+        routes.append(Route(h, m, effort=eff))
     on = node.get("fallback_on", defaults.get("fallback_on", ["UNAVAILABLE", "TIMEOUT", "RATE_LIMIT"]))
     if not isinstance(on, list) or any(v not in FALLBACK_CAUSES for v in on):
         raise SEHError("INVALID_FALLBACK", f"Supported fallback conditions: {sorted(FALLBACK_CAUSES)}", 2)

@@ -25,6 +25,7 @@ class RunResult:
     cost_usd: float | None = None
     reason: str = ""
     model: str | None = None
+    effort: str | None = None
 
     def as_dict(self): return asdict(self)
 
@@ -83,23 +84,24 @@ def parse_host_response(host: str, raw: str) -> tuple[str,int|None,float|None]:
 
 
 def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: str|None = None,
-              read_only: bool = True, max_turns: int = 4, autonomy: str = "auto", isolated: bool = False) -> RunResult:
+              effort: str|None = None, read_only: bool = True, max_turns: int = 4,
+              autonomy: str = "auto", isolated: bool = False) -> RunResult:
     start = time.monotonic()
     if host == "mock":
         # Offline deterministic test driver; it never edits a file and is not an LLM.
         matched = re.search(r"\[\[MOCK:(.*?)\]\]", prompt, re.S)
         output = matched.group(1) if matched else prompt
-        return RunResult("PASS", output, "", 0, elapsed(start), "mock", 0, 0.0, model="mock")
+        return RunResult("PASS", output, "", 0, elapsed(start), "mock", 0, 0.0, model="mock", effort=effort)
     stdin_supported = host in ("claude", "codex")
-    command = build_command(host, prompt, model=model, read_only=read_only, max_turns=max_turns, use_stdin=stdin_supported, autonomy=autonomy, isolated=isolated)
+    command = build_command(host, prompt, model=model, effort=effort, read_only=read_only, max_turns=max_turns, use_stdin=stdin_supported, autonomy=autonomy, isolated=isolated)
     try:
         code,stdout,stderr,seconds = run_process(command, cwd, timeout, input_text=prompt if stdin_supported else None)
     except OSError as exc:
-        return RunResult("UNAVAILABLE", "", redact(str(exc)), 127, elapsed(start), host, reason="CLI process unavailable", model=model or "native-default")
+        return RunResult("UNAVAILABLE", "", redact(str(exc)), 127, elapsed(start), host, reason="CLI process unavailable", model=model or "native-default", effort=effort)
     output,tokens,cost = parse_host_response(host,stdout)
     error_text = stderr.lower() + " " + output.lower()
     status = "PASS" if code == 0 else "TIMEOUT" if code == 124 else "RATE_LIMIT" if ("rate limit" in error_text or "429" in error_text) else "FAIL"
-    return RunResult(status, redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error", model=model or "native-default")
+    return RunResult(status, redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error", model=model or "native-default", effort=effort)
 
 
 def run_checked_command(argv: list[str], cwd: Path, *, timeout: int = 90, allow: list[str] | None = None) -> RunResult:

@@ -27,7 +27,7 @@ args=sys.argv[1:]
 if '--version' in args:
     print('{name} 99.1.0'); sys.exit(0)
 if '--help' in args:
-    print('--model --output-format --max-turns --permission-mode --dangerously-skip-permissions --json --yolo --dangerously-bypass-approvals-and-sandbox --sandbox --ask-for-approval --format --auto auto')
+    print('--model --effort --output-format --max-turns --permission-mode --dangerously-skip-permissions --json --yolo --dangerously-bypass-approvals-and-sandbox --sandbox --ask-for-approval --format --auto auto')
     sys.exit(0)
 if {name!r} == 'claude' and {claude_exit}:
     sys.stderr.write('rate limit: retry later'); sys.exit({claude_exit})
@@ -63,6 +63,10 @@ def test_flags_model_and_permission_profiles(monkeypatch,tmp_path):
     claude=build_command('claude','hello',model='sonnet',read_only=False)
     assert '--model' in claude and 'sonnet' in claude
     assert '--permission-mode' in claude and 'auto' in claude
+    claude_effort=build_command('claude','hello',model='sonnet',effort='medium')
+    assert '--effort' in claude_effort and 'medium' in claude_effort
+    claude_auto=build_command('claude','hello',model='sonnet',effort='auto')
+    assert '--effort' not in claude_auto
     codex=build_command('codex','hello',model='gpt-test',read_only=False)
     assert '--sandbox' in codex and 'workspace-write' in codex
     assert '--ask-for-approval' in codex and 'never' in codex
@@ -107,6 +111,19 @@ def test_config_models_fallback_in_routes():
     _, routes_overridden, _ = resolve_routes(task_override['nodes'][0], task_override, default_models=config_models)
     assert [(r.host, r.model) for r in routes_overridden] == [('claude', 'opus'), ('codex', 'gpt-5-codex')]
 
+    # table configuration with effort support
+    config_table = {
+        'claude': {'model': 'sonnet', 'effort': 'medium'},
+        'codex': {'model': 'gpt-5-codex', 'effort': 'auto'},
+    }
+    _, routes_table, _ = resolve_routes(task['nodes'][0], task, default_models=config_table)
+    assert routes_table[0].host == 'claude'
+    assert routes_table[0].model == 'sonnet'
+    assert routes_table[0].effort == 'medium'
+    assert routes_table[1].host == 'codex'
+    assert routes_table[1].model == 'gpt-5-codex'
+    assert routes_table[1].effort is None  # 'auto' normalizes to None
+
 
 def test_fallback_only_on_unavailability(monkeypatch,project,tmp_path):
     fake_hosts(monkeypatch,tmp_path,claude_exit=2)
@@ -136,8 +153,8 @@ def test_compare_never_merges_or_applies(monkeypatch,project,tmp_path):
 def fake_wheel(version: str) -> bytes:
     buf=io.BytesIO()
     with zipfile.ZipFile(buf,'w') as z:
-        z.writestr(f'self_evolve_harness_standalone-{version}.dist-info/METADATA',
-                   'Metadata-Version: 2.1\nName: self-evolve-harness-standalone\nVersion: '+version+'\n')
+        z.writestr(f'ego_standalone-{version}.dist-info/METADATA',
+                   'Metadata-Version: 2.1\nName: ego-standalone\nVersion: '+version+'\n')
     return buf.getvalue()
 
 
@@ -145,7 +162,7 @@ def test_selfupdate_digest_and_version(monkeypatch,tmp_path):
     wheel=fake_wheel('1.4.2')
     digest=hashlib.sha256(wheel).hexdigest()
     rel={'tag_name':'v1.4.2','draft':False,'prerelease':False,'html_url':f'https://github.com/{selfupdate.REPO}/releases/tag/v1.4.2',
-         'assets':[{'name':'self_evolve_harness_standalone-1.4.2-py3-none-any.whl',
+         'assets':[{'name':'ego_standalone-1.4.2-py3-none-any.whl',
                     'browser_download_url':f'https://github.com/{selfupdate.REPO}/releases/download/v1.4.2/x.whl',
                     'digest':'sha256:'+digest}]}
     def download(url,limit,timeout=12):return json.dumps(rel).encode() if url==selfupdate.API else wheel
@@ -185,7 +202,7 @@ def test_cli_flag_removal_fails_closed(monkeypatch,tmp_path):
     # Simulate an incompatible vendor update: same executable path, new contents.
     script=paths['codex']
     data=script.read_text()
-    data=data.replace('print(\'--model --output-format --max-turns --permission-mode --dangerously-skip-permissions --json --yolo --dangerously-bypass-approvals-and-sandbox --sandbox --ask-for-approval --format --auto auto\')',
+    data=data.replace('print(\'--model --effort --output-format --max-turns --permission-mode --dangerously-skip-permissions --json --yolo --dangerously-bypass-approvals-and-sandbox --sandbox --ask-for-approval --format --auto auto\')',
                       'print(\'--model --sandbox --ask-for-approval\')')
     assert data!=script.read_text()
     script.write_text(data)

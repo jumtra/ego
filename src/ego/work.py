@@ -69,7 +69,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     attempts=[]
     max_attempts=min(int(node.get("max_attempts",cfg.max_attempts)),cfg.max_attempts)
     outputs=[]
-    def attempt_one(chosen_host:str, chosen_model:str|None, iteration:int) -> dict:
+    def attempt_one(chosen_host:str, chosen_model:str|None, chosen_effort:str|None, iteration:int) -> dict:
         nonlocal feedback
         with tempfile.TemporaryDirectory(prefix="seh-node-") as tmp:
             work=Path(tmp)/"src"
@@ -82,13 +82,13 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     raise SEHError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
                 prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff)
                 try:
-                    r=run_agent(chosen_host,prompt,work,timeout,model=chosen_model,read_only=kind=="splitter",
-                                autonomy=autonomy,isolated=isolated)
+                    r=run_agent(chosen_host,prompt,work,timeout,model=chosen_model,effort=chosen_effort,
+                                read_only=kind=="splitter",autonomy=autonomy,isolated=isolated)
                 except SEHError as exc:
                     if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
                         raise
                     from .runner import RunResult
-                    r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model)
+                    r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model,effort=chosen_effort)
             checks=[]
             if r.status=="PASS":
                 for argv in node.get("checks",[]):
@@ -103,6 +103,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             except SEHError as exc:
                 ok=False;feedback=str(exc)
             record={"attempt":iteration,"host":chosen_host,"model":chosen_model or "native-default",
+                    "effort":chosen_effort or "auto",
                     "status":"PASS" if ok else "FAIL", "execution":r.as_dict(),"checks":checks,
                     "changed":changed,"feedback":feedback}
             edits={}
@@ -115,9 +116,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     if strategy=="compare":
         results=[]
         for route in routes:
-            res=attempt_one(route.host,route.model,1)
+            res=attempt_one(route.host,route.model,route.effort,1)
             attempts.append(res["record"])
             outputs.append({"host":route.host,"model":route.model or "native-default",
+                            "effort":route.effort or "auto",
                             "status":res["record"]["status"],"changed":res["record"]["changed"]})
         return {"id":node["id"],"status":"PASSED","attempts":attempts,"edits":{},
                 "elapsed":round(time.monotonic()-start,4),"comparison":outputs,
@@ -127,7 +129,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     success=False;edits={};last_output=""
     for iteration in range(1,max_attempts+len(routes)+1):
         chosen=routes[route_pos] if routes else None
-        r=attempt_one(chosen.host if chosen else "local",chosen.model if chosen else None,iteration)
+        r=attempt_one(chosen.host if chosen else "local",chosen.model if chosen else None,chosen.effort if chosen else None,iteration)
         attempts.append(r["record"])
         last_output=r["output"]
         if r["ok"]:

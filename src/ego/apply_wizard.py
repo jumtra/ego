@@ -97,7 +97,7 @@ def _yes_no(label: str, *, default: bool = False) -> bool:
 
 def select_options(cfg: Config, args, root: Path) -> bool:
     """Mutate *in-memory* config; return whether test auto-detection was requested."""
-    _write(f"\n=== self-evolve-harness 適用設定: {root} ===")
+    _write(f"\n=== ego 適用設定: {root} ===")
     _write("既存設定がある場合は初期値として使用します。Enterで維持、qで中止。")
     _write("ここで選ぶHostは設定ファイルの生成先です。TaskごとのHost/Modelは別途変更できます。")
     if args.profile is None:

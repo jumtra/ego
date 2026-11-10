@@ -28,9 +28,9 @@ def capability(host: str) -> HostCapability:
     return HostCapability(host,path,bool(path),bool(path),"cli","ready" if path else "CLI not installed")
 
 
-def build_command(host: str, prompt: str, *, model: str | None = None, read_only: bool = True,
-                  max_turns: int = 4, use_stdin: bool = False, autonomy: str="auto",
-                  isolated: bool=False) -> list[str]:
+def build_command(host: str, prompt: str, *, model: str | None = None, effort: str | None = None,
+                  read_only: bool = True, max_turns: int = 4, use_stdin: bool = False,
+                  autonomy: str = "auto", isolated: bool = False) -> list[str]:
     cap=capability(host)
     if not cap.supported:raise SEHError("HOST_UNAVAILABLE",cap.reason,3)
     if host=="mock":return []
@@ -47,6 +47,9 @@ def build_command(host: str, prompt: str, *, model: str | None = None, read_only
         if model:
             require_flags(info,"--model")
             argv += ["--model",model]
+        if effort and effort != "auto":
+            require_flags(info,"--effort")
+            argv += ["--effort",effort]
         if autonomy=="bypass":
             require_flags(info,"--dangerously-skip-permissions")
             argv.append("--dangerously-skip-permissions")

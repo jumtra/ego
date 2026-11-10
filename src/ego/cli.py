@@ -443,7 +443,7 @@ def _cmd_update(args):
 
 
 def build_parser()->argparse.ArgumentParser:
-    p=argparse.ArgumentParser(prog="seh",description="Standalone CLI-first self-evolve-harness")
+    p=argparse.ArgumentParser(prog="ego",description="Standalone CLI-first ego harness")
     p.add_argument("--version",action="version",version=f"seh {__version__}")
     sub=p.add_subparsers(dest="command",required=True)
     def common(sp):sp.add_argument("--root",default=".")

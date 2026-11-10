@@ -41,7 +41,7 @@ def test_force_wizard_options_and_confirm(tmp_path):
     assert (project / ".opencode/agents/implementer.md").exists()
     assert not (project / ".codex/agents/implementer.toml").exists()
     assert "この設定を適用しますか" in p.stderr
-    assert "=== self-evolve-harness" not in p.stdout
+    assert "=== ego" not in p.stdout
 
 
 def test_cancel_at_selection_without_file_writes(tmp_path):

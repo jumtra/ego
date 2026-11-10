@@ -8,7 +8,7 @@ LEGACY_WORK_HASHES = {"b9369f340f37af0f731e8eb03f0c8e1e6529be80ce1b63941bada4b6e
 
 SKILLS = {
 "harness-init": (
-    "Initialize, inspect or reconfigure the self-evolve-harness installation in this project. "
+    "Initialize, inspect or reconfigure the ego installation in this project. "
     "Use only for harness setup, maintenance or diagnosing harness configuration.",
     """# Harness initialization
 
