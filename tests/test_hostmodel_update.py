@@ -257,6 +257,22 @@ def test_selfupdate_ssl_context_falls_back_to_system_ca(monkeypatch,tmp_path):
     assert loaded==[str(fake_ca)]
 
 
+def test_selfupdate_allows_api_github_com_redirect(monkeypatch):
+    class DummyResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def geturl(self):
+            return "https://api.github.com/repositories/12345/releases/latest"
+        def read(self, limit):
+            return b"{}"
+
+    monkeypatch.setattr(selfupdate, "urlopen", lambda req, timeout=12, context=None: DummyResponse())
+    data = selfupdate._read_url("https://api.github.com/repos/jumtra/ego/releases/latest", 1024)
+    assert data == b"{}"
+
+
 def test_make_install_creates_symlinks_without_clobbering_existing_seh(tmp_path):
     import subprocess
     repo_root=Path(__file__).resolve().parent.parent

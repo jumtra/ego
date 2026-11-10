@@ -27,7 +27,7 @@ PACKAGE = "ego"
 MAX_DOWNLOAD = 30*1024*1024
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 VERS_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
-ALLOWED_DOWNLOAD_HOSTS={"github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"}
+ALLOWED_DOWNLOAD_HOSTS={"github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com", "api.github.com"}
 SYSTEM_CA_BUNDLES=("/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt")
 
 
@@ -49,7 +49,7 @@ def _version_tuple(v: str) -> tuple[int,int,int]:
 
 def _read_url(url: str, limit: int, timeout: int=12) -> bytes:
     parsed=urlparse(url)
-    if parsed.scheme!="https" or parsed.hostname not in ALLOWED_DOWNLOAD_HOSTS|{"api.github.com"}:
+    if parsed.scheme!="https" or parsed.hostname not in ALLOWED_DOWNLOAD_HOSTS:
         raise SEHError("UNTRUSTED_UPDATE_URL",f"Untrusted release domain: {parsed.hostname}",3)
     req=Request(url,headers={"User-Agent":"ego-updater","Accept":"application/vnd.github+json"})
     try:
