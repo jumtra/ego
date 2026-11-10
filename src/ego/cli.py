@@ -236,13 +236,19 @@ def _cmd_work(args):
     if args.action=="plan":
         from .planner import plan_work
         result=plan_work(root,args.goal,args.host,args.scope.split(",") if args.scope else None,execute=args.execute)
-        if args.out:write_json(Path(args.out),result["task"])
+        if args.out:
+            # The task file carries the planning cost, so a later `work run` reports the plan phase too.
+            task=dict(result["task"])
+            if result.get("planner_usage") is not None:task["planner_usage"]=result["planner_usage"]
+            write_json(Path(args.out),task)
         _print(result);return 0
     if args.action=="native":
         _print({"mode":"native","status":"USE_HOST_DIRECTLY","additional_llm_calls":0,
                 "instructions":"Use /work in the host, or ego work run for bounded graph execution"});return 0
     task=read_json(Path(args.task))
     if not task:raise SEHError("TASK_MISSING",str(args.task),3)
+    # Planning cost is reporting data, not part of the task specification (resume compares specs).
+    planner_usage=task.pop("planner_usage",None)
     if any(getattr(args,attr,None) for attr in ("hosts","strategy","model","models")):
         task=dict(task)
         defaults=dict(task.get("defaults",{}))
@@ -256,7 +262,7 @@ def _cmd_work(args):
     result=execute(root,task,host=args.host,apply=args.apply,approve=args.approve,trust_cli=args.trust_cli,
                    run_id=args.run_id if args.action=="resume" else None,resume=args.action=="resume",
                    autonomy=args.autonomy,isolated=args.attest_external_sandbox,
-                   worktree=args.worktree,cleanup_worktree=args.cleanup_worktree)
+                   worktree=args.worktree,cleanup_worktree=args.cleanup_worktree,planner_usage=planner_usage)
     _print(shape(result));return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
 
 def _cmd_context(args):
