@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 from . import __version__
@@ -358,23 +359,39 @@ def _cmd_memory(args):
         _print({"deleted":p.delete(args.id)});return 0
 
 def _cmd_session(args):
-    from .session import save_checkpoint, load_checkpoint, rotation_instructions, arm_auto_resume
+    from .session import (save_checkpoint, load_checkpoint, rotation_instructions, arm_auto_resume,
+                          detect_host, list_checkpoints, resolve_task, handoff, pickup)
     root = _root(args)
     if args.action == "checkpoint":
         result = save_checkpoint(
             root, args.task_id, goal=args.goal, completed=args.completed,
             next_steps=args.next_steps, decisions=args.decision,
             blockers=args.blocker, evidence=args.evidence,
-            status=args.status, source="interactive",
+            status=args.status, source="interactive", host=args.host or detect_host(),
         )
         # Acknowledge only: the caller just supplied these notes, echoing them back costs context twice.
         result = {"task_id": result["task_id"], "status": result["status"], "revision": result["revision"],
                   "path": result["path"], "auto_resume_after_clear": arm_auto_resume(root, args.task_id, args.status)}
+    elif args.action == "list":
+        result = list_checkpoints(root, include_completed=args.all)
     elif args.action == "status":
         result = load_checkpoint(root, args.task_id)
         if result is None: raise SEHError("HANDOFF_MISSING", args.task_id, 3)
+    elif args.action == "handoff":
+        result = handoff(root, args.task_id, args.to, args.from_host)
+        if args.launch:
+            # Replaces this process with the target CLI: only meaningful from a real terminal.
+            if not result["host_available"]:
+                raise SEHError("HOST_UNAVAILABLE", result["instructions"], 3)
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                raise SEHError("LAUNCH_NEEDS_TTY", "--launch opens an interactive CLI and needs a terminal; "
+                               "run launch_command yourself: " + result["launch_command"], 3)
+            os.chdir(root)
+            os.execvp(result["launch_argv"][0], result["launch_argv"])
+    elif args.from_host:
+        result = pickup(root, args.task_id, args.from_host)
     else:
-        result = rotation_instructions(root, args.task_id, args.host)
+        result = rotation_instructions(root, resolve_task(root, args.task_id), args.host or detect_host() or "claude")
     _print(result)
     return 0
 
@@ -398,12 +415,23 @@ def _cmd_hook(args):
     from .config import load_config
     root=_root(args)
     raw=sys.stdin.read(1024*1024)
+    if args.event=="statusline":
+        # Prints the status line itself (plain text); any problem means an empty line.
+        try:
+            from .session import record_usage
+            print(record_usage(json.loads(raw),root))
+        except (ValueError,OSError,SEHError,KeyError,TypeError):print("")
+        return 0
     if args.event in ("stop","session-start"):
         # Advisory hooks never fail the host turn: any problem means "say nothing".
         try:
-            from .session import clear_advice,clear_resume
+            from .session import clear_advice,clear_resume,usage_advice
             obj=json.loads(raw)
-            out=clear_advice(root,obj,load_config(root).clear_suggest_tokens) if args.event=="stop" else clear_resume(root,obj)
+            if args.event=="stop":
+                cfg=load_config(root)
+                # A nearly spent usage limit outranks a large context: there may be no later turn to save in.
+                out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts) or clear_advice(root,obj,cfg.clear_suggest_tokens)
+            else:out=clear_resume(root,obj)
         except (ValueError,OSError,SEHError,KeyError,TypeError):out={}
         print(json.dumps(out,ensure_ascii=False));return 0
     cfg=load_config(root)
@@ -624,9 +652,19 @@ def build_parser()->argparse.ArgumentParser:
     r.add_argument("--decision",action="append");r.add_argument("--blocker",action="append")
     r.add_argument("--evidence",action="append")
     r.add_argument("--status",choices=["IN_PROGRESS","VERIFIED","COMPLETED","BLOCKED"],default="IN_PROGRESS")
+    r.add_argument("--host",choices=["claude","codex","opencode","agy"],help="CLI saving this checkpoint (default: detected from the environment)")
+    r=s.add_parser("list",help="List saved checkpoints, newest first (open ones unless --all)");r.add_argument("--all",action="store_true")
     r=s.add_parser("status");r.add_argument("task_id")
     r=s.add_parser("resume",help="Print /clear instructions and a memory-based restart prompt")
-    r.add_argument("task_id");r.add_argument("--host",choices=["claude","codex","opencode","agy"],default="claude")
+    r.add_argument("task_id",nargs="?",help="Default: the latest open interactive checkpoint")
+    r.add_argument("--host",choices=["claude","codex","opencode","agy"],help="CLI being cleared (default: detected, else claude)")
+    r.add_argument("--from",dest="from_host",choices=["claude","codex","opencode","agy"],
+                   help="Continue here, without clearing, the latest checkpoint that CLI saved")
+    r=s.add_parser("handoff",help="Continue a checkpoint in another CLI: print (or --launch) its interactive start command")
+    r.add_argument("task_id",nargs="?",help="Default: the latest open interactive checkpoint")
+    r.add_argument("--to",required=True,choices=["claude","codex","opencode","agy"])
+    r.add_argument("--from",dest="from_host",choices=["claude","codex","opencode","agy"],help="Take the latest checkpoint that CLI saved")
+    r.add_argument("--launch",action="store_true",help="Start the target CLI in this terminal")
     sp.set_defaults(func=_cmd_session)
     sp=sub.add_parser("context",help="Measure always-on and on-demand context against budgets");common(sp)
     s=sp.add_subparsers(dest="action",required=True);s.add_parser("audit");sp.set_defaults(func=_cmd_context)
@@ -641,7 +679,7 @@ def build_parser()->argparse.ArgumentParser:
     sp=sub.add_parser("tool");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("list");r=s.add_parser("call");r.add_argument("name");r.add_argument("arguments");r.add_argument("--approve-external",action="store_true")
     sp.set_defaults(func=_cmd_tool)
-    sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool","stop","session-start"]);sp.set_defaults(func=_cmd_hook)
+    sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool","stop","session-start","statusline"]);sp.set_defaults(func=_cmd_hook)
     sp=sub.add_parser("prompt");common(sp);s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("register");r.add_argument("name");r.add_argument("file");r.add_argument("--role",default="worker")
     r=s.add_parser("show");r.add_argument("name");r.add_argument("--version")

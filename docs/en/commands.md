@@ -19,7 +19,7 @@ Run `ego <command> --help` for the authoritative current flags. All commands sup
 | `author` | lint, plan, candidate, gate, promote, rollback | invalid skill, missing evidence, approval |
 | `evolve` | observe, propose, lesson | missing evidence/observation |
 | `optimize` | status, doctor, configure, plan, propose, run, report, promote, full, disable | disabled, isolation, budget, negative comparison |
-| `session` | checkpoint, status, resume | missing checkpoint, invalid task ID |
+| `session` | checkpoint, list, status, resume, handoff | missing checkpoint, invalid task ID, target CLI not installed, `--launch` without a terminal |
 | `memory` | add, search, list, delete | unsupported MCP method |
 | `code` | doctor, search, symbol, index | missing provider, unsupported feature |
 | `tool` | list, call | invalid inputs or command permission |
@@ -65,6 +65,10 @@ The first iteration skips the planner (one worker repaired against the done-chec
 Loop end states: `VERIFIED` (goal holds in the staged copy, nothing applied), `COMPLETED` (applied), `STALLED` (two iterations with identical staged content and failure), `MAX_ITERATIONS`, `BUDGET_EXHAUSTED`, `TIMEOUT`, `CANCELLED`. Costs are the host CLI's client-side estimates; `cost_known: false` means a host reported none.
 
 `.ego/config.toml`: `max_turns` (default 30) bounds each managed worker; `worker_context = "lean"` (default) starts Claude workers without the user's MCP servers, `"inherit"` restores them.
+
+`usage_switch_percent` (default 0 = off, 50-99) covers a nearly spent Claude subscription limit: it generates a status line command (`ego hook statusline`) that records the `rate_limits` Claude Code reports there (5-hour and 7-day windows; nothing is estimated) and shows them, and the Stop hook then asks the session, once per session and window, for one short extra turn that saves a checkpoint and shows the `ego session handoff` launch command for each other installed CLI. Nothing is launched or cleared. A project `statusLine` overrides a user-level one.
+
+Checkpoints are host-neutral, so a session saved in one CLI continues in another: `ego session checkpoint` records the saving CLI (detected from the environment the CLI gives its commands, or `--host <cli>`), `ego session list` shows open checkpoints from any CLI, `ego session resume --from <cli>` continues that CLI's latest checkpoint inside the CLI that is already open (ask it to "continue from codex"), and `ego session handoff [task_id] --to <claude|codex|opencode|agy>` prints the command that opens the target CLI on the resume prompt (`--launch` starts it from a real terminal). `resume` and `handoff` default to the latest open interactive checkpoint. No conversation transcript is carried over.
 
 `clear_suggest_tokens` (default 0 = off) generates Claude Code hooks: after each turn `ego hook stop` measures the conversation size from the host transcript and, above the threshold, shows the user a `/clear` suggestion; after `/clear`, `ego hook session-start` injects the resume prompt of a checkpoint saved in the last 30 minutes or armed by `ego session resume`. Neither hook calls a model, blocks a turn or clears anything.
 

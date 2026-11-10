@@ -91,6 +91,8 @@ Then run `ego session resume <id> --host <host> --root .`. In an idle interactiv
 
 When `ego session resume` returns `auto_resume_after_clear: true` (Claude Code with `clear_suggest_tokens` set in `.ego/config.toml`), the user only needs to run `/clear`: the resume prompt is injected automatically, and the host itself suggests the clear once the measured context passes the threshold.
 
+Checkpoints are shared by every CLI in the project (Claude Code, Codex, OpenCode, AGY) and record which one saved them. To pick up another CLI's work in this session, run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt` (no clear needed); `ego session list --root .` shows all open checkpoints. To send work the other way, checkpoint, then give the user the `launch_command` from `ego session handoff <id> --to <cli> --root .`; you cannot open the other CLI yourself.
+
 Managed runs and goal loops checkpoint automatically under their run or loop ID, with a new CLI session per node.
 """,
 }
@@ -139,11 +141,17 @@ def generated_files(cfg: Config) -> dict[str, str]:
         hooks: dict[str, list] = {}
         if cfg.profile == "full":
             hooks["PreToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "ego hook pre-tool --root ."}]}]
-        if cfg.clear_suggest_tokens > 0:
+        if cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0:
             hooks["Stop"] = [{"hooks": [{"type": "command", "command": 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'}]}]
+        if cfg.clear_suggest_tokens > 0:
             hooks["SessionStart"] = [{"matcher": "clear", "hooks": [{"type": "command", "command": 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'}]}]
-        if hooks:
-            files[".claude/settings.json"] = json.dumps({"hooks": hooks}, indent=2) + "\n"
+        settings: dict = {"hooks": hooks} if hooks else {}
+        if cfg.usage_switch_percent > 0:
+            # The status line input is the only place Claude Code reports the remaining usage limit;
+            # this command records it for the Stop hook and prints it. It takes the project from that input.
+            settings["statusLine"] = {"type": "command", "command": "ego hook statusline"}
+        if settings:
+            files[".claude/settings.json"] = json.dumps(settings, indent=2) + "\n"
     if any(h in cfg.hosts for h in ("codex", "opencode", "agy")):
         for name in SKILLS:
             files[f".agents/skills/{name}/SKILL.md"] = skill_md(name)
@@ -176,6 +184,7 @@ def instruction_block(cfg: Config) -> str:
             "## Self-Evolve Harness (short contract)\n"
             "Prefer direct changes and focused tests; do NOT create requirements/design/plan docs for every small task. "
             "At verified boundaries checkpoint compact facts (`ego session checkpoint`), then start fresh and resume from memory if needed. "
+            "When asked to continue another CLI's work (\"continue from codex\", 「codexの続きから」), run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt`. "
             "State completion explicitly, never claim unverified or unapplied work is done. "
             "For Skill/prompt changes use existing eval/author gates. Keep edits scoped and approved. "
             "Only invoke `ego optimize` on explicit request. "

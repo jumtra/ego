@@ -10,4 +10,6 @@ Then run `ego session resume <id> --host <host> --root .`. In an idle interactiv
 
 When `ego session resume` returns `auto_resume_after_clear: true` (Claude Code with `clear_suggest_tokens` set in `.ego/config.toml`), the user only needs to run `/clear`: the resume prompt is injected automatically, and the host itself suggests the clear once the measured context passes the threshold.
 
+Checkpoints are shared by every CLI in the project (Claude Code, Codex, OpenCode, AGY) and record which one saved them. To pick up another CLI's work in this session, run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt` (no clear needed); `ego session list --root .` shows all open checkpoints. To send work the other way, checkpoint, then give the user the `launch_command` from `ego session handoff <id> --to <cli> --root .`; you cannot open the other CLI yourself.
+
 Managed runs and goal loops checkpoint automatically under their run or loop ID, with a new CLI session per node.

@@ -28,6 +28,7 @@ class Config:
     max_turns: int = 30  # agentic turns per managed worker invocation
     worker_context: str = "lean"  # "lean" (no inherited MCP servers) or "inherit"
     clear_suggest_tokens: int = 0  # Claude Code: suggest /clear above this measured context size; 0 = off
+    usage_switch_percent: int = 0  # Claude Code: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
     models: dict[str, Any] = field(default_factory=dict)
     isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool = True  # whether to remove the worktree after run
@@ -53,6 +54,8 @@ class Config:
             raise SEHError("INVALID_CONFIG", "max_turns must be between 1 and 200", 2)
         if not isinstance(self.clear_suggest_tokens, int) or not (self.clear_suggest_tokens == 0 or 20000 <= self.clear_suggest_tokens <= 2000000):
             raise SEHError("INVALID_CONFIG", "clear_suggest_tokens must be 0 (off) or between 20000 and 2000000", 2)
+        if not isinstance(self.usage_switch_percent, int) or not (self.usage_switch_percent == 0 or 50 <= self.usage_switch_percent <= 99):
+            raise SEHError("INVALID_CONFIG", "usage_switch_percent must be 0 (off) or between 50 and 99", 2)
         if self.worker_context not in ("lean", "inherit"):
             raise SEHError("INVALID_CONFIG", "worker_context must be 'lean' or 'inherit'", 2)
         if not isinstance(self.models, dict):
@@ -114,6 +117,9 @@ def dump_config(cfg: Config) -> str:
         "#\n"
         "# セッションクリアの自動提案 (clear_suggest_tokens, Claude Code のみ):\n"
         "#   clear_suggest_tokens = 120000  # 実測コンテキストがこの値を超えたら /clear を提案。0 で無効\n"
+        "#\n"
+        "# 使用量上限が近いときの自動保存と切り替え提案 (usage_switch_percent, Claude Code のみ):\n"
+        "#   usage_switch_percent = 85  # 5時間/7日枠の使用率がこの%以上でチェックポイント保存と別CLIへの切り替えを提案。0 で無効\n"
     )
     return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in vars(cfg).items()) + "\n"
 
