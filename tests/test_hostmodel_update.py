@@ -239,7 +239,7 @@ def test_bin_wrappers_work_via_symlink(tmp_path):
         link.symlink_to(repo_root/'bin'/name)
         proc=subprocess.run([str(link),'--version'],capture_output=True,text=True,timeout=10,check=False)
         assert proc.returncode==0, proc.stderr
-        assert 'seh ' in proc.stdout
+        assert 'ego ' in proc.stdout
 
 
 def test_selfupdate_ssl_context_falls_back_to_system_ca(monkeypatch,tmp_path):
@@ -287,7 +287,7 @@ def test_make_install_creates_symlinks_without_clobbering_existing_seh(tmp_path)
     assert not (bin_dir/'harness').exists()
     assert not existing_seh.is_symlink() and existing_seh.read_text()=='#!/bin/sh\necho existing\n'
     ver=subprocess.run([str(bin_dir/'ego'),'--version'],capture_output=True,text=True,timeout=10,check=False)
-    assert ver.returncode==0 and 'seh ' in ver.stdout
+    assert ver.returncode==0 and 'ego ' in ver.stdout
     clean_bin=tmp_path/'clean_bin'
     proc2=subprocess.run(['make','install',f'BINDIR={clean_bin}'],cwd=repo_root,capture_output=True,text=True,timeout=10,check=False)
     assert proc2.returncode==0, proc2.stderr

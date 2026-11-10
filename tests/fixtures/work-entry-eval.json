@@ -14,7 +14,7 @@
     {
       "checks": {
         "json": {
-          "entry": "seh work plan",
+          "entry": "ego work plan",
           "mode": "managed",
           "user_writes_task_json": false
         }

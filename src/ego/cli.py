@@ -202,10 +202,37 @@ def _cmd_migrate(args):
         _print(remove_legacy(root,read_json(Path(args.hashes))));return 0
 
 def _cmd_work(args):
-    from .work import execute,status,cancel
+    from .work import execute,status,cancel,compact_result
     root=_root(args)
-    if args.action=="status":_print(status(root,args.run_id));return 0
-    if args.action=="cancel":_print(cancel(root,args.run_id));return 0
+    # Default output is a compact summary: the full record holds a per-file
+    # snapshot and raw worker output, which would land in the caller's context.
+    shape=(lambda r:r) if getattr(args,"verbose",False) else compact_result
+    if args.action=="status":_print(shape(status(root,args.run_id)));return 0
+    if args.action=="cancel":
+        from .loop import ledger_path,cancel_loop
+        _print(cancel_loop(root,args.run_id) if ledger_path(root,args.run_id).exists() else cancel(root,args.run_id));return 0
+    if args.action=="loop-status":
+        from .loop import loop_status
+        _print(loop_status(root,args.loop_id));return 0
+    if args.action=="loop-apply":
+        from .loop import apply_loop
+        result=apply_loop(root,args.loop_id,approve=args.approve)
+        _print(result);return 0 if result["status"]=="COMPLETED" else 5
+    if args.action=="loop":
+        from .loop import run_loop,SUCCESS
+        checks=[]
+        for raw in args.done_check:
+            try:argv=json.loads(raw) if raw.lstrip().startswith("[") else __import__("shlex").split(raw)
+            except ValueError as exc:raise SEHError("INVALID_DONE_CHECK",str(exc),2) from exc
+            if not isinstance(argv,list) or not argv or not all(isinstance(x,str) for x in argv):
+                raise SEHError("INVALID_DONE_CHECK","Each --done-check is a command or a JSON argv array",2)
+            checks.append(argv)
+        result=run_loop(root,args.goal,done_checks=checks,host=args.host,
+                        scope=args.scope.split(",") if args.scope else None,max_iterations=args.max_iterations,
+                        max_budget_usd=args.max_budget_usd,max_wall_seconds=args.max_wall_seconds,
+                        trust_cli=args.trust_cli,execute_planner=args.execute,apply=args.apply,approve=args.approve,
+                        autonomy=args.autonomy,isolated=args.attest_external_sandbox,plan_first=args.plan_first)
+        _print(result);return 0 if result["status"] in SUCCESS else 5
     if args.action=="plan":
         from .planner import plan_work
         result=plan_work(root,args.goal,args.host,args.scope.split(",") if args.scope else None,execute=args.execute)
@@ -213,7 +240,7 @@ def _cmd_work(args):
         _print(result);return 0
     if args.action=="native":
         _print({"mode":"native","status":"USE_HOST_DIRECTLY","additional_llm_calls":0,
-                "instructions":"Use /work in the host, or seh work run for bounded graph execution"});return 0
+                "instructions":"Use /work in the host, or ego work run for bounded graph execution"});return 0
     task=read_json(Path(args.task))
     if not task:raise SEHError("TASK_MISSING",str(args.task),3)
     if any(getattr(args,attr,None) for attr in ("hosts","strategy","model","models")):
@@ -230,7 +257,12 @@ def _cmd_work(args):
                    run_id=args.run_id if args.action=="resume" else None,resume=args.action=="resume",
                    autonomy=args.autonomy,isolated=args.attest_external_sandbox,
                    worktree=args.worktree,cleanup_worktree=args.cleanup_worktree)
-    _print(result);return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
+    _print(shape(result));return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
+
+def _cmd_context(args):
+    from .context import audit
+    result=audit(_root(args));_print(result)
+    return 0 if result["status"]=="PASS" else 5
 
 def _cmd_eval(args):
     from .evals import run_eval,compare
@@ -445,7 +477,7 @@ def _cmd_update(args):
 
 def build_parser()->argparse.ArgumentParser:
     p=argparse.ArgumentParser(prog="ego",description="Standalone CLI-first ego harness")
-    p.add_argument("--version",action="version",version=f"seh {__version__}")
+    p.add_argument("--version",action="version",version=f"ego {__version__}")
     sub=p.add_subparsers(dest="command",required=True)
     def common(sp):sp.add_argument("--root",default=".")
     sp=sub.add_parser("apply",help="Apply or refresh harness installation for project")
@@ -507,8 +539,19 @@ def build_parser()->argparse.ArgumentParser:
     sp=sub.add_parser("migrate");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("plan");r=s.add_parser("rollback");r.add_argument("snapshot");r=s.add_parser("restore-legacy");r.add_argument("snapshot");r.add_argument("--approve",action="store_true");r=s.add_parser("remove-legacy");r.add_argument("--hashes",required=True);r.add_argument("--approve",action="store_true");sp.set_defaults(func=_cmd_migrate)
     sp=sub.add_parser("work");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    s.add_parser("native");r=s.add_parser("status");r.add_argument("run_id")
-    r=s.add_parser("cancel");r.add_argument("run_id")
+    s.add_parser("native");r=s.add_parser("status");r.add_argument("run_id");r.add_argument("--verbose",action="store_true",help="Print the full run record")
+    r=s.add_parser("cancel");r.add_argument("run_id",help="Run ID or loop ID")
+    r=s.add_parser("loop",help="Plan, execute, evaluate and replan until the done-checks pass or a limit is hit")
+    r.add_argument("--goal",required=True)
+    r.add_argument("--done-check",action="append",required=True,help="Command that exits 0 when the goal holds; repeatable. A command line or a JSON argv array")
+    r.add_argument("--host",choices=["mock","claude","codex","opencode"],default="mock");r.add_argument("--scope")
+    r.add_argument("--max-iterations",type=int,default=3);r.add_argument("--max-budget-usd",type=float);r.add_argument("--max-wall-seconds",type=int)
+    r.add_argument("--execute",action="store_true",help="Allow the planning model call");r.add_argument("--trust-cli",action="store_true")
+    r.add_argument("--plan-first",action="store_true",help="Call the planner before the first iteration instead of only after a failed direct attempt")
+    r.add_argument("--apply",action="store_true");r.add_argument("--approve",action="store_true")
+    r.add_argument("--autonomy",choices=["auto","safe","bypass"],default="auto");r.add_argument("--attest-external-sandbox",action="store_true")
+    r=s.add_parser("loop-status");r.add_argument("loop_id")
+    r=s.add_parser("loop-apply",help="Apply the staged result of a VERIFIED loop");r.add_argument("loop_id");r.add_argument("--approve",action="store_true")
     r=s.add_parser("plan");r.add_argument("--goal",required=True);r.add_argument("--host",default="mock");r.add_argument("--scope");r.add_argument("--out");r.add_argument("--execute",action="store_true")
     for name in ("run","resume"):
         r=s.add_parser(name);r.add_argument("--task",required=True);r.add_argument("--host",choices=["mock","claude","codex","opencode","agy"],default="mock")
@@ -521,6 +564,7 @@ def build_parser()->argparse.ArgumentParser:
         r.add_argument("--attest-external-sandbox",action="store_true",help="Assert externally hardened OS sandbox; needed for bypass mode")
         r.add_argument("--worktree",action="store_true",default=None,help="Execute task in an isolated Git worktree")
         r.add_argument("--keep-worktree",dest="cleanup_worktree",action="store_false",default=None,help="Keep the Git worktree after task completion")
+        r.add_argument("--verbose",action="store_true",help="Print the full run record instead of the compact summary")
         if name=="resume":r.add_argument("run_id")
     sp.set_defaults(func=_cmd_work)
     sp=sub.add_parser("eval");common(sp);s=sp.add_subparsers(dest="action",required=True)
@@ -567,6 +611,8 @@ def build_parser()->argparse.ArgumentParser:
     r=s.add_parser("resume",help="Print /clear instructions and a memory-based restart prompt")
     r.add_argument("task_id");r.add_argument("--host",choices=["claude","codex","opencode","agy"],default="claude")
     sp.set_defaults(func=_cmd_session)
+    sp=sub.add_parser("context",help="Measure always-on and on-demand context against budgets");common(sp)
+    s=sp.add_subparsers(dest="action",required=True);s.add_parser("audit");sp.set_defaults(func=_cmd_context)
     sp=sub.add_parser("code");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("doctor")
     r=s.add_parser("search");r.add_argument("query")

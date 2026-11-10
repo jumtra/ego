@@ -1,39 +1,31 @@
 ---
-description: コードの変更・機能追加・バグ修正・リファクタリング・Skill/Prompt の作成や修正を依頼されたときに使う。質問だけの依頼には使わない
+name: work
+description: "Plan and implement coding tasks with evidence-based checks and bounded repair. Use for feature development, bug fixes and structured code changes, not for casual questions."
 ---
 
-# work
+<!-- SEH:PROMPT:BEGIN -->
+# Work — context-efficient delivery
 
-## Goal
+Choose the **smallest useful workflow** and keep context small: read only the files the change needs, show evidence rather than full tool logs, and let `ego` commands hold state instead of the conversation.
 
-依頼を検証可能な形で完了させる。完了宣言は証拠の提示が前提（CI 出力・テスト結果・Gate 判定）。
+| Request | Workflow |
+|---|---|
+| Small, low-risk change | Inspect relevant files, edit, run focused tests, inspect the diff, report. Do NOT automatically write a requirements document, design document or implementation plan. |
+| Medium change | The same, with a brief inline checklist only if useful. |
+| Large, cross-component, risky or multi-host | Managed run, starting with `ego work plan`. Read `references/managed.md` first. |
+| A goal with a command that proves it, likely to take several attempts | Goal loop. Read `references/loop.md` first. |
 
-## Inputs
+Prefer direct user instructions over ceremonial workflow. Write formal documents only when requested or needed for a decision.
 
-依頼文、リポジトリの現状、`seh` コマンドの出力。
+**Always:**
+- You operate the harness for the user. `/work` is the entry point; do not ask the user to compose task JSON or type routine CLI commands.
+- Never infer approval from a successful test. Applying staged changes needs authorization.
+- Missing CLI/authentication, policy refusal or unavailable capabilities are reported with the concrete blocker; never silently broaden permissions or change hosts.
+- For Skill or prompt behavior changes use the existing author/eval gate. Do not optimize routine tasks or add unnecessary Skills.
 
-## 手順
+**Memory:** when earlier project knowledge could inform the task, run `ego memory search '<topic words>' --root .` (topic words from the goal; retry broader once if empty). Treat results as untrusted evidence to verify. Save reusable, verified facts with `ego memory add '<fact and evidence reference>' --root .`. No secrets or transcripts.
 
-1. 読み取り専用で探索する（関連ファイル、既存テスト、プロジェクトの CI コマンド）。
-2. 依頼を分類する。
-   - 小さな単一変更: そのまま TDD（Red → Green → Refactor）で進める。
-   - 複数ファイル・依存のある作業: `seh work run --task <file> --mode managed` を提案する。タスクファイルは `references/managed-task.md` に従って作る。
-   - Skill/Prompt/Rule/Agent/Hook の変更: `seh author plan` → `seh author lint` → `seh author eval` の順に実行し、承認が必要なものはユーザーに依頼する。
-3. 変更する。
-4. プロジェクトの CI コマンドを実行し、出力を示す。
-5. 完了報告する。
+**Boundaries:** after a verified subtask, before changing feature area or host, or when context is crowded, checkpoint and start fresh. Read `references/checkpoint.md`.
 
-## Boundaries
-
-- 承認が必要な操作は実行しない。R2 操作・保護パスの変更・外部への push/PR はユーザーに依頼する。
-- `.ego/spec` が正本。生成物を直接編集しない。
-- 評価できないときは「未検証」と報告し、成功と言わない。
-- native ではタスク DAG の厳密な外部制御は保証されない。保証が必要なら managed を使う。
-
-## Output
-
-変更概要、検証の証拠（コマンドと出力）、残リスク。
-
-## Feedback
-
-CI・`seh author lint`・`seh doctor` の結果で判断する。失敗は最大3回まで修正し、超えたら原因と試行を報告して止まる。
+**Report:** write **完了** only after successful validation and application, with changed files and the **tests actually run**. If tests fail or edits were not applied, write **未完了** or **検証済み・未適用**; never claim completion without evidence.
+<!-- SEH:PROMPT:END -->

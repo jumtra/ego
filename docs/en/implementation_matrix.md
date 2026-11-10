@@ -20,7 +20,7 @@ Symbols: **offline tested** means a deterministic test covers the code path. **A
 | Harness² opt-in Lite/Full | `optimize.py` | mock tests; real model outcomes and improvement rates not tested |
 | 4-host native execution | host-specific invocation templates | Claude, Codex, OpenCode adapters; AGY automation unavailable |
 | GitHub PR automation | `github.py` | command adapter only; external `gh` required |
-| Fast performance | `seh bench` | dispatch microbenchmark only; full 5%/10% target not yet measured |
+| Fast performance | `ego bench` | dispatch microbenchmark only; full 5%/10% target not yet measured |
 | OS sandbox / hard USD spending limit | outside builtin feature set | **not provided**; trusted-local explicit bypass, metered policy rejects |
 | Unknown X optional feature | specification not verified | not implemented; never enable guessed functionality |
 

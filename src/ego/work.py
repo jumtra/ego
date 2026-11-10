@@ -16,6 +16,7 @@ from .util import (SEHError, ident, now, read_json, write_json, snapshot, simple
                    filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove)
 from .task_routing import validate_task_context, resolve_routes, build_task_prompt
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
+from .context import clip_output
 
 KINDS={"worker","agent","code","gate","splitter"}
 
@@ -56,7 +57,8 @@ def _changed(before:dict[str,str],after:dict[str,str])->list[str]:
 
 
 def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
-              autonomy: str="auto", isolated:bool=False, handoff:dict|None=None)->dict:
+              autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
+              budget_usd: float|None=None)->dict:
     """A task node sees a private copy; fallback never reuses failed edits.
 
     Compare runs have their own isolated copies and never merge any candidate.
@@ -78,13 +80,17 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             before=snapshot(work)
             if kind in ("code","gate"):
                 r=run_checked_command(node.get("argv") or node["checks"][0],work,timeout=timeout,allow=cfg.allow_commands)
+                # A failing command's own output is the evidence; without it a retry or replan is blind.
+                if r.status!="PASS":feedback=clip_output((r.output+"\n"+r.stderr).strip() or f"exit {r.exit_code}",4000)
             else:
                 if chosen_host!="mock" and not trust_cli:
                     raise SEHError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
                 prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff)
                 try:
                     r=run_agent(chosen_host,prompt,work,timeout,model=chosen_model,effort=chosen_effort,
-                                read_only=kind=="splitter",autonomy=autonomy,isolated=isolated)
+                                read_only=kind=="splitter",autonomy=autonomy,isolated=isolated,
+                                max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
+                                lean=cfg.worker_context=="lean",max_budget_usd=budget_usd)
                 except SEHError as exc:
                     if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
                         raise
@@ -95,7 +101,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 for argv in node.get("checks",[]):
                     cr=run_checked_command(argv,work,timeout=min(timeout,120),allow=cfg.allow_commands)
                     checks.append(cr.as_dict())
-                    if cr.status!="PASS":feedback=cr.output+" "+cr.stderr;break
+                    if cr.status!="PASS":feedback=clip_output(cr.output+"\n"+cr.stderr,4000);break
             ok=(r.status=="PASS" and all(c["status"]=="PASS" for c in checks))
             changed=_changed(before,snapshot(work))
             try:
@@ -149,11 +155,62 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":last_output}
 
 
+def usage_summary(record:dict)->dict:
+    """Aggregate model traffic of a run. cost_known is False when a host reported no cost."""
+    total={"model_calls":0,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,
+           "cache_creation_tokens":0,"cost_usd":0.0,"cost_known":True}
+    for result in record.get("results",{}).values():
+        for attempt in result.get("attempts",[]):
+            ex=attempt.get("execution",{})
+            if ex.get("host") in (None,"local","mock"):continue
+            total["model_calls"]+=1
+            usage=ex.get("usage") or {}
+            for key in ("input_tokens","output_tokens","cache_read_tokens","cache_creation_tokens"):
+                total[key]+=int(usage.get(key,0) or 0)
+            if isinstance(ex.get("cost_usd"),(int,float)):total["cost_usd"]+=float(ex["cost_usd"])
+            else:total["cost_known"]=False
+    total["cost_usd"]=round(total["cost_usd"],4)
+    return total
+
+
+def compact_result(result:dict, *, max_files:int=40)->dict:
+    """What a calling agent needs to decide its next step, without the record.
+
+    The full record (per-file base snapshot, every attempt and raw worker
+    output) stays on disk; printing it would put it in the caller's context.
+    """
+    failures=[]
+    for nid,data in result.get("results",{}).items():
+        if result.get("node_status",{}).get(nid)=="PASSED":continue
+        last=(data.get("attempts") or [{}])[-1]
+        text=last.get("feedback") or last.get("execution",{}).get("stderr") or data.get("output") or ""
+        failures.append({"node":nid,"attempts":len(data.get("attempts",[])),"feedback":clip_output(str(text),800)})
+    changed=result.get("changed_files",[])
+    out={k:result[k] for k in ("run_id","final_status","applied","node_status","message","checkpoint_path","usage") if k in result}
+    out["changed_files"]=changed[:max_files]
+    if len(changed)>max_files:out["changed_files_omitted"]=len(changed)-max_files
+    if failures:out["failures"]=failures
+    comparison={nid:data["comparison"] for nid,data in result.get("results",{}).items() if data.get("comparison")}
+    if comparison:out["comparison"]=comparison
+    if result.get("run_id"):out["record_path"]=f".ego/state/runs/{result['run_id']}/record.json"
+    return out
+
+
 def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bool=False,
             trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False,
-            worktree:bool|None=None,cleanup_worktree:bool|None=None)->dict:
+            worktree:bool|None=None,cleanup_worktree:bool|None=None,seed_from:str|None=None,
+            extra_allow:list[str]|None=None,budget_usd:float|None=None)->dict:
     root=root.resolve();cfg=load_config(root)
     use_worktree = worktree if worktree is not None else (cfg.isolation == "worktree")
+    seed_dir=None
+    if seed_from:
+        # Continue from the verified staging of an earlier run: only edits of
+        # PASSED nodes were ever merged there, so failed attempts are not inherited.
+        if not all(c.isalnum() or c in "-_" for c in seed_from):raise SEHError("INVALID_ID",seed_from,2)
+        seed_dir=root/".ego"/"state"/"runs"/seed_from/"staging"
+        seed_record=read_json(seed_dir.parent/"record.json")
+        if not seed_dir.is_dir() or not seed_record:raise SEHError("SEED_MISSING",f"No staging for run {seed_from}",3)
+        use_worktree=False
     should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
     nodes=validate_task(spec)
     if apply and not approve:raise SEHError("APPROVAL_REQUIRED", "--apply requires --approve")
@@ -192,9 +249,12 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                     simple_copy_tree(root, staging)
             else:
                 staging.mkdir(parents=True)
-                simple_copy_tree(root,staging)
+                simple_copy_tree(seed_dir or root,staging)
             record={"run_id":run_id,"created_at":now(),"spec":spec,"host":host,"node_status":{},"results":{},
-                    "base_snapshot":snapshot(root),"final_status":"RUNNING","applied":False,
+                    # A seeded run keeps the original base: changes are measured against, and
+                    # applied over, the project as it was when the first run started.
+                    "base_snapshot":seed_record["base_snapshot"] if seed_dir else snapshot(root),
+                    "final_status":"RUNNING","applied":False,
                     "worktree":worktree_created}
             write_json(record_path,record)
         # A resume is a fresh host invocation; carry only the most recent
@@ -208,12 +268,17 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                 record["final_status"]="CANCELLED";break
             if time.monotonic()-start>cfg.timeout_seconds*len(nodes):
                 record["final_status"]="TIMEOUT";break
+            remaining_budget=None
+            if budget_usd is not None:
+                remaining_budget=budget_usd-usage_summary(record)["cost_usd"]
+                if remaining_budget<=0:
+                    record["final_status"]="BUDGET_EXHAUSTED";break
             ready=[n for n in pending.values() if all(record["node_status"].get(dep)=="PASSED" for dep in n.get("depends_on",[]))]
             if not ready:
                 record["final_status"]="BLOCKED_DEPENDENCY";break
             wave=ready[:cfg.max_parallel]
             with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-                results=list(pool.map(lambda n:_run_node(n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff),wave))
+                results=list(pool.map(lambda n:_run_node(n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget),wave))
             # Atomic wave merge: two nodes may not write the same relative path.
             edit_owners={}
             for result in results:
@@ -244,9 +309,10 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
         if not pending and not failed:
             record["final_status"]="COMPARISON_READY" if any(v.get("review_required") for v in record["results"].values()) else "PASSED"
         record["changed_files"]=_changed(record["base_snapshot"],snapshot(staging))
+        record["usage"]=usage_summary(record)
         if record["final_status"]=="PASSED" and apply:
             # Actual workspace may not have drifted since start.
-            allowed=set()
+            allowed=set(extra_allow or [])
             for n in nodes:allowed.update(n.get("write_allowlist",[]))
             for rel in record["changed_files"]:
                 check_write(root,rel,list(allowed))

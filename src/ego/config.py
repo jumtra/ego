@@ -25,6 +25,8 @@ class Config:
     max_parallel: int = 2
     max_attempts: int = 3
     timeout_seconds: int = 3600
+    max_turns: int = 30  # agentic turns per managed worker invocation
+    worker_context: str = "lean"  # "lean" (no inherited MCP servers) or "inherit"
     models: dict[str, Any] = field(default_factory=dict)
     isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool = True  # whether to remove the worktree after run
@@ -46,6 +48,10 @@ class Config:
             raise SEHError("INVALID_CONFIG", "cleanup_worktree must be a boolean", 2)
         if not 1 <= self.max_parallel <= 8 or not 1 <= self.max_attempts <= 5 or not 5 <= self.timeout_seconds <= 7200:
             raise SEHError("INVALID_CONFIG", "Invalid runtime limits", 2)
+        if not isinstance(self.max_turns, int) or not 1 <= self.max_turns <= 200:
+            raise SEHError("INVALID_CONFIG", "max_turns must be between 1 and 200", 2)
+        if self.worker_context not in ("lean", "inherit"):
+            raise SEHError("INVALID_CONFIG", "worker_context must be 'lean' or 'inherit'", 2)
         if not isinstance(self.models, dict):
             raise SEHError("INVALID_CONFIG", "models must be a dictionary", 2)
         for h, m in self.models.items():
@@ -98,6 +104,10 @@ def dump_config(cfg: Config) -> str:
         "#   isolation = \"copy\"      # ディレクトリコピーによるステージング\n"
         "#   isolation = \"worktree\"  # Git worktree によるブランチ作業分離\n"
         "#   cleanup_worktree = true  # タスク終了時に worktree を自動削除するかどうか\n"
+        "#\n"
+        "# Managed worker のコンテキスト (max_turns, worker_context):\n"
+        "#   max_turns = 30             # worker 1 回あたりの最大ターン数\n"
+        "#   worker_context = \"lean\"   # \"lean\": ユーザーの MCP サーバーを継承しない / \"inherit\": 継承する\n"
     )
     return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in vars(cfg).items()) + "\n"
 
@@ -187,4 +197,4 @@ def load_opt(root: Path) -> OptConfig:
 
 def save_opt(root: Path, opt: OptConfig) -> None:
     opt.validate()
-    atomic_text(root / ".ego" / "optimization.toml", "# Loaded only by seh optimize.\n" + "\n".join(f"{k} = {_tomlval(v)}" for k,v in vars(opt).items()) + "\n")
+    atomic_text(root / ".ego" / "optimization.toml", "# Loaded only by ego optimize.\n" + "\n".join(f"{k} = {_tomlval(v)}" for k,v in vars(opt).items()) + "\n")

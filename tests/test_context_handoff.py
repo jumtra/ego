@@ -131,12 +131,15 @@ def test_managed_blocked_checkpoint_on_failure(project):
 def test_templates_progressively_load_short_rules_and_skip_docs():
     work=skill_md('work')
     assert 'Do NOT automatically write a requirements document' in work
-    assert 'seh session checkpoint' in work and 'seh session resume' in work
+    from ego.templates import WORK_REFERENCES
+    checkpoint=WORK_REFERENCES['checkpoint']
+    assert 'references/checkpoint.md' in work
+    assert 'ego session checkpoint' in checkpoint and 'ego session resume' in checkpoint
     assert '完了' in work and '未完了' in work
     basic=instruction_block(Config())
     assert 'do NOT create requirements/design/plan docs' in basic
     assert len(basic)<1200
-    assert 'seh optimize' in basic
+    assert 'ego optimize' in basic
 
 
 def test_deterministic_managed_checkpoint_ignores_agent_output(tmp_path: Path):

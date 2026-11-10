@@ -55,7 +55,42 @@ def text_fallback(root:Path,query:str,limit:int=30)->dict:
             if all(term in line.lower() for term in needles):
                 results.append({"path":file.relative_to(root).as_posix(),"line":i,"snippet":line.strip()[:240]})
                 if len(results)>=limit:break
+    if not results and len(needles)>1:
+        return rank_files(root,query,min(limit,8))
     return {"strategy":"local_text_fallback","supported":True,"matches":results,"truncated":len(results)>=limit}
+
+
+_STOPWORDS={"the","and","for","with","that","this","from","into","add","use","run","all","are","not","when","then",
+            "should","must","make","new","fix","via","its","test","tests","code","file","files"}
+
+
+def rank_files(root:Path,query:str,limit:int=8)->dict:
+    """Rank files by how many distinct query terms they mention.
+
+    A natural-language goal rarely appears on one source line, so this returns
+    path pointers (one anchor line each) for the reader to open on demand.
+    """
+    terms=[t for t in dict.fromkeys(re.findall(r"[a-z_][a-z0-9_]{2,}",query.lower())) if t not in _STOPWORDS][:12]
+    root=root.resolve()
+    skip={".git",".ego","node_modules",".venv","__pycache__","dist","build",".codegraph","graphify-out"}
+    scored=[];count=0
+    for file in root.rglob("*"):
+        if not terms or count>1200:break
+        rel_parts=file.relative_to(root).parts
+        if any(x in skip for x in rel_parts) or not file.is_file() or file.is_symlink():continue
+        if file.suffix not in (".py",".js",".ts",".tsx",".cs",".go",".rs",".java",".md",".gd",".json",".toml") or file.stat().st_size>300000:continue
+        count+=1
+        try:text=file.read_text(encoding="utf-8")
+        except UnicodeError:continue
+        rel=file.relative_to(root).as_posix();lower=text.lower();path_lower=rel.lower()
+        hit=[t for t in terms if t in lower or t in path_lower]
+        if not hit:continue
+        score=len(hit)+sum(1 for t in hit if t in path_lower)
+        anchor=next(((i,line.strip()[:160]) for i,line in enumerate(text.splitlines(),1) if any(t in line.lower() for t in hit)),(1,""))
+        scored.append((score,rel,anchor,hit))
+    scored.sort(key=lambda x:(-x[0],x[1]))
+    return {"strategy":"local_term_rank","supported":True,"truncated":len(scored)>limit,
+            "matches":[{"path":rel,"line":a[0],"snippet":a[1],"terms":hit} for _,rel,a,hit in scored[:limit]]}
 
 
 def search(root:Path,query:str,provider:str="none",limit:int=30)->dict:

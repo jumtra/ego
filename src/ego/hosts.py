@@ -30,7 +30,8 @@ def capability(host: str) -> HostCapability:
 
 def build_command(host: str, prompt: str, *, model: str | None = None, effort: str | None = None,
                   read_only: bool = True, max_turns: int = 4, use_stdin: bool = False,
-                  autonomy: str = "auto", isolated: bool = False) -> list[str]:
+                  autonomy: str = "auto", isolated: bool = False, lean: bool = False,
+                  max_budget_usd: float | None = None) -> list[str]:
     cap=capability(host)
     if not cap.supported:raise SEHError("HOST_UNAVAILABLE",cap.reason,3)
     if host=="mock":return []
@@ -44,6 +45,11 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         require_flags(info,"--output-format")
         argv=[cap.binary,"-p","--output-format","json"]
         if "--max-turns" in info["flags"]:argv += ["--max-turns",str(max_turns)]
+        # Lean workers do not inherit the user's MCP servers: their tool
+        # definitions and server instructions are context a scoped node never uses.
+        if lean and "--strict-mcp-config" in info["flags"]:argv.append("--strict-mcp-config")
+        if max_budget_usd is not None and max_budget_usd > 0 and "--max-budget-usd" in info["flags"]:
+            argv += ["--max-budget-usd",f"{max_budget_usd:.2f}"]
         if model:
             require_flags(info,"--model")
             argv += ["--model",model]

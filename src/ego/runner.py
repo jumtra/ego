@@ -26,6 +26,7 @@ class RunResult:
     reason: str = ""
     model: str | None = None
     effort: str | None = None
+    usage: dict | None = None
 
     def as_dict(self): return asdict(self)
 
@@ -83,9 +84,30 @@ def parse_host_response(host: str, raw: str) -> tuple[str,int|None,float|None]:
     return ("\n".join(messages).strip() if messages else raw.strip()), tokens, cost
 
 
+def parse_host_usage(host: str, raw: str) -> dict | None:
+    """Token accounting including prompt-cache traffic, which dominates agent cost."""
+    found: dict | None = None
+    for line in raw.splitlines() or [raw]:
+        try: obj = json.loads(line)
+        except ValueError: continue
+        if not isinstance(obj, dict) or not isinstance(obj.get("usage"), dict): continue
+        if host == "claude" and obj.get("type") not in (None, "result"): continue
+        u = obj["usage"]
+        def num(*keys):
+            for k in keys:
+                if isinstance(u.get(k), (int, float)): return int(u[k])
+            return 0
+        found = {"input_tokens": num("input_tokens"), "output_tokens": num("output_tokens"),
+                 "cache_read_tokens": num("cache_read_input_tokens", "cached_input_tokens"),
+                 "cache_creation_tokens": num("cache_creation_input_tokens")}
+        if isinstance(obj.get("num_turns"), int): found["turns"] = obj["num_turns"]
+    return found
+
+
 def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: str|None = None,
               effort: str|None = None, read_only: bool = True, max_turns: int = 4,
-              autonomy: str = "auto", isolated: bool = False) -> RunResult:
+              autonomy: str = "auto", isolated: bool = False, lean: bool = False,
+              max_budget_usd: float|None = None) -> RunResult:
     start = time.monotonic()
     if host == "mock":
         # Offline deterministic test driver; it never edits a file and is not an LLM.
@@ -93,7 +115,8 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
         output = matched.group(1) if matched else prompt
         return RunResult("PASS", output, "", 0, elapsed(start), "mock", 0, 0.0, model="mock", effort=effort)
     stdin_supported = host in ("claude", "codex")
-    command = build_command(host, prompt, model=model, effort=effort, read_only=read_only, max_turns=max_turns, use_stdin=stdin_supported, autonomy=autonomy, isolated=isolated)
+    command = build_command(host, prompt, model=model, effort=effort, read_only=read_only, max_turns=max_turns, use_stdin=stdin_supported, autonomy=autonomy, isolated=isolated,
+                            lean=lean, max_budget_usd=max_budget_usd)
     try:
         code,stdout,stderr,seconds = run_process(command, cwd, timeout, input_text=prompt if stdin_supported else None)
     except OSError as exc:
@@ -101,7 +124,8 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
     output,tokens,cost = parse_host_response(host,stdout)
     error_text = stderr.lower() + " " + output.lower()
     status = "PASS" if code == 0 else "TIMEOUT" if code == 124 else "RATE_LIMIT" if ("rate limit" in error_text or "429" in error_text) else "FAIL"
-    return RunResult(status, redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error", model=model or "native-default", effort=effort)
+    return RunResult(status, redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error", model=model or "native-default", effort=effort,
+                     usage=parse_host_usage(host,stdout))
 
 
 def run_checked_command(argv: list[str], cwd: Path, *, timeout: int = 90, allow: list[str] | None = None) -> RunResult:
