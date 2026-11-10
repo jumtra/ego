@@ -1,5 +1,6 @@
 """Short, host-specific renderers. Source of truth lives in .ego/spec/."""
 from __future__ import annotations
+import json
 from pathlib import Path
 from .config import Config
 
@@ -88,6 +89,8 @@ Status is IN_PROGRESS while work remains, BLOCKED on a blocker, VERIFIED for ver
 
 Then run `ego session resume <id> --host <host> --root .`. In an idle interactive Claude Code or Codex session use `/clear`, in OpenCode `/new`, then send `resume_prompt`. If a safe clear is unavailable, instruct the user to start a new session; never claim the context was cleared when it wasn't. During an indivisible step, prefer `/compact` over clearing. Only request manual user actions when the host cannot safely perform them.
 
+When `ego session resume` returns `auto_resume_after_clear: true` (Claude Code with `clear_suggest_tokens` set in `.ego/config.toml`), the user only needs to run `/clear`: the resume prompt is injected automatically, and the host itself suggests the clear once the measured context passes the threshold.
+
 Managed runs and goal loops checkpoint automatically under their run or loop ID, with a new CLI session per node.
 """,
 }
@@ -131,15 +134,16 @@ def generated_files(cfg: Config) -> dict[str, str]:
             files[f".claude/agents/{name}.md"] = agent_md(name)
         for name in RULES:
             files[f".claude/rules/{name}.md"] = f"# {name.title()}\n\n{RULES[name]}"
-        # Fast/Balance deliberately add no always-on subprocess hook. Native host
-        # permissions and CI remain the security boundary for untrusted edits.
+        # No hook unless asked for: the pre-tool policy hook comes with the full
+        # profile, the clear suggestion with clear_suggest_tokens. Neither calls a model.
+        hooks: dict[str, list] = {}
         if cfg.profile == "full":
-            files[".claude/settings.json"] = '''{
-  "hooks": {
-    "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "seh hook pre-tool --root ."}]}]
-  }
-}
-''' 
+            hooks["PreToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "ego hook pre-tool --root ."}]}]
+        if cfg.clear_suggest_tokens > 0:
+            hooks["Stop"] = [{"hooks": [{"type": "command", "command": 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'}]}]
+            hooks["SessionStart"] = [{"matcher": "clear", "hooks": [{"type": "command", "command": 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'}]}]
+        if hooks:
+            files[".claude/settings.json"] = json.dumps({"hooks": hooks}, indent=2) + "\n"
     if any(h in cfg.hosts for h in ("codex", "opencode", "agy")):
         for name in SKILLS:
             files[f".agents/skills/{name}/SKILL.md"] = skill_md(name)

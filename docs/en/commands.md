@@ -66,3 +66,5 @@ Loop end states: `VERIFIED` (goal holds in the staged copy, nothing applied), `C
 
 `.ego/config.toml`: `max_turns` (default 30) bounds each managed worker; `worker_context = "lean"` (default) starts Claude workers without the user's MCP servers, `"inherit"` restores them.
 
+`clear_suggest_tokens` (default 0 = off) generates Claude Code hooks: after each turn `ego hook stop` measures the conversation size from the host transcript and, above the threshold, shows the user a `/clear` suggestion; after `/clear`, `ego hook session-start` injects the resume prompt of a checkpoint saved in the last 30 minutes or armed by `ego session resume`. Neither hook calls a model, blocks a turn or clears anything.
+

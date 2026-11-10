@@ -388,8 +388,16 @@ def _cmd_hook(args):
     from .policy import check_hook_payload
     from .config import load_config
     root=_root(args)
-    cfg=load_config(root)
     raw=sys.stdin.read(1024*1024)
+    if args.event in ("stop","session-start"):
+        # Advisory hooks never fail the host turn: any problem means "say nothing".
+        try:
+            from .session import clear_advice,clear_resume
+            obj=json.loads(raw)
+            out=clear_advice(root,obj,load_config(root).clear_suggest_tokens) if args.event=="stop" else clear_resume(root,obj)
+        except (ValueError,OSError,SEHError,KeyError,TypeError):out={}
+        print(json.dumps(out,ensure_ascii=False));return 0
+    cfg=load_config(root)
     try:obj=json.loads(raw)
     except ValueError:
         _print({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Malformed event JSON"}});return 0
@@ -624,7 +632,7 @@ def build_parser()->argparse.ArgumentParser:
     sp=sub.add_parser("tool");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("list");r=s.add_parser("call");r.add_argument("name");r.add_argument("arguments");r.add_argument("--approve-external",action="store_true")
     sp.set_defaults(func=_cmd_tool)
-    sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool"]);sp.set_defaults(func=_cmd_hook)
+    sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool","stop","session-start"]);sp.set_defaults(func=_cmd_hook)
     sp=sub.add_parser("prompt");common(sp);s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("register");r.add_argument("name");r.add_argument("file");r.add_argument("--role",default="worker")
     r=s.add_parser("show");r.add_argument("name");r.add_argument("--version")

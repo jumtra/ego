@@ -47,6 +47,8 @@ def with_done_gate(spec: dict, done_checks: list[list[str]]) -> dict:
     nodes = [dict(n) for n in spec.get("nodes", [])]
     if any(n.get("id") == DONE_NODE for n in nodes):
         raise SEHError("INVALID_TASK", f"Node id {DONE_NODE} is reserved", 2)
+    if len(nodes) == 1 and nodes[0].get("kind", "agent") == "agent" and nodes[0].get("checks") == done_checks:
+        return {**spec, "nodes": nodes}  # the only node is already verified by exactly these checks
     gate = {"id": DONE_NODE, "kind": "gate", "depends_on": [n["id"] for n in nodes],
             "argv": done_checks[0], "checks": done_checks[1:]}
     return {**spec, "nodes": nodes + [gate]}

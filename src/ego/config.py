@@ -27,6 +27,7 @@ class Config:
     timeout_seconds: int = 3600
     max_turns: int = 30  # agentic turns per managed worker invocation
     worker_context: str = "lean"  # "lean" (no inherited MCP servers) or "inherit"
+    clear_suggest_tokens: int = 0  # Claude Code: suggest /clear above this measured context size; 0 = off
     models: dict[str, Any] = field(default_factory=dict)
     isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool = True  # whether to remove the worktree after run
@@ -50,6 +51,8 @@ class Config:
             raise SEHError("INVALID_CONFIG", "Invalid runtime limits", 2)
         if not isinstance(self.max_turns, int) or not 1 <= self.max_turns <= 200:
             raise SEHError("INVALID_CONFIG", "max_turns must be between 1 and 200", 2)
+        if not isinstance(self.clear_suggest_tokens, int) or not (self.clear_suggest_tokens == 0 or 20000 <= self.clear_suggest_tokens <= 2000000):
+            raise SEHError("INVALID_CONFIG", "clear_suggest_tokens must be 0 (off) or between 20000 and 2000000", 2)
         if self.worker_context not in ("lean", "inherit"):
             raise SEHError("INVALID_CONFIG", "worker_context must be 'lean' or 'inherit'", 2)
         if not isinstance(self.models, dict):
@@ -108,6 +111,9 @@ def dump_config(cfg: Config) -> str:
         "# Managed worker のコンテキスト (max_turns, worker_context):\n"
         "#   max_turns = 30             # worker 1 回あたりの最大ターン数\n"
         "#   worker_context = \"lean\"   # \"lean\": ユーザーの MCP サーバーを継承しない / \"inherit\": 継承する\n"
+        "#\n"
+        "# セッションクリアの自動提案 (clear_suggest_tokens, Claude Code のみ):\n"
+        "#   clear_suggest_tokens = 120000  # 実測コンテキストがこの値を超えたら /clear を提案。0 で無効\n"
     )
     return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in vars(cfg).items()) + "\n"
 

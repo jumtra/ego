@@ -7,7 +7,10 @@ non-interactive CLI.
 """
 from __future__ import annotations
 
+import datetime as dt
+import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -118,19 +121,149 @@ def resume_prompt(checkpoint: dict[str, Any]) -> str:
     return "\n".join(lines)[:MAX_PROMPT_CHARS]
 
 
+ADVICE_STATE = ".ego/state/session_advice.json"
+CLEAR_PENDING = ".ego/state/clear_pending.json"
+PENDING_TTL = 1800
+FRESH_CHECKPOINT = 1800
+RESUGGEST_GROWTH = 1.25
+
+
+def context_tokens(transcript: Path, tail_bytes: int = 512 * 1024) -> int | None:
+    """Measured size of the main conversation: the last request's prompt tokens.
+
+    Read from the host transcript tail (input + cache read + cache creation of
+    the latest main-chain assistant message). None when it cannot be measured;
+    callers must then stay silent rather than guess.
+    """
+    try:
+        with transcript.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - tail_bytes))
+            lines = f.read().decode("utf8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or obj.get("type") != "assistant" or obj.get("isSidechain"):
+            continue
+        usage = obj.get("message", {}).get("usage") if isinstance(obj.get("message"), dict) else None
+        if isinstance(usage, dict):
+            total = sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+            if total > 0:
+                return total
+    return None
+
+
+def _age_seconds(stamp: str) -> float:
+    try:
+        return max(0.0, time.time() - dt.datetime.fromisoformat(stamp).timestamp())
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def latest_open_checkpoint(root: Path, max_age: int = FRESH_CHECKPOINT) -> dict[str, Any] | None:
+    best = None
+    for path in (root / ".ego" / "memory" / "handoffs").glob("*.json"):
+        record = read_json(path)
+        if (not isinstance(record, dict) or record.get("schema_version") != SCHEMA or record.get("status") == "COMPLETED"
+                or record.get("source") != "interactive" or _age_seconds(record.get("updated_at", "")) > max_age):
+            continue
+        if best is None or record["updated_at"] > best["updated_at"]:
+            best = record
+    return best
+
+
+def _mark_clear_pending(root: Path, task_id: str) -> None:
+    write_json(safe_path(root, CLEAR_PENDING), {"task_id": _id(task_id), "at": time.time()})
+
+
+def auto_resume_installed(root: Path) -> bool:
+    try:
+        return "hook session-start" in (root / ".claude" / "settings.json").read_text(encoding="utf8")
+    except OSError:
+        return False
+
+
+def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[str, Any]:
+    """Stop-hook output: tell the user, once per growth step, that a fresh session is due.
+
+    Shown to the user only (systemMessage); it adds nothing to the model's
+    context and never clears or blocks anything.
+    """
+    if threshold <= 0 or not isinstance(payload, dict) or not isinstance(payload.get("transcript_path"), str):
+        return {}
+    tokens = context_tokens(Path(payload["transcript_path"]).expanduser())
+    session = str(payload.get("session_id") or "unknown")[:80]
+    root = root.resolve()
+    state_path = safe_path(root, ADVICE_STATE)
+    state = read_json(state_path, {})
+    state = state if isinstance(state, dict) else {}
+    last = state.get(session, {}).get("tokens")
+    if tokens is None or tokens < threshold:
+        if last is not None and tokens is not None:  # compacted or cleared: allow a new suggestion later
+            state.pop(session, None); write_json(state_path, state)
+        return {}
+    if last is not None and last <= tokens < last * RESUGGEST_GROWTH:
+        return {}
+    state[session] = {"tokens": tokens, "at": time.time()}
+    for old in sorted(state, key=lambda k: state[k].get("at", 0))[:-20]:
+        state.pop(old)
+    write_json(state_path, state)
+    size = f"約 {tokens // 1000}k トークン（提案しきい値 {threshold // 1000}k）"
+    checkpoint = latest_open_checkpoint(root)
+    if checkpoint:
+        _mark_clear_pending(root, checkpoint["task_id"])
+        return {"systemMessage": f"ego: コンテキストは{size}です。チェックポイント {checkpoint['task_id']}（{checkpoint['status']}）は保存済みです。"
+                                 "区切りが良ければ /clear を実行してください。再開プロンプトは自動で入ります。"}
+    return {"systemMessage": f"ego: コンテキストは{size}です。区切りの良いところで「チェックポイントを保存して」と依頼し、"
+                             "その後 /clear を実行してください。再開プロンプトは自動で入ります。"}
+
+
+def clear_resume(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """SessionStart(clear) output: inject the pending checkpoint's resume prompt, once."""
+    if not isinstance(payload, dict) or payload.get("source") != "clear":
+        return {}
+    root = root.resolve()
+    pending_path = safe_path(root, CLEAR_PENDING)
+    pending = read_json(pending_path)
+    if not isinstance(pending, dict):
+        return {}
+    pending_path.unlink(missing_ok=True)
+    try:
+        if time.time() - float(pending.get("at", 0)) > PENDING_TTL:
+            return {}
+        record = load_checkpoint(root, pending.get("task_id", ""))
+    except (SEHError, TypeError, ValueError):
+        return {}
+    if record is None:
+        return {}
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": resume_prompt(record)}}
+
+
 def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dict[str, Any]:
     if host not in HOST_CLEAR:
         raise SEHError("UNKNOWN_HOST", f"Unsupported interactive host: {host}", 2)
     record = load_checkpoint(root, task_id)
     if record is None:
         raise SEHError("HANDOFF_MISSING", "Save a checkpoint before clearing context", 3)
+    auto = host == "claude" and auto_resume_installed(root.resolve())
+    if auto:
+        _mark_clear_pending(root.resolve(), task_id)
     return {
+        "auto_resume_after_clear": auto,
         "task_id": task_id,
         "checkpoint_path": handoff_relpath(task_id),
         "checkpoint_status": record["status"],
         "clear_command": HOST_CLEAR[host],
         "clear_is_manual": True,
-        "instructions": "Run clear_command in the IDLE interactive host only, then send resume_prompt. "
+        "instructions": "Ask the user to run clear_command; the resume prompt is injected automatically "
+                        "within 30 minutes. No clear operation was executed by this command."
+                        if auto else
+                        "Run clear_command in the IDLE interactive host only, then send resume_prompt. "
                         "No clear operation was executed by this command."
                         if HOST_CLEAR[host] else "No verified /clear integration for this host. "
                         "Start a new session manually and send resume_prompt.",

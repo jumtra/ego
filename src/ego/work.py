@@ -111,7 +111,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 ok=False;feedback=str(exc)
             record={"attempt":iteration,"host":chosen_host,"model":chosen_model or "native-default",
                     "effort":chosen_effort or "auto",
-                    "status":"PASS" if ok else "FAIL", "execution":r.as_dict(),"checks":checks,
+                    "status":"PASS" if ok else "FAIL",
+                    # The record keeps bounded evidence, not up to 1 MB of raw output per attempt.
+                    "execution":{**r.as_dict(),"output":clip_output(r.output,20000),"stderr":clip_output(r.stderr,8000)},
+                    "checks":[{**c,"output":clip_output(c.get("output",""),8000),"stderr":clip_output(c.get("stderr",""),8000)} for c in checks],
                     "changed":changed,"feedback":feedback}
             edits={}
             if ok:
@@ -152,7 +155,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             break
         feedback=r["record"].get("feedback") or r["record"]["execution"].get("stderr") or "Verification failed"
     return {"id":node["id"],"status":"PASSED" if success else "FAILED", "attempts":attempts,
-            "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":last_output}
+            "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":clip_output(last_output,20000)}
 
 
 def usage_summary(record:dict)->dict:
@@ -283,7 +286,10 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
             edit_owners={}
             for result in results:
                 for rel in result["edits"]:
-                    if rel in edit_owners:raise SEHError("MERGE_CONFLICT",f"{rel} edited by {result['id']} and {edit_owners[rel]}")
+                    if rel in edit_owners:
+                        # Do not leave the record RUNNING forever: nothing of this wave was merged.
+                        record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
+                        raise SEHError("MERGE_CONFLICT",f"{rel} edited by {result['id']} and {edit_owners[rel]}")
                     edit_owners[rel]=result["id"]
             for result in results:
                 identifier=result["id"]
