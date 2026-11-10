@@ -212,7 +212,7 @@ def test_cli_flag_removal_fails_closed(monkeypatch,tmp_path):
 
 def test_local_wheel_requires_integrity_and_newer_version(tmp_path):
     wheel=fake_wheel('1.4.2')
-    path=tmp_path/'self_evolve_harness_standalone-1.4.2-py3-none-any.whl'
+    path=tmp_path/'ego_standalone-1.4.2-py3-none-any.whl'
     path.write_bytes(wheel)
     with pytest.raises(SEHError,match='digest mismatch'):
         selfupdate.update_from_local_wheel(path,'0'*64,'1.4.1',yes=True)

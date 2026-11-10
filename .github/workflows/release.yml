@@ -21,8 +21,8 @@ jobs:
         run: |
           python -m pip install build
           python -m build --wheel
-          python -m pip install --force-reinstall --no-deps dist/self_evolve_harness_standalone-*.whl
-          harness --version
+          python -m pip install --force-reinstall --no-deps dist/ego-*.whl
+          ego --version
       - name: Check tag matches wheel version
         env:
           TAG: ${{ github.ref_name }}
@@ -31,11 +31,11 @@ jobs:
           import glob, os, re
           match=re.fullmatch(r'v(\d+\.\d+\.\d+)', os.environ['TAG'])
           assert match, 'Release tag must be stable vX.Y.Z'
-          wheel=glob.glob('dist/self_evolve_harness_standalone-*-py3-none-any.whl')
+          wheel=glob.glob('dist/ego-*-py3-none-any.whl')
           assert len(wheel)==1 and f'-{match.group(1)}-' in wheel[0], (wheel,match.group(1))
           PY
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/self_evolve_harness_standalone-*.whl --verify-tag --generate-notes
+        run: gh release create "$TAG" dist/ego-*.whl --verify-tag --generate-notes
