@@ -65,6 +65,9 @@ def test_fresh_checkpoint_makes_clear_resume_automatic_exactly_once(tmp_path: Pa
     context = injected["hookSpecificOutput"]["additionalContext"]
     assert injected["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert "Resume task bug-142" in context and "review diff" in context and len(context) <= 2400
+    # The host adds this context silently and starts no turn: the user must be told to send a message.
+    assert "続けて" in message
+    assert "bug-142" in injected["systemMessage"] and "続けて" in injected["systemMessage"]
     assert clear_resume(tmp_path, {"source": "clear"}) == {}
 
 
