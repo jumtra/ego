@@ -185,13 +185,19 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
             if planner_usage is not None:
                 spend(planner_usage.get("cost_usd"), 1)
             spec = with_done_gate(spec, done_checks)
+            # Reject a plan with a forbidden command before anything runs, so the planner
+            # hears why instead of the loop dying halfway through an iteration.
+            for node in spec["nodes"]:
+                for argv in ([node["argv"]] if node.get("argv") else []) + list(node.get("checks") or []):
+                    check_command(argv, cfg.allow_commands, cfg.policy_mode)
             result = execute(root, spec, host=host, apply=apply, approve=approve, trust_cli=trust_cli,
                              autonomy=autonomy, isolated=isolated, seed_from=seed, extra_allow=scope,
                              budget_usd=remaining, worktree=False)
         except SEHError as exc:
             # A plan that cannot be produced or validated is an iteration outcome, not a crash.
             if exc.code not in ("PLAN_FAILED", "PLAN_INVALID_JSON", "INVALID_TASK", "TASK_CYCLE", "INVALID_ROUTE",
-                                "INSTRUCTIONS_TOO_LARGE", "INVALID_FALLBACK"):
+                                "INSTRUCTIONS_TOO_LARGE", "INVALID_FALLBACK",
+                                "COMMAND_DENIED", "DANGEROUS_COMMAND", "INVALID_ARGV"):
                 ledger["status"] = "ERROR"; ledger["error"] = {"code": exc.code, "message": clip_output(str(exc), 400)}
                 write_json(path, ledger)
                 raise

@@ -29,6 +29,8 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
                 "Every code/gate node MUST include argv as a nonempty command argument array, "
                 "or checks as a nonempty list of command argument arrays. "
                 "Checks must be argv arrays, never shell strings. "
+                f"Commands may only start with one of {json.dumps(cfg.allow_commands)}; "
+                "no shells and no inline code (python -c): check with an existing script or test file. "
                 "Use focused checks for independent implementation nodes; put integration checks "
                 "in a final gate depending on all required implementations. "
                 "Return raw JSON without Markdown fences. "

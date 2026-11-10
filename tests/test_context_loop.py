@@ -380,3 +380,20 @@ def test_first_iteration_skips_the_planner_and_replans_only_after_failure(tmp_pa
     run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], host="claude",
              scope=["*.txt"], trust_cli=True, execute_planner=True, plan_first=True)
     assert plans[0] is None
+
+
+def test_plan_with_a_forbidden_check_is_rejected_and_replanned_not_a_crash(tmp_path: Path):
+    """Seen on a real host: the replanner proposed a `python3 -c` check and the loop died with ERROR."""
+    _loop_project(tmp_path)
+    histories = []
+
+    def planner(goal, history, workdir):
+        histories.append(history)
+        return {"goal": goal, "nodes": [{"id": "impl", "kind": "agent", "prompt": "p", "write_allowlist": ["src/**"],
+                                         "checks": [["python3", "-c", "import x"]]}]}
+
+    result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=planner, max_iterations=5)
+    assert result["status"] == "STALLED"
+    assert [it["status"] for it in result["iterations"]] == ["PLAN_REJECTED", "PLAN_REJECTED"]
+    assert "Inline Python" in histories[1]
+    assert not (tmp_path / ".ego" / "state" / "runs").exists()  # rejected before any staging copy
