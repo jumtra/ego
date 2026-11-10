@@ -18,7 +18,7 @@
     ".codex/agents/fixer.toml": "f431867569486c3e3c30e4e92031072510d0d05029448879dc18a6b568194605",
     ".codex/agents/implementer.toml": "6019b8bbfd1f93ccda162ba2d271ccc29341e167241140ac6e9cb9761f5f8bab",
     ".codex/agents/reviewer.toml": "88231dab036189c4eb3e1a2562242bf9a18b9b89177ff24876d2e21b244fdff7",
-    ".ego/config.toml": "1d3584c6570058ca6404bb2dc1eef7d691593ce96a857b9d8b4a7897b7efe99b",
+    ".ego/config.toml": "71c6e67b2eb491f28363ecad51397b9ba8540a51489a53e81452dd21a604d56e",
     ".ego/knowledge/domain.md": "dac79facaf166adcdde8612c7548e0b186857bc251a43ee379a7ef380bfaefd4",
     ".ego/spec/prompts/tool-guide.md": "89ec40ab313ef3e7da0776752db979306093de3a15de0cc68f8c20b404f07b41",
     ".ego/spec/skills/harness-init/SKILL.md": "96162bb10904a8c41a86f7704ce3275fdbcc0df332003a2f0887bf36e922f646",
@@ -30,7 +30,7 @@
     "AGENTS.md": "195c2a9e06ba84ef685557cccfe119485b3ceffab1744ece85ecee0f1ae99f12",
     "CLAUDE.md": "195c2a9e06ba84ef685557cccfe119485b3ceffab1744ece85ecee0f1ae99f12"
   },
-  "installed_version": "0.0.1",
-  "last_snapshot_id": "snapshot-7167b58d950c",
+  "installed_version": "0.0.2",
+  "last_snapshot_id": "snapshot-45cfddfabcb6",
   "schema_version": 1
 }

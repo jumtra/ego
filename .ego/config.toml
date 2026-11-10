@@ -11,8 +11,13 @@
 #   codex:    "auto", "gpt-5-codex", etc.
 #   opencode: "auto", "anthropic/claude-3-5-sonnet", etc.
 #   agy:      "auto", "gemini-2.5-pro", etc.
+#
+# 実行環境の隔離 (isolation, cleanup_worktree):
+#   isolation = "copy"      # ディレクトリコピーによるステージング
+#   isolation = "worktree"  # Git worktree によるブランチ作業分離
+#   cleanup_worktree = true  # タスク終了時に worktree を自動削除するかどうか
 schema_version = 1
-profile = "balanced"
+profile = "minimal"
 policy_mode = "relaxed"
 hosts = ["claude", "agy", "codex", "opencode"]
 code_intelligence = "none"
@@ -21,6 +26,8 @@ runtime_mode = "native"
 max_parallel = 2
 max_attempts = 3
 timeout_seconds = 3600
-models = { claude = { model = "sonnet", effort = "auto" } }
+models = {claude = {model = "sonnet", effort = "auto"}}
+isolation = "copy"
+cleanup_worktree = true
 tests = []
 allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"]
