@@ -177,9 +177,12 @@ def test_selfupdate_digest_and_version(monkeypatch,tmp_path):
     assert not (tmp_path/'invalid.whl').exists()
 
 
-def test_update_requires_approval_and_venv(tmp_path):
+def test_update_requires_approval_and_venv(monkeypatch,tmp_path):
     with pytest.raises(SEHError,match='--yes'):
         selfupdate.install_wheel(tmp_path/'x.whl','1.4.2')
+    monkeypatch.setattr(selfupdate.sys,'prefix',getattr(selfupdate.sys,'base_prefix',selfupdate.sys.prefix))
+    with pytest.raises(SEHError,match='virtual environment'):
+        selfupdate.install_wheel(tmp_path/'x.whl','1.4.2',approved=True)
 
 
 def test_node_precedence_over_task_and_code_node_under_compare_defaults(project):

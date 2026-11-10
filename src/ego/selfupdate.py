@@ -123,11 +123,16 @@ def fetch_verified_wheel(info: dict, target: Path) -> Path:
     return target
 
 
+def _check_venv_or_raise() -> None:
+    if sys.prefix==getattr(sys,"base_prefix",sys.prefix):
+        repo_hint=" (or run 'git pull' if running from a git checkout)" if (Path(__file__).resolve().parent.parent.parent / ".git").is_dir() else ""
+        raise SEHError("VENV_REQUIRED",f"Upgrade via a virtual environment or pipx; system Python is not modified{repo_hint}",3)
+
+
 def install_wheel(path: Path, version: str, *, approved: bool=False) -> dict:
     if not approved:
         raise SEHError("APPROVAL_REQUIRED","Use --yes or confirm interactively to install an update",3)
-    if sys.prefix==getattr(sys,"base_prefix",sys.prefix):
-        raise SEHError("VENV_REQUIRED","Upgrade via a virtual environment or pipx; system Python is not modified",3)
+    _check_venv_or_raise()
     proc=subprocess.run([sys.executable,"-m","pip","install","--no-deps","--no-index","--force-reinstall",str(path)],
                         capture_output=True,text=True,timeout=180,check=False)
     if proc.returncode:
@@ -144,6 +149,7 @@ def self_update(current_version: str, *, apply:bool=False, yes:bool=False, dest:
     info=latest_release(current_version)
     if not apply or not info["update_available"]:return info
     if not info["can_install"]:raise SEHError("UPDATE_UNVERIFIED_RELEASE",info["reason"],3)
+    _check_venv_or_raise()
     if not yes:
         if not sys.stdin.isatty():raise SEHError("APPROVAL_REQUIRED","Noninteractive install requires --yes",3)
         reply=input(f"Install verified ego {info['latest']}? [y/N] ").strip().lower()
