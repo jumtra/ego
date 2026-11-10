@@ -7,14 +7,18 @@ from ego.util import sha256, write_json
 
 
 def test_work_entry_delegates_managed_execution_and_keeps_approvals():
+    from ego.templates import WORK_REFERENCES
     work = skill_md('work')
-    assert 'seh work plan' in work
-    assert 'seh work run' in work
-    assert 'seh work resume' in work
-    assert 'Do not recursively invoke /work' in work
-    assert 'Never infer approval' in work
-    assert 'seh memory search' in work
-    assert 'seh memory add' in work
+    managed = WORK_REFERENCES['managed']
+    assert 'ego work plan' in work and 'references/managed.md' in work
+    assert 'ego work plan' in managed
+    assert 'ego work run' in managed
+    assert 'ego work resume' in managed
+    assert 'Do not recursively invoke /work' in managed
+    assert 'Never infer approval' in work and 'Never infer approval' in managed
+    assert 'ego memory search' in work
+    assert 'ego memory add' in work
+    assert 'seh ' not in work + ''.join(WORK_REFERENCES.values())
 
 
 def test_standard_work_skill_upgrade_refreshes_all_host_copies(tmp_path: Path):

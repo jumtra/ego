@@ -1,6 +1,6 @@
 """Harness-squared-inspired opt-in Propose/Probe/Compare/Compose with bounded evidence.
 
-Import this module only for `seh optimize`, never in the ordinary Fast path.
+Import this module only for `ego optimize`, never in the ordinary Fast path.
 """
 from __future__ import annotations
 from pathlib import Path
@@ -69,7 +69,7 @@ def _load_plan(root:Path,exp_id:str)->dict:
     plan=read_json(_expdir(root,exp_id)/"plan.json")
     if not plan:raise SEHError("PLAN_NOT_FOUND",exp_id,3)
     cfg=load_opt(root)
-    if cfg.mode=="off":raise SEHError("OPT_DISABLED","Enable using `seh optimize configure --mode shadow --apply`")
+    if cfg.mode=="off":raise SEHError("OPT_DISABLED","Enable using `ego optimize configure --mode shadow --apply`")
     if plan["mode"]=="off":raise SEHError("OPT_DISABLED","Plan created while disabled")
     target=safe_path(root,plan["target_path"],allow_missing=False)
     if filehash(target)!=plan["base_sha256"]:raise SEHError("STALE_BASE","Target changed")

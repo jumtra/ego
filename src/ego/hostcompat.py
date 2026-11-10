@@ -71,7 +71,7 @@ def inspect_host(host: str, *, refresh: bool = False, timeout: int = 5) -> dict:
 def require_flags(info: dict, *names: str) -> None:
     missing=sorted(set(names)-set(info.get("flags",[])))
     if not info.get("supported") or missing:
-        raise SEHError("CLI_INCOMPATIBLE", f"{info.get('host')}: required CLI switches absent: {missing}. Run 'seh hosts refresh' after updating the vendor CLI.",3)
+        raise SEHError("CLI_INCOMPATIBLE", f"{info.get('host')}: required CLI switches absent: {missing}. Run 'ego hosts refresh' after updating the vendor CLI.",3)
 
 
 def list_host_capabilities(*, refresh: bool=False) -> dict:

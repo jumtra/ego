@@ -13,7 +13,8 @@ Run `ego <command> --help` for the authoritative current flags. All commands sup
 | `doctor` | check host tools, providers, config | missing optional components reported |
 | `modules` | list, resolve, scaffold | conflicts/missing dependency |
 | `migrate` | plan, remove-legacy, restore-legacy, rollback | hash mismatch, missing approval |
-| `work` | native, plan, run, resume, status, cancel | invalid DAG, check failure, trust boundary |
+| `work` | native, plan, run, resume, status, cancel, loop, loop-status, loop-apply | invalid DAG, check failure, trust boundary, loop limit reached |
+| `context` | audit | always-on context or a skill body over budget |
 | `eval` | run, compare | failed cases, incompatible suites |
 | `author` | lint, plan, candidate, gate, promote, rollback | invalid skill, missing evidence, approval |
 | `evolve` | observe, propose, lesson | missing evidence/observation |
@@ -44,3 +45,26 @@ ego update --yes --sync --root /your/project
 ```
 
 `ego` is the primary console command installed by `make install` or `pip install -e .`. For Task JSON examples, see [examples/multihost/task.json](../examples/multihost/task.json).
+
+## Goal loop and context budget
+
+```bash
+# Plan -> execute -> evaluate -> replan until the done-checks pass or a limit is hit.
+ego work loop --goal "Reject negative timeouts in the API" --done-check "pytest -q tests/api" \
+  --host claude --scope 'src/**,tests/**' --max-iterations 3 --max-budget-usd 5 --execute --trust-cli
+ego work loop-status <loop_id>
+ego work loop-apply <loop_id> --approve      # apply a VERIFIED loop after review
+ego work cancel <loop_id>                    # stops before the next iteration
+ego context audit                            # exit 5 when a context budget is exceeded
+```
+
+`work run`, `work resume` and `work status` print a compact summary (status, changed files, clipped failures, usage including prompt-cache tokens). Pass `--verbose` for the full record, which is always kept at `record_path`.
+
+The first iteration skips the planner (one worker repaired against the done-checks); the planner runs only after a failed iteration, or up front with `--plan-first`.
+
+Loop end states: `VERIFIED` (goal holds in the staged copy, nothing applied), `COMPLETED` (applied), `STALLED` (two iterations with identical staged content and failure), `MAX_ITERATIONS`, `BUDGET_EXHAUSTED`, `TIMEOUT`, `CANCELLED`. Costs are the host CLI's client-side estimates; `cost_known: false` means a host reported none.
+
+`.ego/config.toml`: `max_turns` (default 30) bounds each managed worker; `worker_context = "lean"` (default) starts Claude workers without the user's MCP servers, `"inherit"` restores them.
+
+`clear_suggest_tokens` (default 0 = off) generates Claude Code hooks: after each turn `ego hook stop` measures the conversation size from the host transcript and, above the threshold, shows the user a `/clear` suggestion; after `/clear`, `ego hook session-start` injects the resume prompt of a checkpoint saved in the last 30 minutes or armed by `ego session resume`. Neither hook calls a model, blocks a turn or clears anything.
+

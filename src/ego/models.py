@@ -29,7 +29,7 @@ def parse_agy_models(output: str) -> list[str]:
 
 
 def refresh_catalog(root: Path, *, hosts: list[str] | None = None, timeout: int = 12) -> dict:
-    """Explicit/TTL refresh. Never invoked by ordinary seh work execution."""
+    """Explicit/TTL refresh. Never invoked by ordinary ego work execution."""
     requested = hosts or list(HOSTS)
     if any(h not in HOSTS for h in requested):raise SEHError("UNKNOWN_HOST", "Invalid refresh host",2)
     cache = read_json(root/CATALOG_PATH, {}) or {}
