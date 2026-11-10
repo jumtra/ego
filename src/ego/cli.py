@@ -358,7 +358,7 @@ def _cmd_memory(args):
         _print({"deleted":p.delete(args.id)});return 0
 
 def _cmd_session(args):
-    from .session import save_checkpoint, load_checkpoint, rotation_instructions
+    from .session import save_checkpoint, load_checkpoint, rotation_instructions, arm_auto_resume
     root = _root(args)
     if args.action == "checkpoint":
         result = save_checkpoint(
@@ -367,6 +367,7 @@ def _cmd_session(args):
             blockers=args.blocker, evidence=args.evidence,
             status=args.status, source="interactive",
         )
+        arm_auto_resume(root, args.task_id)
     elif args.action == "status":
         result = load_checkpoint(root, args.task_id)
         if result is None: raise SEHError("HANDOFF_MISSING", args.task_id, 3)

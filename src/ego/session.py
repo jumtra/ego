@@ -188,6 +188,19 @@ def auto_resume_installed(root: Path) -> bool:
         return False
 
 
+def arm_auto_resume(root: Path, task_id: str) -> bool:
+    """Interactive checkpoint saved: the next SessionStart(clear) injects it, when auto-resume is installed.
+
+    Without this, a manual "save checkpoint" then /clear never arms the pending resume
+    (only the Stop-hook suggestion and `session resume` did), so nothing was injected.
+    """
+    root = root.resolve()
+    if not auto_resume_installed(root):
+        return False
+    _mark_clear_pending(root, task_id)
+    return True
+
+
 def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[str, Any]:
     """Stop-hook output: tell the user, once per growth step, that a fresh session is due.
 

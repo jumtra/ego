@@ -68,6 +68,19 @@ def test_fresh_checkpoint_makes_clear_resume_automatic_exactly_once(tmp_path: Pa
     assert clear_resume(tmp_path, {"source": "clear"}) == {}
 
 
+def test_cli_checkpoint_then_clear_injects_resume_without_stop_hook(tmp_path: Path, capsys):
+    # Manual flow: "save checkpoint" (ego session checkpoint) then /clear. No Stop hook fires in between.
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(
+        '{"hooks": {"SessionStart": [{"matcher": "clear", "hooks": [{"type": "command", '
+        '"command": "ego hook session-start --root \\"$CLAUDE_PROJECT_DIR\\""}]}]}}')
+    assert main(["session", "checkpoint", "--root", str(tmp_path), "--task-id", "manual-9",
+                 "--goal", "Ship token report", "--completed", "pytest exit 0", "--status", "VERIFIED"]) == 0
+    capsys.readouterr()
+    injected = clear_resume(tmp_path, {"source": "clear"})
+    assert "Resume task manual-9" in injected["hookSpecificOutput"]["additionalContext"]
+
+
 def test_stale_pending_resume_is_not_injected_into_an_unrelated_session(tmp_path: Path):
     save_checkpoint(tmp_path, "old-task", goal="Earlier work", status="IN_PROGRESS")
     (tmp_path / ".ego/state").mkdir(parents=True)
