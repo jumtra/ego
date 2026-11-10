@@ -153,8 +153,8 @@ def test_compare_never_merges_or_applies(monkeypatch,project,tmp_path):
 def fake_wheel(version: str) -> bytes:
     buf=io.BytesIO()
     with zipfile.ZipFile(buf,'w') as z:
-        z.writestr(f'ego_standalone-{version}.dist-info/METADATA',
-                   'Metadata-Version: 2.1\nName: ego-standalone\nVersion: '+version+'\n')
+        z.writestr(f'ego-{version}.dist-info/METADATA',
+                   'Metadata-Version: 2.1\nName: ego\nVersion: '+version+'\n')
     return buf.getvalue()
 
 
@@ -162,7 +162,7 @@ def test_selfupdate_digest_and_version(monkeypatch,tmp_path):
     wheel=fake_wheel('1.4.2')
     digest=hashlib.sha256(wheel).hexdigest()
     rel={'tag_name':'v1.4.2','draft':False,'prerelease':False,'html_url':f'https://github.com/{selfupdate.REPO}/releases/tag/v1.4.2',
-         'assets':[{'name':'ego_standalone-1.4.2-py3-none-any.whl',
+         'assets':[{'name':'ego-1.4.2-py3-none-any.whl',
                     'browser_download_url':f'https://github.com/{selfupdate.REPO}/releases/download/v1.4.2/x.whl',
                     'digest':'sha256:'+digest}]}
     def download(url,limit,timeout=12):return json.dumps(rel).encode() if url==selfupdate.API else wheel
@@ -212,7 +212,7 @@ def test_cli_flag_removal_fails_closed(monkeypatch,tmp_path):
 
 def test_local_wheel_requires_integrity_and_newer_version(tmp_path):
     wheel=fake_wheel('1.4.2')
-    path=tmp_path/'ego_standalone-1.4.2-py3-none-any.whl'
+    path=tmp_path/'ego-1.4.2-py3-none-any.whl'
     path.write_bytes(wheel)
     with pytest.raises(SEHError,match='digest mismatch'):
         selfupdate.update_from_local_wheel(path,'0'*64,'1.4.1',yes=True)

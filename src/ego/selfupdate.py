@@ -21,9 +21,9 @@ from urllib.request import Request, urlopen
 import zipfile
 from .util import SEHError
 
-REPO = "jumtra/ego-standalone"
+REPO = "jumtra/ego"
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
-PACKAGE = "ego-standalone"
+PACKAGE = "ego"
 MAX_DOWNLOAD = 30*1024*1024
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 VERS_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
@@ -75,7 +75,7 @@ def latest_release(current_version: str) -> dict:
     if release.get("draft") or release.get("prerelease"):
         raise SEHError("UPDATE_INVALID_RELEASE","Latest release is not stable",3)
     wheels=[a for a in release.get("assets", []) if isinstance(a,dict) and
-            a.get("name", "").startswith("ego_standalone-") and
+            a.get("name", "").startswith("ego-") and
             a.get("name", "").endswith("-py3-none-any.whl")]
     wheels=[a for a in wheels if a["name"].split("-")[1]==tag.lstrip("v")]
     asset=wheels[0] if wheels else None
@@ -165,7 +165,7 @@ def update_from_local_wheel(path: Path, digest: str, current_version: str, *, ye
     if hashlib.sha256(data).hexdigest()!=digest:
         raise SEHError("UPDATE_DIGEST_MISMATCH","Offline wheel digest mismatch",3)
     name=path.name
-    match=re.fullmatch(r"ego_standalone-(\d+\.\d+\.\d+)-py3-none-any\.whl",name)
+    match=re.fullmatch(r"ego-(\d+\.\d+\.\d+)-py3-none-any\.whl",name)
     if not match:
         raise SEHError("INVALID_WHEEL","Unexpected wheel filename",3)
     version=match.group(1)
