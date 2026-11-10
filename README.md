@@ -146,6 +146,8 @@ Launch your favorite AI CLI inside the project and describe your goal:
 **Use `/work` as your everyday entry point.** The AI automatically operates internal `ego` subcommands:
 - Investigate → plan & split tasks → implement → test & verify → report diff
 
+The final report includes a token usage line printed by `ego` (for example `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`). Tokens are input + output + cache read + cache creation, and the figure is reported as printed.
+
 ---
 
 ### 5 · Maintenance & Useful Commands

@@ -60,9 +60,6 @@ def inspect_host(host: str, *, refresh: bool = False, timeout: int = 5) -> dict:
     result={"host":host,"available":True,"supported":okh,"version":version.strip().splitlines()[0][:180] if okv else None,
             "executable":str(Path(executable).resolve()),"fingerprint":key,"flags":flags,"permission_modes":modes,
             "checked_at":time.time(),"reason":"ready" if okh else "Could not inspect CLI help; refresh or update host CLI"}
-    if host=="agy":
-        result["supported"]=False
-        result["reason"]="AGY managed execution is disabled pending provider authorization"
     cache[host]=result
     write_json(path,cache)
     return result

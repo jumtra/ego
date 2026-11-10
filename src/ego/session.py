@@ -126,6 +126,8 @@ CLEAR_PENDING = ".ego/state/clear_pending.json"
 PENDING_TTL = 1800
 FRESH_CHECKPOINT = 1800
 RESUGGEST_GROWTH = 1.25
+# The host cannot submit a prompt after /clear: the context is added silently and waits for a message.
+AFTER_CLEAR = "再開コンテキストは自動で読み込まれるので、/clear 後に「続けて」と送ってください。"
 
 
 def context_tokens(transcript: Path, tail_bytes: int = 512 * 1024) -> int | None:
@@ -231,9 +233,9 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[st
     if checkpoint:
         _mark_clear_pending(root, checkpoint["task_id"])
         return {"systemMessage": f"ego: コンテキストは{size}です。チェックポイント {checkpoint['task_id']}（{checkpoint['status']}）は保存済みです。"
-                                 "区切りが良ければ /clear を実行してください。再開プロンプトは自動で入ります。"}
+                                 "区切りが良ければ /clear を実行してください。" + AFTER_CLEAR}
     return {"systemMessage": f"ego: コンテキストは{size}です。区切りの良いところで「チェックポイントを保存して」と依頼し、"
-                             "その後 /clear を実行してください。再開プロンプトは自動で入ります。"}
+                             "その後 /clear を実行してください。" + AFTER_CLEAR}
 
 
 def clear_resume(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -254,7 +256,9 @@ def clear_resume(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         return {}
     if record is None:
         return {}
-    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": resume_prompt(record)}}
+    # additionalContext is silent and starts no turn, so also tell the user what to do next.
+    return {"systemMessage": f"ego: チェックポイント {record['task_id']} の再開コンテキストを読み込みました。「続けて」と送ると再開します。",
+            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": resume_prompt(record)}}
 
 
 def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dict[str, Any]:

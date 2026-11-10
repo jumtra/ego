@@ -35,7 +35,9 @@ def test_file_memory(project):
 
 def test_cli_agents(mock_host='mock'):
     assert capability("mock").supported
-    assert not capability("agy").supported
+    # AGY runs through its CLI like the other hosts: supported exactly when the binary is installed.
+    agy=capability("agy")
+    assert agy.supported==agy.available and agy.mode=="cli"
     assert parse_host_response("claude",'{"type":"result","result":"hello","total_cost_usd":0.01}')[0]=="hello"
 
 def test_mock_runner(project):

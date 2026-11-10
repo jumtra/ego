@@ -95,3 +95,40 @@ def test_worktree_isolation_and_cleanup(tmp_path):
     assert staging_keep.exists()
     assert (staging_keep / "result.txt").read_text() == "done"
     assert not (root / "result.txt").exists()
+
+
+def _git_project(root):
+    import subprocess
+    root.mkdir()
+    (root / "src").mkdir()
+    (root / "src" / "a.py").write_text("x = 1\n")
+    (root / "gen.py").write_text("from pathlib import Path\nPath('result.txt').write_text('done')\n")
+    for argv in (["git", "init", "-q"], ["git", "add", "."],
+                 ["git", "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "-qm", "init"]):
+        subprocess.run(argv, cwd=root, capture_output=True, check=True)
+    return root
+
+
+def test_worktree_run_measures_changes_against_head_not_the_dirty_working_tree(tmp_path):
+    root = _git_project(tmp_path / "repo")
+    (root / "src" / "a.py").write_text("x = 2  # uncommitted\n")
+    (root / "untracked.txt").write_text("keep me\n")
+    task = {"nodes": [{"id": "write", "kind": "code", "argv": ["python3", "gen.py"], "write_allowlist": ["result.txt", "src/**"]}]}
+    result = execute(root, task, worktree=True, apply=True, approve=True)
+    assert result["final_status"] == "PASSED" and result["applied"]
+    assert result["changed_files"] == ["result.txt"]
+    assert (root / "result.txt").read_text() == "done"
+    assert (root / "src" / "a.py").read_text() == "x = 2  # uncommitted\n"
+    assert (root / "untracked.txt").read_text() == "keep me\n"
+
+
+def test_resume_after_cancel_continues_the_run(tmp_path):
+    from ego.work import cancel
+    (tmp_path / "check.py").write_text("from pathlib import Path\nimport sys\nsys.exit(0 if Path('ready').exists() else 1)\n")
+    task = {"nodes": [{"id": "gate", "kind": "gate", "argv": ["python3", "check.py"]}]}
+    first = execute(tmp_path, task)
+    assert first["final_status"] == "FAILED"
+    cancel(tmp_path, first["run_id"])
+    (tmp_path / ".ego" / "state" / "runs" / first["run_id"] / "staging" / "ready").write_text("")
+    resumed = execute(tmp_path, task, run_id=first["run_id"], resume=True)
+    assert resumed["final_status"] != "CANCELLED"

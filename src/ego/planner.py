@@ -52,15 +52,23 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
                            model=None if model in (None,"auto") else model,effort=effort,
                            lean=cfg.worker_context=="lean")
         usage={"cost_usd":response.cost_usd,**(response.usage or {})}
-        if response.status!="PASS":raise SEHError("PLAN_FAILED",response.stderr,5)
-        try: obj=json.loads(response.output)
-        except ValueError as exc:raise SEHError("PLAN_INVALID_JSON",response.output[:300],5) from exc
-    cfg = load_config(root)
-    if cfg.models and "models" not in obj.get("defaults", {}):
-        defaults = dict(obj.get("defaults", {}))
-        defaults["models"] = dict(cfg.models)
-        obj["defaults"] = defaults
-    validate_task(obj)
+    try:
+        if host!="mock":
+            if response.status!="PASS":raise SEHError("PLAN_FAILED",response.stderr,5)
+            try: obj=json.loads(response.output)
+            except ValueError as exc:raise SEHError("PLAN_INVALID_JSON",response.output[:300],5) from exc
+            if not isinstance(obj,dict):raise SEHError("PLAN_INVALID_JSON",response.output[:300],5)
+        cfg = load_config(root)
+        if not isinstance(obj.get("defaults", {}), dict):raise SEHError("INVALID_TASK","defaults must be an object",2)
+        if cfg.models and "models" not in obj.get("defaults", {}):
+            defaults = dict(obj.get("defaults", {}))
+            defaults["models"] = dict(cfg.models)
+            obj["defaults"] = defaults
+        validate_task(obj)
+    except SEHError as exc:
+        # A rejected plan still cost a model call: the caller (goal loop) must be able to account for it.
+        if usage is not None:exc.planner_usage=usage
+        raise
     result={"plan_id":ident("task"),"task":obj,"approval_required_before_apply":True}
     if usage is not None:result["planner_usage"]=usage
     result["usage_text"]=usage_text({"plan_tokens":tokens_of(usage)})

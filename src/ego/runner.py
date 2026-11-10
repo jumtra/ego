@@ -100,6 +100,10 @@ def parse_host_usage(host: str, raw: str) -> dict | None:
         found = {"input_tokens": num("input_tokens"), "output_tokens": num("output_tokens"),
                  "cache_read_tokens": num("cache_read_input_tokens", "cached_input_tokens"),
                  "cache_creation_tokens": num("cache_creation_input_tokens")}
+        if "cached_input_tokens" in u and "cache_read_input_tokens" not in u:
+            # OpenAI-style usage counts cached tokens inside input_tokens; keep the two
+            # disjoint (as Claude reports them) so a token total does not count them twice.
+            found["input_tokens"] = max(0, found["input_tokens"] - found["cache_read_tokens"])
         if isinstance(obj.get("num_turns"), int): found["turns"] = obj["num_turns"]
     return found
 

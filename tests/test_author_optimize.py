@@ -60,3 +60,17 @@ def test_optimize_requires_spending_approval(project):
     opt_propose(project,plan["experiment_id"],replacement="Use for software tasks")
     with pytest.raises(SEHError,match="Use --spend-approval"):
         opt_run(project,plan["experiment_id"],execute=True)
+
+
+def test_gate_runs_the_suite_on_the_requested_model(project, monkeypatch):
+    import ego.author as author
+    seen = {}
+
+    def fake_eval(root, suite, **kw):
+        seen.update(kw)
+        return {"run_id": "eval-x", "suite_sha256": "s", "all_passed": True}
+
+    monkeypatch.setattr(author, "run_eval", fake_eval)
+    candidate = new_candidate(project, "work", "skill.description", "Use on feature updates and bug fixes", "Narrow triggers")
+    g = gate(project, candidate, author_suite(project), host="claude", model="haiku")
+    assert seen["model"] == "haiku" and g["model"] == "haiku" and g["status"] == "PASS"

@@ -291,7 +291,7 @@ def _cmd_author(args):
         write_json(root/".ego"/"state"/"candidates"/(rec["candidate_id"]+".json"),rec)
         _print(rec);return 0
     if args.action=="gate":
-        res=gate(root,read_json(Path(args.candidate)),Path(args.suite),args.host,allow_mock=args.allow_mock_test)
+        res=gate(root,read_json(Path(args.candidate)),Path(args.suite),args.host,allow_mock=args.allow_mock_test,model=args.model)
         if args.out:write_json(Path(args.out),res)
         _print({k:v for k,v in res.items() if k!="report"});return 0 if res["status"]=="PASS" else 5
     if args.action=="promote":
@@ -590,7 +590,7 @@ def build_parser()->argparse.ArgumentParser:
     s.add_parser("lint")
     r=s.add_parser("plan");r.add_argument("--skill",default="work");r.add_argument("--field",default="skill.description");r.add_argument("--goal",required=True)
     r=s.add_parser("candidate");r.add_argument("--skill",default="work");r.add_argument("--field",default="skill.description");r.add_argument("--replacement-file",required=True);r.add_argument("--goal",required=True)
-    r=s.add_parser("gate");r.add_argument("--candidate",required=True);r.add_argument("--suite",required=True);r.add_argument("--host",default="mock");r.add_argument("--out");r.add_argument("--allow-mock-test",action="store_true")
+    r=s.add_parser("gate");r.add_argument("--candidate",required=True);r.add_argument("--suite",required=True);r.add_argument("--host",default="mock");r.add_argument("--model");r.add_argument("--out");r.add_argument("--allow-mock-test",action="store_true")
     r=s.add_parser("promote");r.add_argument("--candidate",required=True);r.add_argument("--gate",required=True);r.add_argument("--approval-ref",required=True);r.add_argument("--approve",action="store_true");r.add_argument("--allow-mock-test",action="store_true")
     r=s.add_parser("rollback");r.add_argument("promotion_id")
     sp.set_defaults(func=_cmd_author)

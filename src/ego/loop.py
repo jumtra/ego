@@ -211,6 +211,11 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
                              autonomy=autonomy, isolated=isolated, seed_from=seed, extra_allow=scope,
                              budget_usd=remaining, worktree=False)
         except SEHError as exc:
+            # A planner call that produced no usable plan was still paid for.
+            failed_usage = getattr(exc, "planner_usage", None)
+            if failed_usage is not None:
+                spend(failed_usage.get("cost_usd"), 1)
+                add_usage(ledger["usage"], plan_tokens=tokens_of(failed_usage))
             # A plan that cannot be produced or validated is an iteration outcome, not a crash.
             if exc.code not in ("PLAN_FAILED", "PLAN_INVALID_JSON", "INVALID_TASK", "TASK_CYCLE", "INVALID_ROUTE",
                                 "INSTRUCTIONS_TOO_LARGE", "INVALID_FALLBACK",

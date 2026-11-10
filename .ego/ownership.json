@@ -5,7 +5,7 @@
     ".agents/agents/implementer.md": "6b22f90ce41bbc6ba78250da03de3d2acb2ee821e7263815ddbbe8d9e4b74155",
     ".agents/agents/reviewer.md": "12e765d3847caf20c391a174c8d0d9b85fe9139460bdec26b848aa5c3ae0c9fe",
     ".agents/skills/harness-init/SKILL.md": "21f64605759c6bb163331e1a0438b629158ecb0195f54c6047ec09bbdec3658c",
-    ".agents/skills/work/SKILL.md": "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a",
+    ".agents/skills/work/SKILL.md": "99edbb7efbf447508be939b017a0d38d64bcfe32a808c8a013dcc374cd918a7d",
     ".agents/skills/work/references/checkpoint.md": "9f472e3a13a5a98d8ad034bb8d1fa001bc67d8e30eae62a431bc1eb419af7c23",
     ".agents/skills/work/references/loop.md": "325d245c6406a7d43786238d3b29e9cef6fc646950f09b1a09702bf5f24e9ce2",
     ".agents/skills/work/references/managed.md": "ba02f3e3711b984acbe8749b0157b8b261f7285bb171780bb9400be992bce12b",
@@ -17,7 +17,7 @@
     ".claude/rules/testing.md": "9fa38b058e632942482ff59e33ebd30b3b973ee0e55a9a1c34b93ea56b74a622",
     ".claude/settings.json": "a1788f703ca7738bc95bfe1e8fe9df2a3f3be7f0d89d17bb26536b14068140c8",
     ".claude/skills/harness-init/SKILL.md": "21f64605759c6bb163331e1a0438b629158ecb0195f54c6047ec09bbdec3658c",
-    ".claude/skills/work/SKILL.md": "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a",
+    ".claude/skills/work/SKILL.md": "99edbb7efbf447508be939b017a0d38d64bcfe32a808c8a013dcc374cd918a7d",
     ".claude/skills/work/references/checkpoint.md": "9f472e3a13a5a98d8ad034bb8d1fa001bc67d8e30eae62a431bc1eb419af7c23",
     ".claude/skills/work/references/loop.md": "325d245c6406a7d43786238d3b29e9cef6fc646950f09b1a09702bf5f24e9ce2",
     ".claude/skills/work/references/managed.md": "ba02f3e3711b984acbe8749b0157b8b261f7285bb171780bb9400be992bce12b",
@@ -29,7 +29,7 @@
     ".ego/knowledge/domain.md": "dac79facaf166adcdde8612c7548e0b186857bc251a43ee379a7ef380bfaefd4",
     ".ego/spec/prompts/tool-guide.md": "89ec40ab313ef3e7da0776752db979306093de3a15de0cc68f8c20b404f07b41",
     ".ego/spec/skills/harness-init/SKILL.md": "21f64605759c6bb163331e1a0438b629158ecb0195f54c6047ec09bbdec3658c",
-    ".ego/spec/skills/work/SKILL.md": "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a",
+    ".ego/spec/skills/work/SKILL.md": "99edbb7efbf447508be939b017a0d38d64bcfe32a808c8a013dcc374cd918a7d",
     ".ego/spec/skills/work/references/checkpoint.md": "9f472e3a13a5a98d8ad034bb8d1fa001bc67d8e30eae62a431bc1eb419af7c23",
     ".ego/spec/skills/work/references/loop.md": "325d245c6406a7d43786238d3b29e9cef6fc646950f09b1a09702bf5f24e9ce2",
     ".ego/spec/skills/work/references/managed.md": "ba02f3e3711b984acbe8749b0157b8b261f7285bb171780bb9400be992bce12b",
@@ -41,6 +41,6 @@
     "CLAUDE.md": "b34eacfa3f2c9eb7eb463fce4f19a6c811607a02468848d786038f7fb74a66ca"
   },
   "installed_version": "0.0.3",
-  "last_snapshot_id": "snapshot-985605a5eaa0",
+  "last_snapshot_id": "snapshot-8e7267bf93b6",
   "schema_version": 1
 }

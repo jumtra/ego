@@ -234,8 +234,6 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
     should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
     nodes=validate_task(spec)
     if apply and not approve:raise SEHError("APPROVAL_REQUIRED", "--apply requires --approve")
-    if any(r.host=="agy" for n in nodes if n.get("kind","agent") not in ("gate","code") for r in resolve_routes(n,spec,host,default_models=cfg.models)[1]):
-        raise SEHError("HOST_POLICY_BLOCKED", "AGY managed execution is disabled",3)
     if autonomy=="bypass" and not isolated:
         raise SEHError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)
     if any(resolve_routes(n,spec,host,default_models=cfg.models)[0]=="compare" for n in nodes if n.get("kind","agent") not in ("gate","code")) and apply:
@@ -250,6 +248,8 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
             record=read_json(record_path)
             if not record:raise SEHError("RUN_NOT_FOUND",run_id,3)
             if record["spec"]!=spec:raise SEHError("RESUME_MISMATCH","Task specification changed")
+            # An explicit resume supersedes an earlier cancel request; otherwise the run could never continue.
+            (runroot/"cancel.flag").unlink(missing_ok=True)
             # A verified, unapplied run may be approved and applied on resume
             # without re-running the entire DAG. An already-applied run is inert.
             if record.get("final_status")=="PASSED" and (not apply or record.get("applied")):
@@ -275,7 +275,9 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                     **({"planner_usage":planner_usage} if planner_usage is not None else {}),
                     # A seeded run keeps the original base: changes are measured against, and
                     # applied over, the project as it was when the first run started.
-                    "base_snapshot":seed_record["base_snapshot"] if seed_dir else snapshot(root),
+                    # A worktree starts from HEAD, not from the working tree: measuring it against the
+                    # working tree would report (and apply) uncommitted or untracked files as reverted/deleted.
+                    "base_snapshot":seed_record["base_snapshot"] if seed_dir else snapshot(staging if worktree_created else root),
                     "final_status":"RUNNING","applied":False,
                     "worktree":worktree_created}
             write_json(record_path,record)
