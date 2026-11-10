@@ -17,6 +17,8 @@ Choose the **smallest useful workflow** and keep context small: read only the fi
 
 Prefer direct user instructions over ceremonial workflow. Write formal documents only when requested or needed for a decision.
 
+**Intent first, questions only when needed:** at any size, before editing you can state in one line each why the user wants this and what will show it is done. When the request, the code and memory answer both, proceed without asking. Ask when an open point would change what you build and a wrong guess would be costly to undo: one question at a time, each with your recommended answer. Stop asking once the remaining points have safe defaults, and state those assumptions in the report. In a managed run, put the answers in task-level `instructions`.
+
 **Always:**
 - You operate the harness for the user. `/work` is the entry point; do not ask the user to compose task JSON or type routine CLI commands.
 - Never infer approval from a successful test. Applying staged changes needs authorization.

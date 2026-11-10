@@ -11,6 +11,8 @@ import datetime as dt
 import json
 import os
 import re
+import shlex
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,21 @@ MAX_GOAL_CHARS = 800
 MAX_NOTES = 8
 MAX_PROMPT_CHARS = 1600
 HOST_CLEAR = {"claude": "/clear", "codex": "/clear", "opencode": "/new", "agy": None}
+# How each CLI opens a NEW interactive session that starts with a prompt (checked against each CLI's --help).
+HOST_LAUNCH = {"claude": ("claude",), "codex": ("codex",), "opencode": ("opencode", "--prompt"),
+               "agy": ("agy", "--prompt-interactive")}
+MAX_LIST_GOAL_CHARS = 120
+
+
+# What each CLI exports to the commands it runs (names taken from the CLIs themselves).
+HOST_ENV = {"claude": ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID"), "codex": ("CODEX_THREAD_ID", "CODEX_CI"),
+            "opencode": ("OPENCODE",), "agy": ("ANTIGRAVITY_AGENT", "ANTIGRAVITY_CONVERSATION_ID")}
+
+
+def detect_host() -> str | None:
+    """The CLI this process runs under, when exactly one says so. None rather than a guess."""
+    found = [host for host, names in HOST_ENV.items() if any(os.environ.get(n) for n in names)]
+    return found[0] if len(found) == 1 else None
 
 
 def _id(value: str) -> str:
@@ -67,6 +84,7 @@ def save_checkpoint(
     evidence: list[str] | tuple[str, ...] | None = None,
     status: str = "IN_PROGRESS",
     source: str = "interactive",
+    host: str | None = None,
 ) -> dict[str, Any]:
     """Atomically replace, do not append to an ever-growing history.
 
@@ -80,6 +98,8 @@ def save_checkpoint(
         raise SEHError("INVALID_HANDOFF", "Unsupported source", 2)
     if not isinstance(goal, str) or not goal.strip():
         raise SEHError("INVALID_HANDOFF", "Nonempty goal required", 2)
+    if host is not None and host not in HOST_CLEAR:
+        raise SEHError("UNKNOWN_HOST", f"Unsupported interactive host: {host}", 2)
     root = root.resolve()
     path = safe_path(root, handoff_relpath(task_id))
     lock = safe_path(root, f".ego/locks/handoff-{task_id}.lock")
@@ -100,6 +120,10 @@ def save_checkpoint(
             "updated_at": now(),
             "revision": int(prev.get("revision", 0)) + 1 if prev else 1,
         }
+        # Which CLI wrote it: lets another CLI see whose work it is picking up.
+        host = host or (prev.get("host") if prev else None)
+        if host in HOST_CLEAR:
+            record["host"] = host
         write_json(path, record)
     return {**record, "path": handoff_relpath(task_id)}
 
@@ -326,6 +350,99 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[st
                              "その後 /clear を実行してください。" + AFTER_CLEAR}
 
 
+USAGE_STATE = ".ego/state/usage_limits.json"
+USAGE_ADVICE_STATE = ".ego/state/usage_advice.json"
+USAGE_FRESH = 900
+_WINDOWS = (("five_hour", "5h", "5時間枠"), ("seven_day", "7d", "7日枠"))
+
+
+def _windows(limits: Any) -> list[tuple[str, str, str, float, float]]:
+    """(key, short, label, used %, resets_at) for each usage window still running."""
+    out = []
+    for key, short, label in _WINDOWS:
+        window = limits.get(key) if isinstance(limits, dict) else None
+        try:
+            used, resets = float(window["used_percentage"]), float(window["resets_at"])
+        except (TypeError, KeyError, ValueError):
+            continue
+        if 0 <= used <= 100 and resets > time.time():
+            out.append((key, short, label, used, resets))
+    return out
+
+
+def record_usage(payload: dict[str, Any], fallback_root: Path | None = None) -> str:
+    """Status line command: keep the host-reported usage limits for the Stop hook; return the line to show.
+
+    Claude Code reports `rate_limits` only here (subscription plans, after the first
+    response). Nothing is estimated: without that field the line is empty and nothing is stored.
+    """
+    if not isinstance(payload, dict):
+        return ""
+    workspace = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
+    root = None
+    for candidate in (workspace.get("project_dir"), payload.get("cwd"), fallback_root):
+        if candidate and (Path(str(candidate)) / ".ego").is_dir():
+            root = Path(str(candidate)).resolve()
+            break
+    windows = _windows(payload.get("rate_limits"))
+    if not windows:
+        return ""
+    if root is not None:
+        path = safe_path(root, USAGE_STATE)
+        limits = {key: {"used_percentage": used, "resets_at": resets} for key, _, _, used, resets in windows}
+        prev = read_json(path)
+        # The status line refreshes constantly: rewrite only on change, or to keep the reading fresh.
+        if not isinstance(prev, dict) or prev.get("rate_limits") != limits or time.time() - float(prev.get("at") or 0) > 60:
+            write_json(path, {"at": time.time(), "rate_limits": limits})
+    return "ego · " + " · ".join(f"{short} {used:.0f}%" for _, short, _, used, _ in windows)
+
+
+def usage_advice(root: Path, payload: dict[str, Any], percent: int, hosts: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
+    """Stop-hook output when the usage limit is nearly spent: have the session checkpoint itself, then propose a switch.
+
+    Only the conversation knows what to save, so this asks for one more short turn
+    (decision "block"), once per session and usage window. It never clears or launches anything.
+    """
+    if percent <= 0 or not isinstance(payload, dict) or payload.get("stop_hook_active"):
+        return {}
+    root = root.resolve()
+    state = read_json(safe_path(root, USAGE_STATE))
+    if not isinstance(state, dict) or time.time() - float(state.get("at") or 0) > USAGE_FRESH:
+        return {}  # no recent measurement: stay silent rather than guess
+    windows = [w for w in _windows(state.get("rate_limits")) if w[3] >= percent]
+    if not windows:
+        return {}
+    key, _, label, used, resets = max(windows, key=lambda w: w[3])
+    session = str(payload.get("session_id") or "unknown")[:80]
+    mark = f"{key}:{int(resets)}"
+    advice_path = safe_path(root, USAGE_ADVICE_STATE)
+    with exclusive_lock(safe_path(root, ".ego/locks/usage-advice.lock")):
+        seen = read_json(advice_path, {})
+        seen = seen if isinstance(seen, dict) else {}
+        if seen.get(session, {}).get("mark") == mark:
+            return {}
+        seen[session] = {"mark": mark, "at": time.time()}
+        for old in sorted(seen, key=lambda k: seen[k].get("at", 0))[:-20]:
+            seen.pop(old)
+        write_json(advice_path, seen)
+    others = [h for h in hosts if h in HOST_LAUNCH and h != "claude" and shutil.which(HOST_LAUNCH[h][0])]
+    reset = dt.datetime.fromtimestamp(resets).strftime("%m/%d %H:%M")
+    size = f"{label}の使用率が {used:.0f}%（しきい値 {percent}%、リセット {reset}）"
+    switch = (f"Then run `ego session handoff <task-id> --to <cli> --root .` for the installed alternative(s) "
+              f"({', '.join(others)}) and show the user each `launch_command` so they can continue there. "
+              if others else
+              "No other configured CLI is installed, so tell the user the checkpoint ID and that "
+              f"`ego session resume <task-id>` continues it after the limit resets ({reset}). ")
+    return {"systemMessage": f"ego: {size}に達しました。チェックポイントを自動保存し、切り替え先を提案します。",
+            "decision": "block",
+            "reason": f"ego: the Claude usage limit is nearly spent ({key} {used:.0f}% used, resets {reset}). "
+                      "Do no further task work now. Save this conversation's state with one "
+                      "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... "
+                      "--status <IN_PROGRESS|VERIFIED|BLOCKED|COMPLETED> --root .` (facts only; include uncommitted changes and "
+                      "known failures; reuse the task ID if one was already checkpointed). " + switch +
+                      "Reply to the user briefly in their language, then stop."}
+
+
 def clear_resume(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     """SessionStart(clear) output: inject the pending checkpoint's resume prompt, once."""
     if not isinstance(payload, dict) or payload.get("source") != "clear":
@@ -355,6 +472,86 @@ def clear_resume(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     # additionalContext is silent and starts no turn, so also tell the user what to do next.
     return {"systemMessage": f"ego: チェックポイント {record['task_id']} の再開コンテキストを読み込みました。「続けて」と送ると再開します。",
             "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": resume_prompt(record)}}
+
+
+def list_checkpoints(root: Path, include_completed: bool = False) -> list[dict[str, Any]]:
+    """Bounded summaries, newest first: how a session in any CLI finds what another one saved."""
+    found = []
+    for path in (root.resolve() / ".ego" / "memory" / "handoffs").glob("*.json"):
+        record = read_json(path)
+        if (not isinstance(record, dict) or record.get("schema_version") != SCHEMA or record.get("task_id") != path.stem
+                or (record.get("status") == "COMPLETED" and not include_completed)):
+            continue
+        found.append({"task_id": record["task_id"], "status": record.get("status"), "host": record.get("host"),
+                      "source": record.get("source"), "updated_at": str(record.get("updated_at", "")),
+                      "goal": " ".join(str(record.get("goal", "")).split())[:MAX_LIST_GOAL_CHARS]})
+    return sorted(found, key=lambda r: r["updated_at"], reverse=True)
+
+
+def resolve_task(root: Path, task_id: str | None, from_host: str | None = None) -> str:
+    """An explicit ID, or the most recently saved open interactive checkpoint (of one CLI, with from_host)."""
+    if from_host is not None and from_host not in HOST_CLEAR:
+        raise SEHError("UNKNOWN_HOST", f"Unsupported interactive host: {from_host}", 2)
+    if task_id:
+        return _id(task_id)
+    for item in list_checkpoints(root):
+        if item["source"] == "interactive" and from_host in (None, item["host"]):
+            return item["task_id"]
+    if from_host:
+        raise SEHError("HANDOFF_MISSING", f"No open checkpoint saved by {from_host}. It must be saved there first "
+                       f"(`ego session checkpoint ... --host {from_host}`); `ego session list` shows what exists", 3)
+    raise SEHError("HANDOFF_MISSING", "No open checkpoint; save one with `ego session checkpoint`", 3)
+
+
+def pickup(root: Path, task_id: str | None, from_host: str) -> dict[str, Any]:
+    """Continue, inside the CLI that is already open, the work another CLI checkpointed. Nothing is cleared."""
+    task_id = resolve_task(root, task_id, from_host)
+    record = load_checkpoint(root, task_id)
+    if record is None:
+        raise SEHError("HANDOFF_MISSING", "Save a checkpoint before handing off", 3)
+    return {
+        "task_id": task_id,
+        "from_host": record.get("host"),
+        "checkpoint_path": handoff_relpath(task_id),
+        "checkpoint_status": record["status"],
+        "updated_at": record.get("updated_at"),
+        "instructions": "Continue in this session by following resume_prompt. It is the other CLI's saved "
+                        "checkpoint, not its conversation: verify against files and git diff before relying on it.",
+        "resume_prompt": resume_prompt(record),
+    }
+
+
+def handoff(root: Path, task_id: str | None, to_host: str, from_host: str | None = None) -> dict[str, Any]:
+    """Continue a saved checkpoint in another CLI: a new interactive session that opens on the resume prompt.
+
+    The checkpoint is host-neutral project state, so nothing is converted; no
+    conversation of the previous CLI is read or carried over.
+    """
+    if to_host not in HOST_LAUNCH:
+        raise SEHError("UNKNOWN_HOST", f"Unsupported interactive host: {to_host}", 2)
+    task_id = resolve_task(root, task_id, from_host)
+    record = load_checkpoint(root, task_id)
+    if record is None:
+        raise SEHError("HANDOFF_MISSING", "Save a checkpoint before handing off", 3)
+    prompt = resume_prompt(record)
+    argv = [*HOST_LAUNCH[to_host], prompt]
+    available = shutil.which(argv[0]) is not None
+    return {
+        "task_id": task_id,
+        "from_host": record.get("host"),
+        "to_host": to_host,
+        "checkpoint_path": handoff_relpath(task_id),
+        "checkpoint_status": record["status"],
+        "host_available": available,
+        "launch_argv": argv,
+        "launch_command": shlex.join(argv),
+        "launched": False,
+        "instructions": ("Run launch_command in a terminal at the project root (or rerun with --launch there) to open "
+                         f"{to_host} on the resume prompt. Nothing was started by this command."
+                         if available else
+                         f"{argv[0]} is not installed on PATH. Install it, or open {to_host} manually and send resume_prompt."),
+        "resume_prompt": prompt,
+    }
 
 
 def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dict[str, Any]:

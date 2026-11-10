@@ -218,3 +218,135 @@ print(json.dumps({'status':status,'response':'echo:'+prompt+';'+' '.join(a for a
     assert '--dangerously-skip-permissions' in result.output
     assert result.usage=={'input_tokens':100,'output_tokens':5,'cache_read_tokens':40,'cache_creation_tokens':0,'turns':1}
     assert run_agent('agy','boom',tmp_path,read_only=False).status=='FAIL'
+
+
+def test_checkpoint_records_saving_host_and_keeps_it_across_revisions(tmp_path: Path, monkeypatch):
+    for name in _HOST_VARS: monkeypatch.delenv(name, raising=False)
+    assert "host" not in save_checkpoint(tmp_path, "t0", goal="g")  # unknown stays unknown, never guessed
+    assert save_checkpoint(tmp_path, "t1", goal="g", host="codex")["host"] == "codex"
+    assert save_checkpoint(tmp_path, "t1", goal="g2")["host"] == "codex"
+    assert save_checkpoint(tmp_path, "t1", goal="g3", host="opencode")["host"] == "opencode"
+    with pytest.raises(SEHError, match="Unsupported interactive host"):
+        save_checkpoint(tmp_path, "t1", goal="g", host="vim")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    assert main(["session", "checkpoint", "--root", str(tmp_path), "--task-id", "t2", "--goal", "g"]) == 0
+    assert load_checkpoint(tmp_path, "t2")["host"] == "claude"
+
+
+def test_any_cli_can_find_and_hand_off_another_clis_checkpoint(tmp_path: Path, monkeypatch, capsys):
+    from ego.session import handoff, list_checkpoints, resolve_task
+    with pytest.raises(SEHError, match="No open checkpoint"):
+        resolve_task(tmp_path, None)
+    save_checkpoint(tmp_path, "old-1", goal="Earlier work", host="claude")
+    save_checkpoint(tmp_path, "done-1", goal="Finished", status="COMPLETED", host="claude")
+    save_checkpoint(tmp_path, "run-1", goal="Managed run", source="managed")
+    save_checkpoint(tmp_path, "feat-7", goal="Add   retry\nbackoff", next_steps=["wire config flag"],
+                    completed=["unit tests passed"], host="codex")
+    # Deterministic order regardless of clock resolution.
+    for i, task in enumerate(["old-1", "done-1", "feat-7", "run-1"]):
+        path = tmp_path / ".ego/memory/handoffs" / f"{task}.json"
+        record = json.loads(path.read_text()); record["updated_at"] = f"2026-01-01T00:00:0{i}+00:00"
+        path.write_text(json.dumps(record))
+    listed = list_checkpoints(tmp_path)
+    assert [x["task_id"] for x in listed] == ["run-1", "feat-7", "old-1"]
+    assert listed[1] == {"task_id": "feat-7", "status": "IN_PROGRESS", "host": "codex", "source": "interactive",
+                         "updated_at": "2026-01-01T00:00:02+00:00", "goal": "Add retry backoff"}
+    assert "done-1" in [x["task_id"] for x in list_checkpoints(tmp_path, include_completed=True)]
+    # Default is the latest open interactive checkpoint, not a managed run's.
+    assert resolve_task(tmp_path, None) == "feat-7"
+
+    monkeypatch.setattr("ego.session.shutil.which", lambda name: f"/bin/{name}")
+    expected = {"claude": ["claude"], "codex": ["codex"], "opencode": ["opencode", "--prompt"],
+                "agy": ["agy", "--prompt-interactive"]}
+    for host, prefix in expected.items():
+        info = handoff(tmp_path, None, host)
+        assert (info["task_id"], info["from_host"], info["to_host"]) == ("feat-7", "codex", host)
+        assert info["launch_argv"][:-1] == prefix and info["launch_argv"][-1] == info["resume_prompt"]
+        assert "wire config flag" in info["resume_prompt"] and info["launched"] is False
+        import shlex
+        assert shlex.split(info["launch_command"]) == info["launch_argv"]
+    assert handoff(tmp_path, "old-1", "agy")["task_id"] == "old-1"
+    with pytest.raises(SEHError, match="Save a checkpoint"):
+        handoff(tmp_path, "nope", "codex")
+
+    capsys.readouterr()
+    assert main(["session", "list", "--root", str(tmp_path)]) == 0
+    assert [x["task_id"] for x in json.loads(capsys.readouterr().out)] == ["run-1", "feat-7", "old-1"]
+    assert main(["session", "resume", "--host", "opencode", "--root", str(tmp_path)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["task_id"] == "feat-7" and out["clear_command"] == "/new"
+    assert main(["session", "handoff", "--to", "claude", "--root", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["launch_argv"][0] == "claude"
+
+
+def test_handoff_launch_refuses_without_terminal_or_cli(tmp_path: Path, monkeypatch, capsys):
+    save_checkpoint(tmp_path, "feat-7", goal="g", host="claude")
+    called = []
+    monkeypatch.setattr("ego.cli.os.execvp", lambda *a: called.append(a))
+    monkeypatch.setattr("ego.session.shutil.which", lambda name: None)
+    assert main(["session", "handoff", "feat-7", "--to", "codex", "--launch", "--root", str(tmp_path)]) == 3
+    monkeypatch.setattr("ego.session.shutil.which", lambda name: f"/bin/{name}")
+    assert main(["session", "handoff", "feat-7", "--to", "codex", "--launch", "--root", str(tmp_path)]) == 3  # pytest: no TTY
+    assert called == []
+    io = capsys.readouterr()
+    assert "HOST_UNAVAILABLE" in io.out + io.err and "LAUNCH_NEEDS_TTY" in io.out + io.err
+    monkeypatch.setattr("ego.cli.sys.stdin.isatty", lambda: True, raising=False)
+    monkeypatch.setattr("ego.cli.sys.stdout.isatty", lambda: True, raising=False)
+    monkeypatch.setattr("ego.cli.os.chdir", lambda p: None)
+    main(["session", "handoff", "feat-7", "--to", "codex", "--launch", "--root", str(tmp_path)])
+    assert called and called[0][0] == "codex" and called[0][1][0] == "codex"
+
+
+_HOST_VARS = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_CI", "OPENCODE",
+              "ANTIGRAVITY_AGENT", "ANTIGRAVITY_CONVERSATION_ID")
+
+
+def test_saving_cli_is_detected_only_when_unambiguous(monkeypatch):
+    from ego.session import detect_host
+    for name in _HOST_VARS: monkeypatch.delenv(name, raising=False)
+    assert detect_host() is None
+    for name, host in [("CLAUDECODE", "claude"), ("CODEX_THREAD_ID", "codex"), ("OPENCODE", "opencode"),
+                       ("ANTIGRAVITY_AGENT", "agy")]:
+        monkeypatch.setenv(name, "1")
+        assert detect_host() == host
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("CODEX_THREAD_ID", "t"); monkeypatch.setenv("CLAUDECODE", "1")  # one CLI started inside another
+    assert detect_host() is None
+
+
+def test_continue_another_clis_work_inside_the_open_cli(tmp_path: Path, monkeypatch, capsys):
+    for name in _HOST_VARS: monkeypatch.delenv(name, raising=False)
+    root = str(tmp_path)
+    # Codex saves; its environment identifies it without --host.
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    assert main(["session", "checkpoint", "--root", root, "--task-id", "feat-7", "--goal", "Add retry backoff",
+                 "--completed", "unit tests passed", "--next", "wire config flag"]) == 0
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    assert main(["session", "checkpoint", "--root", root, "--task-id", "docs-2", "--goal", "Rewrite docs"]) == 0
+    monkeypatch.delenv("CLAUDECODE")
+    capsys.readouterr()
+    # AGY: "continue from codex". The newer claude checkpoint is not picked.
+    monkeypatch.setenv("ANTIGRAVITY_AGENT", "1")
+    assert main(["session", "resume", "--from", "codex", "--root", root]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert (out["task_id"], out["from_host"], out["checkpoint_status"]) == ("feat-7", "codex", "IN_PROGRESS")
+    assert "wire config flag" in out["resume_prompt"] and "clear_command" not in out
+    assert main(["session", "resume", "--from", "claude", "--root", root]) == 0
+    assert json.loads(capsys.readouterr().out)["task_id"] == "docs-2"
+    # Nothing saved by that CLI: say so, never fall back to someone else's task.
+    assert main(["session", "resume", "--from", "opencode", "--root", root]) == 3
+    io = capsys.readouterr()
+    assert "No open checkpoint saved by opencode" in io.out + io.err
+    # A later checkpoint from AGY takes the task over.
+    assert main(["session", "checkpoint", "--root", root, "--task-id", "feat-7", "--goal", "Add retry backoff",
+                 "--status", "VERIFIED"]) == 0
+    assert load_checkpoint(tmp_path, "feat-7")["host"] == "agy"
+    capsys.readouterr()
+    monkeypatch.setattr("ego.session.shutil.which", lambda name: f"/bin/{name}")
+    assert main(["session", "handoff", "--from", "agy", "--to", "opencode", "--root", root]) == 0
+    assert json.loads(capsys.readouterr().out)["task_id"] == "feat-7"
+    # Plain resume (clearing this CLI) uses the detected host's own instructions.
+    assert main(["session", "resume", "feat-7", "--root", root]) == 0
+    assert json.loads(capsys.readouterr().out)["clear_command"] is None
+    assert "session resume --from" in instruction_block(Config())

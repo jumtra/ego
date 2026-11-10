@@ -6,7 +6,7 @@
 
 Bring planning, task routing, tests, and memory to Claude Code, Codex, OpenCode, and Antigravity.
 
-![Version](https://img.shields.io/badge/version-0.0.5-2563eb)
+![Version](https://img.shields.io/badge/version-0.0.6-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
@@ -145,6 +145,8 @@ Launch your favorite AI CLI inside the project and describe your goal:
 
 **Use `/work` as your everyday entry point.** The AI automatically operates internal `ego` subcommands:
 - Investigate → plan & split tasks → implement → test & verify → report diff
+- Before editing, it confirms why the change is wanted and how completion is judged. It asks one question at a time only when an unresolved point would change what gets built and a wrong guess would be costly; otherwise it proceeds and lists its assumptions in the report
+- Large or multi-host runs carry each stage's `intent`, `done_when`, `non_goals`, `assumptions` and `provides` into the worker prompts, so a stage knows why it exists and what later stages rely on
 
 The final report includes a token usage line printed by `ego` (for example `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`). Tokens are input + output + cache read + cache creation, and the figure is reported as printed.
 

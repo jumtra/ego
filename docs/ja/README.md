@@ -6,7 +6,7 @@
 
 Claude Code・Codex・OpenCode・Antigravityに、計画・分担・テスト・記憶を。
 
-![Version](https://img.shields.io/badge/version-0.0.5-2563eb)
+![Version](https://img.shields.io/badge/version-0.0.6-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
@@ -149,6 +149,8 @@ provider = "none"               # "none" / "codegraph" / "graphify"
 
 **普段の入口は `/work` です。** AIが自動的に必要な `ego` サブコマンドを内部で呼び出します：
 - 調査 → 計画・タスク分割 → 実装 → テスト検証 → 結果報告
+- 編集前に「なぜ必要か」と「何をもって完了か」を確認します。結論が変わる未確定点があり、誤推測のやり直しが高くつく場合に限り、質問は1問ずつ行います。それ以外は前提を置いて進め、報告に前提を明記します
+- 大規模・複数ホストの実行では、各ステージの `intent`・`done_when`・`non_goals`・`assumptions`・`provides` をワーカーへのプロンプトに渡します。ステージが存在する理由と、後続ステージが何に依存するかを把握できます
 
 ---
 

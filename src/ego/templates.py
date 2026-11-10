@@ -6,7 +6,8 @@ from .config import Config
 
 # Refresh only exact, unmodified earlier defaults (v0.0.4, v0.0.5); preserve authored skills.
 LEGACY_WORK_HASHES = {"b9369f340f37af0f731e8eb03f0c8e1e6529be80ce1b63941bada4b6ea52ee88",
-                      "f14c28b7aa27cb52873960a1efda8b6618e6e9c1f006ce3c246c4ce8dcad3844"}
+                      "f14c28b7aa27cb52873960a1efda8b6618e6e9c1f006ce3c246c4ce8dcad3844",
+                      "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a"}
 
 SKILLS = {
 "harness-init": (
@@ -34,6 +35,8 @@ Choose the **smallest useful workflow** and keep context small: read only the fi
 
 Prefer direct user instructions over ceremonial workflow. Write formal documents only when requested or needed for a decision.
 
+**Intent first, questions only when needed:** at any size, before editing you can state in one line each why the user wants this and what will show it is done. When the request, the code and memory answer both, proceed without asking. Ask when an open point would change what you build and a wrong guess would be costly to undo: one question at a time, each with your recommended answer. Stop asking once the remaining points have safe defaults, and state those assumptions in the report. In a managed run, put the answers in task-level `instructions`.
+
 **Always:**
 - You operate the harness for the user. `/work` is the entry point; do not ask the user to compose task JSON or type routine CLI commands.
 - Never infer approval from a successful test. Applying staged changes needs authorization.
@@ -54,7 +57,7 @@ WORK_REFERENCES = {
 For large or cross-component work needing dependency scheduling or several hosts. Check `ego work run --help` before first use.
 
 1. Inspect the project and choose an available authenticated host and a narrow write scope. Run `ego work plan --root . --goal "<goal>" --host <host> --scope '<paths>' --execute --out <task-file>`. This invokes an external planning CLI; respect existing execution permissions. Do not use mock for real implementation.
-2. Read the generated task JSON. Verify prompts, dependencies, host/model routes, write_allowlist and checks. Node prompts say what to achieve and why, with acceptance criteria; they do not dictate implementation. Add focused test commands as argv arrays in each node's checks, and a final gate with integration checks depending on all implementation nodes. Explain the short plan in conversation and obtain any required approval.
+2. Read the generated task JSON. Verify prompts, dependencies, host/model routes, write_allowlist and checks. Node prompts say what to achieve; they do not dictate implementation. Each node carries `intent` (one sentence: why the goal needs it); agent nodes carry `done_when` (observable acceptance criteria) and, only where they apply, `non_goals`, `assumptions` and `provides` (what dependent nodes rely on). Keep them short, correct any that misread the user's intent, and put answers the user gave during clarification into task-level `instructions` so every worker sees them. Add focused test commands as argv arrays in each node's checks, and a final gate with integration checks depending on all implementation nodes. Explain the short plan in conversation and obtain any required approval.
 3. Run `ego work run --root . --task <task-file> --host <host> --trust-cli`. The output is a compact summary: run_id, final_status, node_status, changed_files, clipped failures and usage. Open `record_path` or pass `--verbose` only when the summary is not enough. A PASSED run without applied=true is verified but unapplied. Report failures; do not apply failed runs.
 4. After reviewing a PASSED result and obtaining authorization to apply, run `ego work resume <run-id> --root . --task <task-file> --host <host> --trust-cli --apply --approve`. Keep the task JSON unchanged. Never infer approval from a successful test or bypass STALE_BASE. Inspect the applied diff and report evidence.
 
@@ -90,6 +93,8 @@ Status is IN_PROGRESS while work remains, BLOCKED on a blocker, VERIFIED for ver
 Then run `ego session resume <id> --host <host> --root .`. In an idle interactive Claude Code or Codex session use `/clear`, in OpenCode `/new`, then send `resume_prompt`. If a safe clear is unavailable, instruct the user to start a new session; never claim the context was cleared when it wasn't. During an indivisible step, prefer `/compact` over clearing. Only request manual user actions when the host cannot safely perform them.
 
 When `ego session resume` returns `auto_resume_after_clear: true` (Claude Code with `clear_suggest_tokens` set in `.ego/config.toml`), the user only needs to run `/clear`: the resume prompt is injected automatically, and the host itself suggests the clear once the measured context passes the threshold.
+
+Checkpoints are shared by every CLI in the project (Claude Code, Codex, OpenCode, AGY) and record which one saved them. To pick up another CLI's work in this session, run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt` (no clear needed); `ego session list --root .` shows all open checkpoints. To send work the other way, checkpoint, then give the user the `launch_command` from `ego session handoff <id> --to <cli> --root .`; you cannot open the other CLI yourself.
 
 Managed runs and goal loops checkpoint automatically under their run or loop ID, with a new CLI session per node.
 """,
@@ -139,11 +144,17 @@ def generated_files(cfg: Config) -> dict[str, str]:
         hooks: dict[str, list] = {}
         if cfg.profile == "full":
             hooks["PreToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "ego hook pre-tool --root ."}]}]
-        if cfg.clear_suggest_tokens > 0:
+        if cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0:
             hooks["Stop"] = [{"hooks": [{"type": "command", "command": 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'}]}]
+        if cfg.clear_suggest_tokens > 0:
             hooks["SessionStart"] = [{"matcher": "clear", "hooks": [{"type": "command", "command": 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'}]}]
-        if hooks:
-            files[".claude/settings.json"] = json.dumps({"hooks": hooks}, indent=2) + "\n"
+        settings: dict = {"hooks": hooks} if hooks else {}
+        if cfg.usage_switch_percent > 0:
+            # The status line input is the only place Claude Code reports the remaining usage limit;
+            # this command records it for the Stop hook and prints it. It takes the project from that input.
+            settings["statusLine"] = {"type": "command", "command": "ego hook statusline"}
+        if settings:
+            files[".claude/settings.json"] = json.dumps(settings, indent=2) + "\n"
     if any(h in cfg.hosts for h in ("codex", "opencode", "agy")):
         for name in SKILLS:
             files[f".agents/skills/{name}/SKILL.md"] = skill_md(name)
@@ -176,6 +187,7 @@ def instruction_block(cfg: Config) -> str:
             "## Self-Evolve Harness (short contract)\n"
             "Prefer direct changes and focused tests; do NOT create requirements/design/plan docs for every small task. "
             "At verified boundaries checkpoint compact facts (`ego session checkpoint`), then start fresh and resume from memory if needed. "
+            "When asked to continue another CLI's work (\"continue from codex\", 「codexの続きから」), run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt`. "
             "State completion explicitly, never claim unverified or unapplied work is done. "
             "For Skill/prompt changes use existing eval/author gates. Keep edits scoped and approved. "
             "Only invoke `ego optimize` on explicit request. "

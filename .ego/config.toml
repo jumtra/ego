@@ -32,3 +32,4 @@ cleanup_worktree = true
 tests = []
 allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"]
 clear_suggest_tokens = 120000
+usage_switch_percent = 85

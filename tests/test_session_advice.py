@@ -202,3 +202,79 @@ def test_concurrent_checkpoints_and_arming_lose_nothing(tmp_path: Path):
     assert sorted(_pending_tasks(tmp_path)) == ["par-0", "par-1", "par-2", "par-3"]
     # Same-ID writers serialize: every save is counted and the file is always one whole record.
     assert [load_checkpoint(tmp_path, f"par-{k}")["revision"] for k in range(4)] == [10, 10, 10, 10]
+
+
+def _status(root: Path, five: float | None, seven: float | None = None, resets: float | None = None) -> dict:
+    import time
+    resets = resets or time.time() + 3600
+    limits = {}
+    if five is not None: limits["five_hour"] = {"used_percentage": five, "resets_at": resets}
+    if seven is not None: limits["seven_day"] = {"used_percentage": seven, "resets_at": resets + 86400}
+    return {"session_id": "s1", "cwd": str(root), "workspace": {"project_dir": str(root)}, "rate_limits": limits}
+
+
+def test_usage_limit_is_recorded_only_from_the_host_report(tmp_path: Path):
+    from ego.session import record_usage, usage_advice
+    (tmp_path / ".ego").mkdir()
+    assert record_usage({"workspace": {"project_dir": str(tmp_path)}}) == ""  # API key / before first response
+    assert not (tmp_path / ".ego/state/usage_limits.json").exists()
+    assert usage_advice(tmp_path, {"session_id": "s1"}, 85, ["claude", "codex"]) == {}  # unmeasured: silent
+    assert record_usage(_status(tmp_path, 41.6, 12)) == "ego · 5h 42% · 7d 12%"
+    assert read_json(tmp_path / ".ego/state/usage_limits.json")["rate_limits"]["five_hour"]["used_percentage"] == 41.6
+    assert usage_advice(tmp_path, {"session_id": "s1"}, 85, ["claude", "codex"]) == {}  # below threshold
+    import time
+    assert record_usage(_status(tmp_path, 99, resets=time.time() - 5)) == ""  # window already reset: dropped
+
+
+def test_near_usage_limit_asks_for_a_checkpoint_and_proposes_installed_clis_once(tmp_path: Path, monkeypatch):
+    from ego.session import record_usage, usage_advice
+    (tmp_path / ".ego").mkdir()
+    monkeypatch.setattr("ego.session.shutil.which", lambda name: f"/bin/{name}" if name in ("codex", "agy") else None)
+    record_usage(_status(tmp_path, 91.2, 40))
+    hosts = ["claude", "codex", "opencode", "agy"]
+    assert usage_advice(tmp_path, {"session_id": "s1"}, 0, hosts) == {}  # off by default
+    assert usage_advice(tmp_path, {"session_id": "s1", "stop_hook_active": True}, 85, hosts) == {}  # never loops
+    out = usage_advice(tmp_path, {"session_id": "s1"}, 85, hosts)
+    assert out["decision"] == "block" and "ego session checkpoint" in out["reason"]
+    assert "ego session handoff" in out["reason"] and "(codex, agy)" in out["reason"] and "opencode" not in out["reason"]
+    assert "91%" in out["systemMessage"] and "5時間枠" in out["systemMessage"]
+    assert usage_advice(tmp_path, {"session_id": "s1"}, 85, hosts) == {}  # once per session and window
+    assert usage_advice(tmp_path, {"session_id": "s2"}, 85, hosts)["decision"] == "block"  # other sessions save too
+    # A new window (after the reset) can trigger again; the weekly window counts as well.
+    record_usage(_status(tmp_path, 10, 97))
+    again = usage_advice(tmp_path, {"session_id": "s1"}, 85, hosts)
+    assert "7日枠" in again["systemMessage"] and "seven_day 97%" in again["reason"]
+    # Nothing else installed: no switch target is invented.
+    monkeypatch.setattr("ego.session.shutil.which", lambda name: None)
+    alone = usage_advice(tmp_path, {"session_id": "s3"}, 85, hosts)
+    assert "ego session handoff" not in alone["reason"] and "after the limit resets" in alone["reason"]
+    # A stale reading is not acted on.
+    state = read_json(tmp_path / ".ego/state/usage_limits.json"); state["at"] -= 3600
+    (tmp_path / ".ego/state/usage_limits.json").write_text(json.dumps(state))
+    assert usage_advice(tmp_path, {"session_id": "s4"}, 85, hosts) == {}
+
+
+def test_usage_switch_hooks_and_statusline_cli(tmp_path: Path, monkeypatch, capsys):
+    cfg = Config(); cfg.usage_switch_percent = 85
+    settings = json.loads(generated_files(cfg)[".claude/settings.json"])
+    assert set(settings["hooks"]) == {"Stop"}  # no SessionStart(clear) hook without clear_suggest_tokens
+    assert settings["statusLine"] == {"type": "command", "command": "ego hook statusline"}
+    cfg.usage_switch_percent = 30
+    with pytest.raises(SEHError):
+        cfg.validate()
+    (tmp_path / ".ego").mkdir()
+    (tmp_path / ".ego/config.toml").write_text("usage_switch_percent = 85\nclear_suggest_tokens = 120000\n")
+    monkeypatch.chdir(tmp_path.parent)  # the status line command gets its project from the input, not the cwd
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_status(tmp_path, 93))))
+    assert main(["hook", "statusline"]) == 0
+    assert capsys.readouterr().out.strip() == "ego · 5h 93%"
+    monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
+    assert main(["hook", "statusline"]) == 0 and capsys.readouterr().out.strip() == ""
+    # The usage limit outranks the context-size suggestion on the same Stop.
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_stop(tmp_path, 200000))))
+    assert main(["hook", "stop", "--root", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "block"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_stop(tmp_path, 200000))))
+    assert main(["hook", "stop", "--root", str(tmp_path)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "decision" not in out and "/clear" in out["systemMessage"]

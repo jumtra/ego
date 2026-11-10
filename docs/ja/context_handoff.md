@@ -45,6 +45,45 @@ ego session resume bug-142 --host claude --root .
 | OpenCode | `/new`（別名`/clear`） | `resume_prompt`を送る |
 | AGY | 自動実行・クリア未保証 | UIで新しいセッションを開き、`resume_prompt`を送る |
 
+`task_id`を省略すると、未完了の対話チェックポイントのうち最新のものを使います。
+
+### CLI間の引き継ぎ（Claude Code / Codex / OpenCode / AGY）
+
+チェックポイントはプロジェクト内の`.ego/memory/handoffs/`にあるHost非依存のJSONなので、保存したCLIと別のCLIでそのまま再開できます。変換や、前のCLIの会話ログの読み込みは行いません。
+
+**開いているCLIの中で、別CLIの続きから再開する**（例：AGYで「codexの続きから」）
+
+各CLIの常時ロード指示（`CLAUDE.md` / `AGENTS.md`）に手順が入っているので、「codexの続きから」「claudeの続きを」などと頼むだけで、そのCLIが次を実行して続行します。クリアや再起動は不要です。
+
+```bash
+ego session resume --from codex --root .   # Codexが最後に保存した未完了チェックポイントの resume_prompt を返す
+```
+
+保存元CLIは、各CLIが子プロセスに渡す環境変数（Claude Code: `CLAUDECODE`、Codex: `CODEX_THREAD_ID`、OpenCode: `OPENCODE`、AGY: `ANTIGRAVITY_AGENT`）から自動で記録します。判定できない、または複数が同時に見える場合は記録しないので、`--host`で明示してください。指定したCLIが保存したチェックポイントが無い場合は`HANDOFF_MISSING`を返し、他CLIのタスクを代わりに渡すことはしません。引き継ぎ元のCLIで先に「チェックポイントを保存して」と依頼しておく必要があります。
+
+**別のCLIを新しく起動して引き継ぐ**
+
+```bash
+# 保存側（例：Codex）。保存元CLIは自動記録（判定できないときは --host codex）
+ego session checkpoint --root . --task-id bug-142 --goal '...' --next '...'
+# どのCLIからでも：未完了チェックポイントと保存元CLIを一覧（--all で完了済みも表示）
+ego session list --root .
+# 引き継ぎ先CLIの起動コマンドと再開プロンプトを出力
+ego session handoff bug-142 --to claude --root .
+ego session handoff --from codex --to agy --root .   # ID省略：Codexの最新チェックポイントをAGYへ
+# 端末から直接、引き継ぎ先CLIを再開プロンプト付きで起動
+ego session handoff bug-142 --to claude --root . --launch
+```
+
+| 引き継ぎ先 | 起動コマンド（`launch_command`） |
+|---|---|
+| Claude Code | `claude '<resume_prompt>'` |
+| Codex | `codex '<resume_prompt>'` |
+| OpenCode | `opencode --prompt '<resume_prompt>'` |
+| AGY | `agy --prompt-interactive '<resume_prompt>'` |
+
+`handoff`は既定では何も起動せず、コマンドを表示するだけです。`--launch`は実端末でのみ動作し（エージェントの内側からは`LAUNCH_NEEDS_TTY`で拒否）、引き継ぎ先CLIが未導入なら`HOST_UNAVAILABLE`になります。引き継がれるのはチェックポイントの内容だけなので、未コミットの変更は作業ツリーに残したまま、新しいCLI側でGit diffとテストを再確認してください。
+
 会話を途中で切れない作業、未検証の変更がある作業では、無理にクリアせず先にチェックポイントを保存し、必要ならホスト固有の`/compact`を使います。クリアの前後で、Git diff・実ファイル・テスト出力を再点検します。コンテキストは「会話ログ全部」ではなく「目的／実測結果／次の作業／必要なファイルへの参照」のみです。
 
 `resume_prompt`は次のセッションのコンテキストにそのまま入るため、最大1600文字（Managed Taskのノードへは1000文字）に収めます。優先順は「次の作業→ブロッカー→決定→完了済み→証跡」で、重複は除き、入り切らない項目があるときだけチェックポイントファイルへの参照を1行付けます。全項目が収まっていればファイルを読み直す必要はありません。`ego session checkpoint`の出力も保存内容を繰り返さず、`task_id`・`status`・`revision`・`path`だけを返します。
@@ -121,3 +160,12 @@ ego work loop-apply <loop_id> --root . --approve   # VERIFIED を確認してか
 - **しないこと**：チャットの消去、ターンのブロック、モデル呼び出し、モデルのコンテキストへの追記（提案時）はしません。hook の失敗がターンを止めることもありません。
 - Codex / OpenCode には同等の仕組みが無いため、従来どおり手動です。
 
+## 10. 使用量上限が近いときの自動保存と切り替え提案（Claude Code、任意）
+
+`.ego/config.toml` に `usage_switch_percent = 85` のように設定して `ego sync --apply` すると、`.claude/settings.json` に Stop hook とステータスライン（`ego hook statusline`）が生成されます。既定は 0（無効）です。
+
+- **計測**：Claude Code が残り使用量を渡すのはステータスラインの入力（`rate_limits` の5時間枠・7日枠）だけなので、ステータスラインコマンドがそれを `.ego/state/usage_limits.json` に記録し、`ego · 5h 82% · 7d 41%` と表示します。値はホストの報告そのままで、推定はしません。Pro / Max などのサブスクリプションで、セッション最初の応答後にのみ得られます（APIキー利用では出ないため何も起きません）。
+- **自動保存**：ターン終了時に、15分以内の記録でどちらかの枠の使用率がしきい値以上なら、Stop hook がそのセッションに「作業を進めずにチェックポイントを保存する」短い追加ターンを1回だけ依頼します。保存内容を知っているのは会話中のモデルだけなので、この1ターン分の使用量は消費します（しきい値を100%近くにしすぎないでください）。同じセッション・同じ枠では1回限りで、枠がリセットされるとまた有効になります。
+- **切り替え提案**：保存後、`hosts` に設定済みかつインストール済みの他CLI（Codex / OpenCode / AGY）について `ego session handoff <id> --to <cli>` の `launch_command` を提示します。切り替え先のCLIを起動して貼り付けるか、すでに開いているCLIで「claudeの続きから」と頼めば続行できます。他CLIが無ければ、リセット時刻と再開方法だけを伝えます。
+- **しないこと**：CLIの自動起動、チャットの消去、使用量の推定、認証情報や使用量APIへのアクセスはしません。長い1ターンの途中で上限に達した場合は、ターンが終わらないため保存できません。
+- **注意**：プロジェクトの `statusLine` はユーザー設定のステータスラインより優先されます。自前のステータスラインを使い続けたい場合は、その中で入力JSONを `ego hook statusline` にも渡してください。Codex / OpenCode / AGY は残り使用量を取得する手段が無いため対象外です。
