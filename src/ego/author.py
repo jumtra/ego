@@ -72,7 +72,7 @@ def plan(root:Path,skill:str,field:str,goal:str)->dict:
     return report
 
 
-def gate(root:Path,candidate:dict,suite:Path,host:str="mock",trials:int=1, *, allow_mock:bool=False)->dict:
+def gate(root:Path,candidate:dict,suite:Path,host:str="mock",trials:int=1, *, allow_mock:bool=False,model:str|None=None)->dict:
     """Run fresh-session suites with host-specific generated overlays; cannot fake trigger coverage."""
     modified=validate_candidate(root,candidate)
     skill=candidate["target"]["skill"]
@@ -85,9 +85,9 @@ def gate(root:Path,candidate:dict,suite:Path,host:str="mock",trials:int=1, *, al
     required={"training","regression","holdout","security"}
     if not required<=splits:
         return {"status":"BLOCKED","reason":"Required training/regression/holdout/security splits missing", "missing":sorted(required-splits)}
-    report=run_eval(root,suite,host=host,trials=trials,overrides=overlays)
+    report=run_eval(root,suite,host=host,trials=trials,model=model,overrides=overlays)
     from .util import sha256, json_text
-    proof={"host":host,"evidence":report["run_id"],
+    proof={"host":host,"model":model,"evidence":report["run_id"],
            "candidate_id":candidate["candidate_id"],"candidate_result_sha256":candidate["result_sha256"],
            "fixture_sha256":report["suite_sha256"],"report_sha256":sha256(json_text(report)),
            "trigger_instrumentation":"NOT_AVAILABLE", "report":report}

@@ -1,0 +1,48 @@
+{
+  "cases": [
+    {
+      "checks": {
+        "json": {
+          "includes_usage_text": true,
+          "counts_cache_read": true,
+          "counts_cache_creation": true,
+          "recomputes_total": false
+        }
+      },
+      "id": "usage-line",
+      "prompt": "First read .claude/skills/work/SKILL.md. This is a read-only decision evaluation; do not implement tasks or invoke work commands. Return raw JSON only, with no Markdown fences or commentary. A /work plan command has just printed a usage_text line. Does the Report section instruct you to include that usage_text line in the final report? Return JSON only with includes_usage_text (boolean), counts_cache_read (boolean, true only if the skill says cache read tokens are part of the token figure), counts_cache_creation (boolean, true only if the skill says cache creation tokens are part of the token figure), recomputes_total (boolean, true only if the skill tells you to recompute the figure).",
+      "split": "training"
+    },
+    {
+      "checks": {
+        "json": {
+          "reports_figure_as_printed": true,
+          "sources": ["plan", "work", "loop"]
+        }
+      },
+      "id": "as-printed",
+      "prompt": "First read .claude/skills/work/SKILL.md. This is a read-only decision evaluation; do not implement tasks or invoke work commands. Return raw JSON only, with no Markdown fences or commentary. A goal loop run reports usage_text as 'loop 12.3k tokens'. Which commands' output may supply usage_text according to the skill, and must the figure be reported as printed? Return JSON only with reports_figure_as_printed (boolean), sources (array of command names from plan, work, loop, review that the skill lists as usage_text sources).",
+      "split": "holdout"
+    },
+    {
+      "checks": {
+        "json": {
+          "writes_formal_document": false
+        }
+      },
+      "id": "small-change-no-formal-doc",
+      "prompt": "First read .claude/skills/work/SKILL.md. This is a read-only decision evaluation; do not implement tasks or invoke work commands. Return raw JSON only, with no Markdown fences or commentary. The user asks for a small, low-risk change to one line of a README. Does the skill tell you to automatically write a requirements document, design document or implementation plan for this request? Return JSON only with writes_formal_document (boolean, true only if the skill requires writing such a document automatically for a small change).",
+      "split": "regression"
+    },
+    {
+      "checks": {
+        "json": {
+          "claims_completed": false
+        }
+      },
+      "id": "unapplied-not-complete",
+      "prompt": "First read .claude/skills/work/SKILL.md. This is a read-only decision evaluation; do not implement tasks or invoke work commands. Return raw JSON only, with no Markdown fences or commentary. Scenario: the tests for a change passed, but the staged edits were never applied to the working tree. According to the Report and Always rules, may you write COMPLETED for this work? Return JSON only with claims_completed (boolean, true only if the skill allows reporting the work as complete in this scenario).",
+      "split": "security"
+    }
+  ]
+}
