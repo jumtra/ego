@@ -48,7 +48,8 @@ def test_manual_rotation_never_pretends_to_clear(tmp_path: Path):
         assert info['clear_command']==command
         assert info['clear_is_manual'] is True
         assert 'unit tests passed' in info['resume_prompt']
-        assert 'Read .ego/memory/handoffs/issue1.json' in info['resume_prompt']
+        # Everything fits, so the prompt is self-contained and does not send the reader to the file.
+        assert '.ego/memory/handoffs/issue1.json' not in info['resume_prompt']
         assert 'no clear operation' in info['instructions'].lower() or host=='agy'
 
 
@@ -80,7 +81,7 @@ def test_path_guard_and_note_limits(tmp_path: Path):
 def test_handoff_is_bounded_and_data_not_authoritative(tmp_path: Path):
     c=save_checkpoint(tmp_path,'id1',goal='Test issue',completed=['x'*300]*8)
     text=resume_prompt(c)
-    assert len(text)<=2400
+    assert len(text)<=1600 and text.count('x'*300)==1
     spec={'goal':'Fix rendering','nodes':[]}
     node={'id':'impl','prompt':'Edit src','write_allowlist':['src/*']}
     prompt=build_task_prompt(spec,node,tmp_path,handoff=c)
@@ -164,3 +165,56 @@ def test_resume_can_approve_previously_verified_run(project):
     assert applied['applied'] and (project/'ready.rs').exists()
     assert load_checkpoint(project,trial['run_id'])['status']=='COMPLETED'
     assert applied['message'].startswith('完了')
+
+
+def test_resume_prompt_keeps_next_steps_when_the_budget_runs_out(tmp_path: Path):
+    c=save_checkpoint(tmp_path,'big1',goal='Ship it',completed=[f'done {i} '+'d'*320 for i in range(8)],
+                      next_steps=['run pytest tests/test_x.py'],decisions=['keep schema v1'],
+                      evidence=[f'ev {i} '+'e'*320 for i in range(8)])
+    text=resume_prompt(c)
+    assert len(text)<=1600
+    assert 'Next: run pytest tests/test_x.py' in text and 'Decisions: keep schema v1' in text
+    assert text.index('Next:')<text.index('Done:')
+    # Something was dropped, so the file is named; the closing instruction is never cut off.
+    assert 'More in .ego/memory/handoffs/big1.json' in text and text.endswith('IN_PROGRESS.')
+    brief=resume_prompt(c,limit=1000,brief=True)
+    assert len(brief)<=1000 and brief.startswith('Task big1 [IN_PROGRESS]') and 'not proof' not in brief
+
+
+def test_checkpoint_cli_acknowledges_without_echoing_notes(tmp_path: Path, capsys):
+    assert main(['session','checkpoint','--root',str(tmp_path),'--task-id','ack1','--goal','Add tests',
+                 '--completed','a long verified note '+'n'*200])==0
+    out=capsys.readouterr().out
+    assert json.loads(out)=={'task_id':'ack1','status':'IN_PROGRESS','revision':1,
+                             'path':'.ego/memory/handoffs/ack1.json','auto_resume_after_clear':False}
+
+
+def test_agy_runs_through_print_mode_with_permission_skip(monkeypatch, tmp_path: Path):
+    import os
+    from ego.hosts import build_command
+    from ego.runner import run_agent
+    script=tmp_path/'bin'/'agy'; script.parent.mkdir()
+    script.write_text("""#!/usr/bin/env python3
+import json,sys
+args=sys.argv[1:]
+if '--version' in args: print('1.5.4'); sys.exit(0)
+if '--help' in args: print('--print --output-format --model --effort --mode --dangerously-skip-permissions'); sys.exit(0)
+prompt=[a for a in args if a.startswith('--print=')][0][8:]
+status='FAILED' if 'boom' in prompt else 'SUCCESS'
+print(json.dumps({'status':status,'response':'echo:'+prompt+';'+' '.join(a for a in args if not a.startswith('--print=')),
+                  'num_turns':1,'usage':{'input_tokens':100,'output_tokens':5,'cache_read_tokens':40,'total_tokens':105}}))
+""")
+    script.chmod(0o755)
+    monkeypatch.setenv('PATH',str(script.parent)+os.pathsep+os.environ.get('PATH',''))
+    monkeypatch.setenv('SEH_CACHE_DIR',str(tmp_path/'cache'))
+    write=build_command('agy','--fix it',model='gemini-x',effort='low',read_only=False)
+    assert write[1:]==['--output-format','json','--model','gemini-x','--effort','low',
+                       '--dangerously-skip-permissions','--print=--fix it']
+    read=build_command('agy','look')
+    assert '--dangerously-skip-permissions' not in read and read[read.index('--mode')+1]=='plan'
+    assert '--mode' in build_command('agy','look',read_only=False,autonomy='safe')
+    result=run_agent('agy','do the work',tmp_path,read_only=False)
+    assert result.status=='PASS' and result.output.startswith('echo:do the work')
+    assert '--dangerously-skip-permissions' in result.output
+    assert result.usage=={'input_tokens':100,'output_tokens':5,'cache_read_tokens':40,'cache_creation_tokens':0,'turns':1}
+    assert run_agent('agy','boom',tmp_path,read_only=False).status=='FAIL'

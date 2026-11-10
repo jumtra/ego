@@ -76,6 +76,11 @@ def parse_host_response(host: str, raw: str) -> tuple[str,int|None,float|None]:
             part = obj.get("part", {})
             if isinstance(part, dict): messages.append(str(part.get("text", "")))
             if isinstance(obj.get("cost"), (float,int)): cost = float(obj["cost"])
+        if host == "agy" and isinstance(obj.get("response"), str):
+            # One JSON object per print run: {"status","response","usage",...}.
+            messages.append(obj["response"])
+            usage = obj.get("usage")
+            if isinstance(usage, dict): tokens = int(usage.get("input_tokens",0) + usage.get("output_tokens",0))
     if not messages:
         try:
             obj = json.loads(raw)
@@ -98,7 +103,7 @@ def parse_host_usage(host: str, raw: str) -> dict | None:
                 if isinstance(u.get(k), (int, float)): return int(u[k])
             return 0
         found = {"input_tokens": num("input_tokens"), "output_tokens": num("output_tokens"),
-                 "cache_read_tokens": num("cache_read_input_tokens", "cached_input_tokens"),
+                 "cache_read_tokens": num("cache_read_input_tokens", "cached_input_tokens", "cache_read_tokens"),
                  "cache_creation_tokens": num("cache_creation_input_tokens")}
         if "cached_input_tokens" in u and "cache_read_input_tokens" not in u:
             # OpenAI-style usage counts cached tokens inside input_tokens; keep the two
@@ -106,6 +111,13 @@ def parse_host_usage(host: str, raw: str) -> dict | None:
             found["input_tokens"] = max(0, found["input_tokens"] - found["cache_read_tokens"])
         if isinstance(obj.get("num_turns"), int): found["turns"] = obj["num_turns"]
     return found
+
+
+def _agy_failed(raw: str) -> bool:
+    """AGY print mode can exit 0 while its JSON reports a non-SUCCESS turn."""
+    try: obj = json.loads(raw)
+    except ValueError: return False
+    return isinstance(obj, dict) and isinstance(obj.get("status"), str) and obj["status"] != "SUCCESS"
 
 
 def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: str|None = None,
@@ -127,6 +139,7 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
         return RunResult("UNAVAILABLE", "", redact(str(exc)), 127, elapsed(start), host, reason="CLI process unavailable", model=model or "native-default", effort=effort)
     output,tokens,cost = parse_host_response(host,stdout)
     error_text = stderr.lower() + " " + output.lower()
+    if host == "agy" and code == 0 and _agy_failed(stdout): code = 1
     status = "PASS" if code == 0 else "TIMEOUT" if code == 124 else "RATE_LIMIT" if ("rate limit" in error_text or "429" in error_text) else "FAIL"
     return RunResult(status, redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error", model=model or "native-default", effort=effort,
                      usage=parse_host_usage(host,stdout))

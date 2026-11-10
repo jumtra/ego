@@ -101,7 +101,7 @@ def test_session_resume_arms_auto_resume_only_when_the_hook_is_installed(tmp_pat
     apply_install(tmp_path, cfg)
     armed = rotation_instructions(tmp_path, "t1", "claude")
     assert armed["auto_resume_after_clear"] is True and "injected automatically" in armed["instructions"]
-    assert read_json(tmp_path / ".ego/state/clear_pending.json")["task_id"] == "t1"
+    assert list(read_json(tmp_path / ".ego/state/clear_pending.json")["tasks"]) == ["t1"]
     assert rotation_instructions(tmp_path, "t1", "codex")["auto_resume_after_clear"] is False
 
 
@@ -162,3 +162,43 @@ def test_direct_loop_iteration_runs_the_done_check_once(tmp_path: Path, monkeypa
     result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], host="claude", trust_cli=True)
     assert result["status"] == "VERIFIED"
     assert counter.read_text() == "x"
+
+
+def test_parallel_sessions_never_receive_each_others_checkpoint(tmp_path: Path, monkeypatch):
+    from ego.session import arm_auto_resume
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("ego hook session-start")
+    for task, session in (("taskA", "sess-a"), ("taskB", "sess-b")):
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", session)
+        save_checkpoint(tmp_path, task, goal=f"{task} work", next_steps=[f"{task} next"])
+        assert arm_auto_resume(tmp_path, task, "IN_PROGRESS") is True
+    # Two are pending: a /clear in either terminal names both and injects neither task's content.
+    both = clear_resume(tmp_path, {"source": "clear"})
+    context = both["hookSpecificOutput"]["additionalContext"]
+    assert "taskA, taskB" in context and "taskA next" not in context and "taskB next" not in context
+    assert "taskA, taskB" in both["systemMessage"]
+    # Each session's Stop hook offers only the checkpoint that session saved.
+    assert "taskA" in clear_advice(tmp_path, _stop(tmp_path, 150000, session="sess-a"), 120000)["systemMessage"]
+    third = clear_advice(tmp_path, _stop(tmp_path, 150000, session="sess-c"), 120000)["systemMessage"]
+    assert "taskA" not in third and "taskB" not in third and "チェックポイントを保存して" in third
+    # Finishing one task leaves a single candidate, which is then injected exactly once.
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-b")
+    save_checkpoint(tmp_path, "taskB", goal="taskB work", status="COMPLETED")
+    assert arm_auto_resume(tmp_path, "taskB", "COMPLETED") is False
+    only = clear_resume(tmp_path, {"source": "clear"})
+    assert "Resume task taskA" in only["hookSpecificOutput"]["additionalContext"]
+    assert clear_resume(tmp_path, {"source": "clear"}) == {}
+    assert not (tmp_path / ".ego/state/clear_pending.json").exists()
+
+
+def test_concurrent_checkpoints_and_arming_lose_nothing(tmp_path: Path):
+    from concurrent.futures import ThreadPoolExecutor
+    from ego.session import _mark_clear_pending, _pending_tasks, load_checkpoint
+    def work(i):
+        save_checkpoint(tmp_path, f"par-{i % 4}", goal=f"goal {i}", next_steps=[f"step {i}"])
+        _mark_clear_pending(tmp_path, f"par-{i % 4}", f"s{i % 4}")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(work, range(40)))
+    assert sorted(_pending_tasks(tmp_path)) == ["par-0", "par-1", "par-2", "par-3"]
+    # Same-ID writers serialize: every save is counted and the file is always one whole record.
+    assert [load_checkpoint(tmp_path, f"par-{k}")["revision"] for k in range(4)] == [10, 10, 10, 10]

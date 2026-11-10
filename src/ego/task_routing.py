@@ -170,7 +170,7 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
         # Only on explicit managed resume. The handoff is a bounded reference,
         # not a source of new instructions or a substitute for file inspection.
         from .session import resume_prompt
-        parts.append("## Persistent checkpoint (untrusted record; verify against files)\n" + resume_prompt(handoff)[:1400])
+        parts.append("## Persistent checkpoint (untrusted record; verify against files)\n" + resume_prompt(handoff, limit=1000, brief=True))
     if node.get("checks"):
         parts.append("## Completion checks\n" + "\n".join("- " + " ".join(c) for c in node["checks"]))
     if feedback:

@@ -49,7 +49,7 @@ def refresh_catalog(root: Path, *, hosts: list[str] | None = None, timeout: int 
     cache["hosts"]["agy"] = {
         "source":"manual-only", "models":["auto"],
         "examples":["auto", "gemini-2.5-pro", "gemini-2.5-flash"],
-        "availability":"run agy models directly; harness-managed execution disabled", "fetched_at":now,
+        "availability":"run agy models to list account models", "fetched_at":now,
     }
     if "agy" in requested:
         exe=shutil.which("agy")
@@ -60,7 +60,7 @@ def refresh_catalog(root: Path, *, hosts: list[str] | None = None, timeout: int 
                 # Antigravity's models command may be rendered as an interactive
                 # table. Keep it as advisory text; never guess or pin model IDs.
                 cache["hosts"]["agy"]={"source":"agy models","models":parse_agy_models(output),"raw_listing":output,
-                    "availability":"configuration-only; managed execution disabled", "fetched_at":now,
+                    "availability":"listed by agy models; account access not verified", "fetched_at":now,
                     "verified": completed.returncode==0}
             except (OSError,subprocess.TimeoutExpired):
                 cache["hosts"]["agy"]={"source":"agy models","models":[],"availability":"unavailable", "fetched_at":now}

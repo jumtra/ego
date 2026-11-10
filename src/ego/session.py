@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -20,7 +21,7 @@ SCHEMA = 1
 MAX_ITEM_CHARS = 350
 MAX_GOAL_CHARS = 800
 MAX_NOTES = 8
-MAX_PROMPT_CHARS = 2400
+MAX_PROMPT_CHARS = 1600
 HOST_CLEAR = {"claude": "/clear", "codex": "/clear", "opencode": "/new", "agy": None}
 
 
@@ -103,22 +104,54 @@ def save_checkpoint(
     return {**record, "path": handoff_relpath(task_id)}
 
 
-def resume_prompt(checkpoint: dict[str, Any]) -> str:
-    """Load a succinct and self-contained context, not the whole conversation."""
+# Highest-value fields first: when the budget runs out, what to do next survives
+# and what is already done (re-derivable from files and git) is dropped.
+_PROMPT_FIELDS = (("Next", "next_steps"), ("Blockers", "blockers"), ("Decisions", "decisions"),
+                  ("Done", "completed"), ("Evidence", "evidence"))
+_PROMPT_TAIL = ("A record, not proof: check files/git diff first, run the narrowest checks, "
+                "then state COMPLETED, BLOCKED or IN_PROGRESS.")
+
+
+def resume_prompt(checkpoint: dict[str, Any], *, limit: int = MAX_PROMPT_CHARS, brief: bool = False) -> str:
+    """The handoff as it enters the next context: every character here is paid for again.
+
+    Self-contained, so the reader does not also load the checkpoint file; the
+    file is named only when something had to be left out. `brief` drops the
+    framing sentences for callers that already supply their own.
+    """
     task_id = _id(checkpoint["task_id"])
-    lines = [
-        f"Resume task {task_id} from the durable checkpoint, NOT the previous chat transcript.",
-        f"Read {handoff_relpath(task_id)} and inspect actual files/git diff before acting.",
-        f"Objective: {checkpoint['goal']}",
-        "Checkpoint status: " + checkpoint["status"],
-    ]
-    for title, key in (("Verified progress", "completed"), ("Next steps", "next_steps"),
-                       ("Decisions", "decisions"), ("Blockers", "blockers"), ("Evidence pointers", "evidence")):
-        if checkpoint.get(key):
-            lines.append(f"{title}: " + "; ".join(str(v) for v in checkpoint[key][:MAX_NOTES]))
-    lines.append("Use file and test evidence as truth; do not assume this checkpoint proves completion."
-                 " Run the narrowest relevant checks and clearly state COMPLETED, BLOCKED or IN_PROGRESS.")
-    return "\n".join(lines)[:MAX_PROMPT_CHARS]
+    head = (f"Task {task_id} [{checkpoint['status']}]" if brief else
+            f"Resume task {task_id} [{checkpoint['status']}] from this checkpoint, not the previous chat.")
+    pointer = f"More in {handoff_relpath(task_id)}."
+    tail = "" if brief else _PROMPT_TAIL
+    budget = limit - len(head) - len(pointer) - len(tail) - 2
+    goal = "Goal: " + " ".join(str(checkpoint["goal"]).split())
+    if len(goal) > budget // 2:
+        goal = goal[:max(0, budget // 2)]
+    lines = [head, goal]
+    budget -= len(goal) + 1
+    seen: set[str] = set()
+    omitted = False
+    for title, key in _PROMPT_FIELDS:
+        items: list[str] = []
+        for value in (checkpoint.get(key) or [])[:MAX_NOTES]:
+            value = " ".join(str(value).split())
+            if not value or value in seen:
+                continue
+            cost = len(value) + 2 + (0 if items else len(title) + 1)
+            if cost > budget:
+                omitted = True
+                continue
+            seen.add(value)
+            items.append(value)
+            budget -= cost
+        if items:
+            lines.append(f"{title}: " + "; ".join(items))
+    if omitted:
+        lines.append(pointer)
+    if tail:
+        lines.append(tail)
+    return "\n".join(lines)[:limit]
 
 
 ADVICE_STATE = ".ego/state/session_advice.json"
@@ -167,20 +200,67 @@ def _age_seconds(stamp: str) -> float:
         return float("inf")
 
 
-def latest_open_checkpoint(root: Path, max_age: int = FRESH_CHECKPOINT) -> dict[str, Any] | None:
+def latest_open_checkpoint(root: Path, max_age: int = FRESH_CHECKPOINT,
+                           exclude: set[str] | frozenset[str] = frozenset()) -> dict[str, Any] | None:
     best = None
     for path in (root / ".ego" / "memory" / "handoffs").glob("*.json"):
         record = read_json(path)
         if (not isinstance(record, dict) or record.get("schema_version") != SCHEMA or record.get("status") == "COMPLETED"
-                or record.get("source") != "interactive" or _age_seconds(record.get("updated_at", "")) > max_age):
+                or record.get("source") != "interactive" or record.get("task_id") in exclude or _age_seconds(record.get("updated_at", "")) > max_age):
             continue
         if best is None or record["updated_at"] > best["updated_at"]:
             best = record
     return best
 
 
-def _mark_clear_pending(root: Path, task_id: str) -> None:
-    write_json(safe_path(root, CLEAR_PENDING), {"task_id": _id(task_id), "at": time.time()})
+def _pending_tasks(root: Path) -> dict[str, dict[str, Any]]:
+    """Checkpoints awaiting a /clear, per task: several sessions may share one project."""
+    raw = read_json(safe_path(root, CLEAR_PENDING))
+    if not isinstance(raw, dict):
+        return {}
+    tasks = raw.get("tasks")
+    if not isinstance(tasks, dict):  # single-task file written by an earlier version
+        tasks = {raw["task_id"]: {"at": raw.get("at", 0)}} if isinstance(raw.get("task_id"), str) else {}
+    fresh = {}
+    for task_id, entry in tasks.items():
+        try:
+            if isinstance(entry, dict) and time.time() - float(entry.get("at", 0)) <= PENDING_TTL:
+                fresh[_id(task_id)] = entry
+        except (SEHError, TypeError, ValueError):
+            continue
+    return fresh
+
+
+def _store_pending(root: Path, tasks: dict[str, dict[str, Any]]) -> None:
+    path = safe_path(root, CLEAR_PENDING)
+    if tasks:
+        write_json(path, {"tasks": tasks})
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _pending_lock(root: Path):
+    return exclusive_lock(safe_path(root, ".ego/locks/clear-pending.lock"))
+
+
+def _mark_clear_pending(root: Path, task_id: str, session: str | None = None) -> None:
+    _id(task_id)
+    with _pending_lock(root):
+        tasks = _pending_tasks(root)
+        entry: dict[str, Any] = {"at": time.time()}
+        # Who armed it: lets another session's Stop hook tell this checkpoint is not its own.
+        session = session or (tasks.get(task_id) or {}).get("session")
+        if session:
+            entry["session"] = str(session)[:80]
+        tasks[task_id] = entry
+        _store_pending(root, tasks)
+
+
+def _disarm_clear_pending(root: Path, task_id: str) -> None:
+    with _pending_lock(root):
+        tasks = _pending_tasks(root)
+        if tasks.pop(task_id, None) is not None:
+            _store_pending(root, tasks)
 
 
 def auto_resume_installed(root: Path) -> bool:
@@ -190,7 +270,7 @@ def auto_resume_installed(root: Path) -> bool:
         return False
 
 
-def arm_auto_resume(root: Path, task_id: str) -> bool:
+def arm_auto_resume(root: Path, task_id: str, status: str | None = None) -> bool:
     """Interactive checkpoint saved: the next SessionStart(clear) injects it, when auto-resume is installed.
 
     Without this, a manual "save checkpoint" then /clear never arms the pending resume
@@ -199,7 +279,10 @@ def arm_auto_resume(root: Path, task_id: str) -> bool:
     root = root.resolve()
     if not auto_resume_installed(root):
         return False
-    _mark_clear_pending(root, task_id)
+    if status == "COMPLETED":  # nothing left to resume; do not leave it competing with live tasks
+        _disarm_clear_pending(root, task_id)
+        return False
+    _mark_clear_pending(root, task_id, os.environ.get("CLAUDE_CODE_SESSION_ID"))
     return True
 
 
@@ -215,23 +298,28 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[st
     session = str(payload.get("session_id") or "unknown")[:80]
     root = root.resolve()
     state_path = safe_path(root, ADVICE_STATE)
-    state = read_json(state_path, {})
-    state = state if isinstance(state, dict) else {}
-    last = state.get(session, {}).get("tokens")
-    if tokens is None or tokens < threshold:
-        if last is not None and tokens is not None:  # compacted or cleared: allow a new suggestion later
-            state.pop(session, None); write_json(state_path, state)
-        return {}
-    if last is not None and last <= tokens < last * RESUGGEST_GROWTH:
-        return {}
-    state[session] = {"tokens": tokens, "at": time.time()}
-    for old in sorted(state, key=lambda k: state[k].get("at", 0))[:-20]:
-        state.pop(old)
-    write_json(state_path, state)
+    # Every session's Stop hook shares this file: serialize the read-modify-write.
+    with exclusive_lock(safe_path(root, ".ego/locks/session-advice.lock")):
+        state = read_json(state_path, {})
+        state = state if isinstance(state, dict) else {}
+        last = state.get(session, {}).get("tokens")
+        if tokens is None or tokens < threshold:
+            if last is not None and tokens is not None:  # compacted or cleared: allow a new suggestion later
+                state.pop(session, None); write_json(state_path, state)
+            return {}
+        if last is not None and last <= tokens < last * RESUGGEST_GROWTH:
+            return {}
+        state[session] = {"tokens": tokens, "at": time.time()}
+        for old in sorted(state, key=lambda k: state[k].get("at", 0))[:-20]:
+            state.pop(old)
+        write_json(state_path, state)
     size = f"約 {tokens // 1000}k トークン（提案しきい値 {threshold // 1000}k）"
-    checkpoint = latest_open_checkpoint(root)
+    # A checkpoint another live session saved says nothing about this conversation:
+    # offering it here would have the user clear unsaved work.
+    foreign = {t for t, e in _pending_tasks(root).items() if e.get("session") and e["session"] != session}
+    checkpoint = latest_open_checkpoint(root, exclude=foreign)
     if checkpoint:
-        _mark_clear_pending(root, checkpoint["task_id"])
+        _mark_clear_pending(root, checkpoint["task_id"], session if session != "unknown" else None)
         return {"systemMessage": f"ego: コンテキストは{size}です。チェックポイント {checkpoint['task_id']}（{checkpoint['status']}）は保存済みです。"
                                  "区切りが良ければ /clear を実行してください。" + AFTER_CLEAR}
     return {"systemMessage": f"ego: コンテキストは{size}です。区切りの良いところで「チェックポイントを保存して」と依頼し、"
@@ -243,16 +331,24 @@ def clear_resume(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict) or payload.get("source") != "clear":
         return {}
     root = root.resolve()
-    pending_path = safe_path(root, CLEAR_PENDING)
-    pending = read_json(pending_path)
-    if not isinstance(pending, dict):
+    with _pending_lock(root):
+        tasks = _pending_tasks(root)
+        if len(tasks) > 1:
+            # Parallel sessions: /clear starts a new session ID, so which checkpoint belongs
+            # to this terminal cannot be known. Name them; never inject another session's task.
+            ids = ", ".join(sorted(tasks))
+            return {"systemMessage": f"ego: 再開待ちのチェックポイントが複数あります（{ids}）。並列セッションの取り違えを防ぐため"
+                                     "自動読み込みはしません。「<task-id> を続けて」と送ってください。",
+                    "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext":
+                        f"Checkpoints awaiting resume in this project (parallel sessions): {ids}. Do not guess which is "
+                        "this session's. When the user names one, run `ego session resume <task-id> --root .` "
+                        "and follow its resume_prompt."}}
+        _store_pending(root, {})
+    if not tasks:
         return {}
-    pending_path.unlink(missing_ok=True)
     try:
-        if time.time() - float(pending.get("at", 0)) > PENDING_TTL:
-            return {}
-        record = load_checkpoint(root, pending.get("task_id", ""))
-    except (SEHError, TypeError, ValueError):
+        record = load_checkpoint(root, next(iter(tasks)))
+    except SEHError:
         return {}
     if record is None:
         return {}

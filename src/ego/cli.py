@@ -367,7 +367,9 @@ def _cmd_session(args):
             blockers=args.blocker, evidence=args.evidence,
             status=args.status, source="interactive",
         )
-        arm_auto_resume(root, args.task_id)
+        # Acknowledge only: the caller just supplied these notes, echoing them back costs context twice.
+        result = {"task_id": result["task_id"], "status": result["status"], "revision": result["revision"],
+                  "path": result["path"], "auto_resume_after_clear": arm_auto_resume(root, args.task_id, args.status)}
     elif args.action == "status":
         result = load_checkpoint(root, args.task_id)
         if result is None: raise SEHError("HANDOFF_MISSING", args.task_id, 3)

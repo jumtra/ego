@@ -2,6 +2,8 @@
 
 Permission bypass is permitted only when an externally isolated workspace has
 been explicitly attested and the invocation explicitly opts into that risk.
+AGY is the exception: its print mode has no other unattended approval path, so
+write runs pass --dangerously-skip-permissions (read-only runs use plan mode).
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -99,4 +101,23 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         # it is NOT equivalent to removing an OS sandbox.
         if not read_only and autonomy!="safe" and "--auto" in info["flags"]:argv.append("--auto")
         return argv+[prompt]
+    if host=="agy":
+        require_flags(info,"--print","--output-format")
+        argv=[cap.binary,"--output-format","json"]
+        if model:
+            require_flags(info,"--model")
+            argv += ["--model",model]
+        if effort and effort != "auto" and "--effort" in info["flags"]:argv += ["--effort",effort]
+        if (read_only or autonomy=="safe") and autonomy!="bypass":
+            require_flags(info,"--mode")
+            argv += ["--mode","plan"]
+        else:
+            # Print mode cannot answer a permission prompt, so an AGY write run is
+            # always auto-approved. This is the operator's stated choice for this host;
+            # the run still happens in the harness's staging copy or worktree.
+            require_flags(info,"--dangerously-skip-permissions")
+            argv.append("--dangerously-skip-permissions")
+        # --print takes the prompt as its value; the attached form keeps a prompt
+        # that starts with '-' from being read as another switch.
+        return argv+["--print="+prompt]
     raise SEHError("HOST_UNAVAILABLE",host,3)
