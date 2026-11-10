@@ -105,6 +105,29 @@ def git_head(root: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def git_is_repo(root: Path) -> bool:
+    result = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=root, capture_output=True, text=True, timeout=5)
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def git_worktree_add(root: Path, path: Path, commit_or_branch: str = "HEAD", new_branch: str | None = None) -> bool:
+    argv = ["git", "worktree", "add"]
+    if new_branch:
+        argv += ["-b", new_branch]
+    argv += [str(path), commit_or_branch]
+    res = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=30)
+    return res.returncode == 0
+
+
+def git_worktree_remove(root: Path, path: Path, *, force: bool = True) -> bool:
+    argv = ["git", "worktree", "remove"]
+    if force:
+        argv.append("--force")
+    argv.append(str(path))
+    res = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=30)
+    return res.returncode == 0
+
+
 def git_dirty(root: Path) -> bool:
     r = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, timeout=5)
     return r.returncode == 0 and bool(r.stdout.strip())

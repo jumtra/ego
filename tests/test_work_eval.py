@@ -51,3 +51,47 @@ def test_eval_regression(project):
     assert compare(baseline,other)["comparison"]=="NO_GAIN"
     other["summary"]["x"]["passes"]=0
     assert compare(baseline,other)["comparison"]=="REGRESSION"
+
+
+def test_worktree_isolation_and_cleanup(tmp_path):
+    import subprocess
+    root = tmp_path / "git_project"
+    root.mkdir()
+    subprocess.run(["git", "init"], cwd=root, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, capture_output=True, check=True)
+    (root / "hello.txt").write_text("initial\n")
+    subprocess.run(["git", "add", "."], cwd=root, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=root, capture_output=True, check=True)
+    apply_install_to_root = True
+
+    from ego.install import apply_install
+    from ego.config import Config
+    apply_install(root, Config())
+    subprocess.run(["git", "add", "."], cwd=root, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "add ego"], cwd=root, capture_output=True, check=True)
+
+    (root / "write_script.py").write_text("from pathlib import Path\nPath('result.txt').write_text('done')\n")
+    subprocess.run(["git", "add", "."], cwd=root, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "add script"], cwd=root, capture_output=True, check=True)
+
+    task = {"nodes": [{"id": "write", "kind": "code", "argv": ["python3", "write_script.py"], "write_allowlist": ["result.txt"]}]}
+
+    # 1. worktree with cleanup (default)
+    res_clean = execute(root, task, worktree=True, cleanup_worktree=True)
+    assert res_clean["final_status"] == "PASSED"
+    assert res_clean["worktree"] is True
+    assert res_clean["worktree_cleaned"] is True
+    staging_path = root / ".ego" / "state" / "runs" / res_clean["run_id"] / "staging"
+    assert not staging_path.exists()
+    assert not (root / "result.txt").exists()
+
+    # 2. worktree without cleanup (keep_worktree)
+    res_keep = execute(root, task, worktree=True, cleanup_worktree=False)
+    assert res_keep["final_status"] == "PASSED"
+    assert res_keep["worktree"] is True
+    assert res_keep.get("worktree_cleaned") is not True
+    staging_keep = root / ".ego" / "state" / "runs" / res_keep["run_id"] / "staging"
+    assert staging_keep.exists()
+    assert (staging_keep / "result.txt").read_text() == "done"
+    assert not (root / "result.txt").exists()

@@ -12,7 +12,8 @@ from typing import Any
 from .config import load_config
 from .policy import check_write
 from .runner import run_agent, run_checked_command
-from .util import SEHError, ident, now, read_json, write_json, snapshot, simple_copy_tree, filehash, safe_path, exclusive_lock
+from .util import (SEHError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
+                   filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove)
 from .task_routing import validate_task_context, resolve_routes, build_task_prompt
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 
@@ -149,8 +150,11 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
 
 
 def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bool=False,
-            trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False)->dict:
+            trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False,
+            worktree:bool|None=None,cleanup_worktree:bool|None=None)->dict:
     root=root.resolve();cfg=load_config(root)
+    use_worktree = worktree if worktree is not None else (cfg.isolation == "worktree")
+    should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
     nodes=validate_task(spec)
     if apply and not approve:raise SEHError("APPROVAL_REQUIRED", "--apply requires --approve")
     if any(r.host=="agy" for n in nodes if n.get("kind","agent") not in ("gate","code") for r in resolve_routes(n,spec,host,default_models=cfg.models)[1]):
@@ -176,9 +180,22 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                         "checkpoint_path":handoff_relpath(run_id)}
         else:
             if record_path.exists():raise SEHError("RUN_EXISTS",run_id)
-            staging.mkdir(parents=True)
-            simple_copy_tree(root,staging)
-            record={"run_id":run_id,"created_at":now(),"spec":spec,"host":host,"node_status":{},"results":{},"base_snapshot":snapshot(root),"final_status":"RUNNING","applied":False}
+            is_git = git_is_repo(root)
+            worktree_created = False
+            if use_worktree and is_git:
+                branch_name = f"ego-task-{run_id}"
+                staging.parent.mkdir(parents=True, exist_ok=True)
+                if git_worktree_add(root, staging, commit_or_branch="HEAD", new_branch=branch_name):
+                    worktree_created = True
+                else:
+                    staging.mkdir(parents=True, exist_ok=True)
+                    simple_copy_tree(root, staging)
+            else:
+                staging.mkdir(parents=True)
+                simple_copy_tree(root,staging)
+            record={"run_id":run_id,"created_at":now(),"spec":spec,"host":host,"node_status":{},"results":{},
+                    "base_snapshot":snapshot(root),"final_status":"RUNNING","applied":False,
+                    "worktree":worktree_created}
             write_json(record_path,record)
         # A resume is a fresh host invocation; carry only the most recent
         # durable, bounded summary, not the previous session transcript.
@@ -253,6 +270,10 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                     else:atomic_bytes(dst,b)
                 raise
         write_json(record_path,record)
+        if record.get("worktree") and should_cleanup:
+            git_worktree_remove(root, staging, force=True)
+            record["worktree_cleaned"] = True
+            write_json(record_path, record)
         milestone=("COMPLETED" if record["final_status"]=="PASSED" and record["applied"]
                    else "VERIFIED" if record["final_status"] in ("PASSED","COMPARISON_READY")
                    else "BLOCKED")

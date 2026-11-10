@@ -228,7 +228,8 @@ def _cmd_work(args):
         task["defaults"]=defaults
     result=execute(root,task,host=args.host,apply=args.apply,approve=args.approve,trust_cli=args.trust_cli,
                    run_id=args.run_id if args.action=="resume" else None,resume=args.action=="resume",
-                   autonomy=args.autonomy,isolated=args.attest_external_sandbox)
+                   autonomy=args.autonomy,isolated=args.attest_external_sandbox,
+                   worktree=args.worktree,cleanup_worktree=args.cleanup_worktree)
     _print(result);return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
 
 def _cmd_eval(args):
@@ -518,6 +519,8 @@ def build_parser()->argparse.ArgumentParser:
         r.add_argument("--models",help='JSON object of host to model overrides, e.g. {"claude":"sonnet"}')
         r.add_argument("--autonomy",choices=["auto","safe","bypass"],default="auto")
         r.add_argument("--attest-external-sandbox",action="store_true",help="Assert externally hardened OS sandbox; needed for bypass mode")
+        r.add_argument("--worktree",action="store_true",default=None,help="Execute task in an isolated Git worktree")
+        r.add_argument("--keep-worktree",dest="cleanup_worktree",action="store_false",default=None,help="Keep the Git worktree after task completion")
         if name=="resume":r.add_argument("run_id")
     sp.set_defaults(func=_cmd_work)
     sp=sub.add_parser("eval");common(sp);s=sp.add_subparsers(dest="action",required=True)

@@ -26,6 +26,8 @@ class Config:
     max_attempts: int = 3
     timeout_seconds: int = 3600
     models: dict[str, Any] = field(default_factory=dict)
+    isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
+    cleanup_worktree: bool = True  # whether to remove the worktree after run
     tests: list[list[str]] = field(default_factory=list)
     allow_commands: list[str] = field(default_factory=lambda: ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"])
 
@@ -38,6 +40,10 @@ class Config:
             raise SEHError("INVALID_CONFIG", "Invalid/duplicate hosts", 2)
         if self.code_intelligence not in PROVIDERS or self.memory not in MEMORY or self.runtime_mode not in ("native", "managed"):
             raise SEHError("INVALID_CONFIG", "Invalid provider/runtime", 2)
+        if self.isolation not in ("copy", "worktree"):
+            raise SEHError("INVALID_CONFIG", "isolation must be 'copy' or 'worktree'", 2)
+        if not isinstance(self.cleanup_worktree, bool):
+            raise SEHError("INVALID_CONFIG", "cleanup_worktree must be a boolean", 2)
         if not 1 <= self.max_parallel <= 8 or not 1 <= self.max_attempts <= 5 or not 5 <= self.timeout_seconds <= 7200:
             raise SEHError("INVALID_CONFIG", "Invalid runtime limits", 2)
         if not isinstance(self.models, dict):
@@ -87,6 +93,11 @@ def dump_config(cfg: Config) -> str:
         "#   codex:    \"auto\", \"gpt-5-codex\", etc.\n"
         "#   opencode: \"auto\", \"anthropic/claude-3-5-sonnet\", etc.\n"
         "#   agy:      \"auto\", \"gemini-2.5-pro\", etc.\n"
+        "#\n"
+        "# 実行環境の隔離 (isolation, cleanup_worktree):\n"
+        "#   isolation = \"copy\"      # ディレクトリコピーによるステージング\n"
+        "#   isolation = \"worktree\"  # Git worktree によるブランチ作業分離\n"
+        "#   cleanup_worktree = true  # タスク終了時に worktree を自動削除するかどうか\n"
     )
     return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in vars(cfg).items()) + "\n"
 
