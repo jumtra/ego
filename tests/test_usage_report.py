@@ -109,3 +109,26 @@ def test_resume_of_a_run_whose_task_file_carries_plan_usage_does_not_mismatch(tm
     run_id = json.loads(capsys.readouterr().out)["run_id"]
     assert main(["work", "resume", run_id, "--root", str(tmp_path), "--task", str(task)]) == 0
     assert json.loads(capsys.readouterr().out)["final_status"] == "PASSED"
+
+
+def test_codex_cached_tokens_are_not_counted_twice():
+    from ego.runner import parse_host_usage
+    raw = json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1000, "cached_input_tokens": 900, "output_tokens": 10}})
+    usage = parse_host_usage("codex", raw)
+    assert usage["input_tokens"] == 100 and usage["cache_read_tokens"] == 900
+    assert tokens_of(usage) == 1010
+
+
+def test_loop_accounts_for_a_planner_call_whose_plan_was_rejected(tmp_path: Path, monkeypatch):
+    (tmp_path / "check.py").write_text("import sys\nsys.exit(1)\n")
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        return RunResult("PASS", "[1, 2]", "", 0, 0.0, host, cost_usd=0.25,
+                         usage={"input_tokens": 1000, "output_tokens": 200})
+
+    monkeypatch.setattr(planner, "run_agent", fake_agent)
+    result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], host="claude", execute_planner=True,
+                      plan_first=True, max_iterations=3)
+    assert result["iterations"][0]["status"] == "PLAN_REJECTED"
+    assert "PLAN_INVALID_JSON" in result["iterations"][0]["failures"][0]["feedback"]
+    assert result["cost_usd"] == 0.5 and result["usage"]["plan_tokens"] == 2400  # two calls, then STALLED
