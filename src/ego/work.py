@@ -17,6 +17,7 @@ from .util import (SEHError, ident, now, read_json, write_json, snapshot, simple
 from .task_routing import validate_task_context, resolve_routes, build_task_prompt
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 from .context import clip_output
+from .usage import TOKEN_KEYS, tokens_of, summary_line
 
 KINDS={"worker","agent","code","gate","splitter"}
 
@@ -159,17 +160,32 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
 
 
 def usage_summary(record:dict)->dict:
-    """Aggregate model traffic of a run. cost_known is False when a host reported no cost."""
+    """Aggregate model traffic of a run, by phase: plan (planner call) and work (per task node).
+
+    cost_known is False when a host reported no cost. by_task maps each node id
+    to its own token count, so a reader can see where the tokens went.
+    """
     total={"model_calls":0,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,
-           "cache_creation_tokens":0,"cost_usd":0.0,"cost_known":True}
-    for result in record.get("results",{}).values():
+           "cache_creation_tokens":0,"cost_usd":0.0,"cost_known":True,"planned":False,"plan_tokens":0,"work_tokens":0,"by_task":{}}
+    planner=record.get("planner_usage")
+    if isinstance(planner,dict):
+        total["model_calls"]+=1
+        total["planned"]=True
+        total["plan_tokens"]=tokens_of(planner)
+        for key in TOKEN_KEYS:total[key]+=int(planner.get(key,0) or 0)
+        if isinstance(planner.get("cost_usd"),(int,float)):total["cost_usd"]+=float(planner["cost_usd"])
+        else:total["cost_known"]=False
+    for nid,result in record.get("results",{}).items():
         for attempt in result.get("attempts",[]):
             ex=attempt.get("execution",{})
             if ex.get("host") in (None,"local","mock"):continue
             total["model_calls"]+=1
             usage=ex.get("usage") or {}
-            for key in ("input_tokens","output_tokens","cache_read_tokens","cache_creation_tokens"):
+            for key in TOKEN_KEYS:
                 total[key]+=int(usage.get(key,0) or 0)
+            count=tokens_of(usage)
+            total["work_tokens"]+=count
+            total["by_task"][nid]=total["by_task"].get(nid,0)+count
             if isinstance(ex.get("cost_usd"),(int,float)):total["cost_usd"]+=float(ex["cost_usd"])
             else:total["cost_known"]=False
     total["cost_usd"]=round(total["cost_usd"],4)
@@ -190,6 +206,7 @@ def compact_result(result:dict, *, max_files:int=40)->dict:
         failures.append({"node":nid,"attempts":len(data.get("attempts",[])),"feedback":clip_output(str(text),800)})
     changed=result.get("changed_files",[])
     out={k:result[k] for k in ("run_id","final_status","applied","node_status","message","checkpoint_path","usage") if k in result}
+    if "usage" in result:out["usage_text"]=summary_line(result["usage"])
     out["changed_files"]=changed[:max_files]
     if len(changed)>max_files:out["changed_files_omitted"]=len(changed)-max_files
     if failures:out["failures"]=failures
@@ -202,7 +219,7 @@ def compact_result(result:dict, *, max_files:int=40)->dict:
 def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bool=False,
             trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False,
             worktree:bool|None=None,cleanup_worktree:bool|None=None,seed_from:str|None=None,
-            extra_allow:list[str]|None=None,budget_usd:float|None=None)->dict:
+            extra_allow:list[str]|None=None,budget_usd:float|None=None,planner_usage:dict|None=None)->dict:
     root=root.resolve();cfg=load_config(root)
     use_worktree = worktree if worktree is not None else (cfg.isolation == "worktree")
     seed_dir=None
@@ -254,6 +271,8 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                 staging.mkdir(parents=True)
                 simple_copy_tree(seed_dir or root,staging)
             record={"run_id":run_id,"created_at":now(),"spec":spec,"host":host,"node_status":{},"results":{},
+                    # Tokens spent by the planning call that produced this task, reported with the run.
+                    **({"planner_usage":planner_usage} if planner_usage is not None else {}),
                     # A seeded run keeps the original base: changes are measured against, and
                     # applied over, the project as it was when the first run started.
                     "base_snapshot":seed_record["base_snapshot"] if seed_dir else snapshot(root),
@@ -361,7 +380,8 @@ def status(root:Path,run_id:str)->dict:
     data=read_json(root/".ego"/"state"/"runs"/run_id/"record.json")
     if not data:raise SEHError("RUN_NOT_FOUND",run_id,3)
     return {**{k:v for k,v in data.items() if k!="spec"},
-            "message":completion_message(data), "checkpoint_path":handoff_relpath(run_id)}
+            "message":completion_message(data), "checkpoint_path":handoff_relpath(run_id),
+            "usage":usage_summary(data)}
 
 
 def cancel(root:Path,run_id:str)->dict:

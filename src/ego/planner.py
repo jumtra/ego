@@ -7,6 +7,7 @@ from .runner import run_agent
 from .work import validate_task
 from .codeintel import search
 from .config import load_config
+from .usage import tokens_of, usage_text
 
 
 def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,execute:bool=False,
@@ -62,4 +63,5 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
     validate_task(obj)
     result={"plan_id":ident("task"),"task":obj,"approval_required_before_apply":True}
     if usage is not None:result["planner_usage"]=usage
+    result["usage_text"]=usage_text({"plan_tokens":tokens_of(usage)})
     return result

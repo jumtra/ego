@@ -22,6 +22,7 @@ from .config import load_config
 from .context import clip_output
 from .policy import check_command
 from .session import save_checkpoint
+from .usage import summary_line, tokens_of
 from .util import SEHError, filehash, ident, now, read_json, safe_path, sha256, json_text, write_json
 
 MAX_ITERATIONS_CAP = 10
@@ -94,6 +95,17 @@ def _failures(result: dict) -> list[dict]:
     return out
 
 
+def add_usage(total: dict, *, plan_tokens: int | None = None, work: dict | None = None) -> None:
+    """Accumulate one planner call (plan_tokens) or one run's usage_summary (work) into the loop total."""
+    if plan_tokens is not None:
+        total["planned"] = True
+        total["plan_tokens"] += plan_tokens
+    if work:
+        total["work_tokens"] += work.get("work_tokens", 0)
+        for name, count in (work.get("by_task") or {}).items():
+            total["by_task"][name] = total["by_task"].get(name, 0) + count
+
+
 def _summary(ledger: dict) -> dict:
     messages = {
         "COMPLETED": "完了：ゴールの検証に合格し、変更を適用しました。",
@@ -103,6 +115,9 @@ def _summary(ledger: dict) -> dict:
     out["iterations"] = [{k: it[k] for k in ("n", "status", "run_id", "failures", "cost_usd") if k in it}
                          for it in ledger["iterations"]]
     last = ledger["iterations"][-1] if ledger["iterations"] else {}
+    usage = ledger.get("usage") or {"planned": False, "plan_tokens": 0, "work_tokens": 0, "by_task": {}}
+    out["usage"] = usage
+    out["usage_text"] = summary_line(usage)
     out["changed_files"] = last.get("changed_files", [])
     if last.get("run_id"):
         out["run_id"] = last["run_id"]
@@ -153,6 +168,7 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
     ledger: dict[str, Any] = {"loop_id": loop_id, "goal": goal.strip(), "done_checks": done_checks, "scope": scope,
                               "host": host, "created_at": now(), "status": "RUNNING", "iterations": [],
                               "cost_usd": 0.0, "cost_known": True,
+                              "usage": {"planned": False, "plan_tokens": 0, "work_tokens": 0, "by_task": {}},
                               "limits": {"max_iterations": max_iterations, "max_budget_usd": max_budget_usd,
                                          "max_wall_seconds": max_wall_seconds}}
     write_json(path, ledger)
@@ -184,6 +200,7 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
             planner_usage = plan.get("planner_usage") if isinstance(plan, dict) else None
             if planner_usage is not None:
                 spend(planner_usage.get("cost_usd"), 1)
+                add_usage(ledger["usage"], plan_tokens=tokens_of(planner_usage))
             spec = with_done_gate(spec, done_checks)
             # Reject a plan with a forbidden command before anything runs, so the planner
             # hears why instead of the loop dying halfway through an iteration.
@@ -206,6 +223,7 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
         else:
             usage = result.get("usage", {})
             spend(usage.get("cost_usd", 0.0), 0)
+            add_usage(ledger["usage"], work=usage)
             if usage.get("cost_known", True) is False:
                 ledger["cost_known"] = False
             failures = _failures(result)
