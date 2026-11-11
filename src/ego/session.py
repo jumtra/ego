@@ -24,7 +24,7 @@ MAX_ITEM_CHARS = 350
 MAX_GOAL_CHARS = 800
 MAX_NOTES = 8
 MAX_PROMPT_CHARS = 1600
-HOST_CLEAR = {"claude": "/clear", "codex": "/clear", "opencode": "/new", "agy": None}
+HOST_CLEAR = {"claude": "/clear", "codex": "/clear", "opencode": "/new", "agy": "/clear"}
 # How each CLI opens a NEW interactive session that starts with a prompt (checked against each CLI's --help).
 HOST_LAUNCH = {"claude": ("claude",), "codex": ("codex",), "opencode": ("opencode", "--prompt"),
                "agy": ("agy", "--prompt-interactive")}
@@ -301,7 +301,7 @@ def arm_auto_resume(root: Path, task_id: str, status: str | None = None) -> bool
     (only the Stop-hook suggestion and `session resume` did), so nothing was injected.
     """
     root = root.resolve()
-    if not auto_resume_installed(root):
+    if os.environ.get("EGO_RUN") or not auto_resume_installed(root):  # under `ego run` the wrapper types the resume prompt
         return False
     if status == "COMPLETED":  # nothing left to resume; do not leave it competing with live tasks
         _disarm_clear_pending(root, task_id)
@@ -591,9 +591,7 @@ def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dic
                         "within 30 minutes. No clear operation was executed by this command."
                         if auto else
                         "Run clear_command in the IDLE interactive host only, then send resume_prompt. "
-                        "No clear operation was executed by this command."
-                        if HOST_CLEAR[host] else "No verified /clear integration for this host. "
-                        "Start a new session manually and send resume_prompt.",
+                        "No clear operation was executed by this command.",
         "resume_prompt": resume_prompt(record),
     }
 

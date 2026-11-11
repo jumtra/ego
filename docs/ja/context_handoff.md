@@ -43,7 +43,7 @@ ego session resume bug-142 --host claude --root .
 | Claude Code | `/clear` | `resume_prompt`を送る |
 | Codex | `/clear` | `resume_prompt`を送る |
 | OpenCode | `/new`（別名`/clear`） | `resume_prompt`を送る |
-| AGY | 自動実行・クリア未保証 | UIで新しいセッションを開き、`resume_prompt`を送る |
+| AGY | `/clear` | `resume_prompt`を送る |
 
 `task_id`を省略すると、未完了の対話チェックポイントのうち最新のものを使います。
 
@@ -121,7 +121,7 @@ ego work resume <run_id> --root . --task task.json --host codex --apply --approv
 
 ## 6. 今後の拡張時の原則
 
-トークン消費実測ができるホストが増えた場合はProviderごとのContext telemetryとして追加できます。ただし、未検証の`/clear`自動投入や前セッション全文の取り込みは行わず、ホスト実装に応じた安全なセッション開始APIが提供されてから自動化を検討します。
+トークン消費実測ができるホストが増えた場合はProviderごとのContext telemetryとして追加できます。前セッション全文の取り込みは行いません。クリアの自動化は、ユーザーが明示的に `ego run` で起動したセッションに限ります（§11）。
 
 ## 7. ゴールループ（計画 → 実行 → 評価 → 再計画）
 
@@ -160,7 +160,7 @@ ego work loop-apply <loop_id> --root . --approve   # VERIFIED を確認してか
 - **リマインド**：しきい値を超えている間は、毎ターン終了時にユーザーへ `/clear` の案内を表示します（モデルのコンテキストには追加しません）。
 - **自動再開**：30分以内に保存された対話チェックポイントがある場合、または `ego session resume <id>` を実行済みの場合、`/clear` 直後に再開コンテキストが自動で読み込まれます（1回限り、30分で失効）。入力欄には何も入らずターンも始まらないため、`/clear` 後に「続けて」などと一言送ると再開します。
 - **しないこと**：チャットの消去（`/clear` はユーザーが実行します）、同じターンの二重ブロック、hook からのモデル呼び出しはしません。hook の失敗がターンを止めることもありません。
-- Codex / OpenCode には同等の仕組みが無いため、従来どおり手動です。
+- Codex / OpenCode / AGY には同等の hook が無いため、この方式は Claude Code 専用です。4つのCLIすべてで、クリアと再開まで自動にするには `ego run`（§11）を使います。
 
 ## 10. 使用量上限が近いときの自動保存と切り替え提案（Claude Code、任意）
 
@@ -171,3 +171,29 @@ ego work loop-apply <loop_id> --root . --approve   # VERIFIED を確認してか
 - **切り替え提案**：保存後、`hosts` に設定済みかつインストール済みの他CLI（Codex / OpenCode / AGY）について `ego session handoff <id> --to <cli>` の `launch_command` を提示します。切り替え先のCLIを起動して貼り付けるか、すでに開いているCLIで「claudeの続きから」と頼めば続行できます。他CLIが無ければ、リセット時刻と再開方法だけを伝えます。
 - **しないこと**：CLIの自動起動、チャットの消去、使用量の推定、認証情報や使用量APIへのアクセスはしません。長い1ターンの途中で上限に達した場合は、ターンが終わらないため保存できません。
 - **注意**：プロジェクトの `statusLine` はユーザー設定のステータスラインより優先されます。自前のステータスラインを使い続けたい場合は、その中で入力JSONを `ego hook statusline` にも渡してください。Codex / OpenCode / AGY は残り使用量を取得する手段が無いため対象外です。
+
+## 11. クリアと再開の自動化（`ego run`、全Host、任意）
+
+hook からはスラッシュコマンドを実行できないため、§9 では `/clear` をユーザーが打つ必要があります。`ego run` は対話CLIを ego の疑似端末の中で起動し、しきい値に達したら ego がキー入力として保存依頼・クリア・再開プロンプトを打ち込みます。CLIの画面と操作は通常どおりです。
+
+```bash
+ego run claude                        # しきい値は .ego/config.toml の clear_suggest_tokens
+ego run codex --clear-tokens 150000   # この起動だけ別のしきい値
+ego run agy -- --model '<model>'      # "--" 以降はCLI自身の引数
+```
+
+- **計測**：各CLIが自分で残すセッション記録から、直近リクエストのプロンプトトークン数を読みます。推定はせず、読めないときは何もしません。
+
+| Host | 読む場所 | クリアに使うコマンド |
+|---|---|---|
+| Claude Code | `~/.claude/projects/<project>/*.jsonl` | `/clear` |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl`（`token_count`） | `/clear` |
+| OpenCode | `~/.local/share/opencode/opencode.db` | `/new` |
+| AGY | ステータスライン入力の `context_window` と `agent_state` | `/clear` |
+
+- **手順**：しきい値以上で、CLIが待機中、画面が静止、入力欄が空のときに、(1)「作業を進めず `ego session checkpoint` で保存する」依頼を送信、(2) 依頼後に保存されたチェックポイントを確認、(3) クリアコマンドを入力、(4) `resume_prompt` を送信します。
+- **保存できなければクリアしません**：5分以内に新しいチェックポイントが現れなければ中止し、コンテキストがさらに 25% 増えるまで再試行しません。
+- **入力中は待ちます**：入力欄に未送信の文字がある間は打ち込みません（Enter / Ctrl-C / Ctrl-U で空と判断します。バックスペースで消しただけの場合や、権限確認に1キーで答えた直後は、次に何か送信するまで待ち続けます）。
+- **Claude Code の hook との関係**：`ego run` の中では §9 の Stop / SessionStart hook は何もせず、ラッパーが代わりに行います（二重の保存依頼を防ぐため）。使用量上限の hook（§10）はそのまま動きます。
+- **AGY**：計測のため、その起動に限りステータスラインを `ego hook context-probe` に差し替えます（`--settings` による一時設定で、設定ファイルは書き換えません）。自分で `--settings` を渡した場合は計測できず、自動クリアは働きません。
+- **制約**：同じプロジェクトで同じCLIを複数同時に開いていると、最後に更新された記録を自分のものとして読みます。その場合も、保存依頼に応じたチェックポイントが無ければクリアはしません。CLIの記録形式が変わって読めなくなった場合は、何もしない側に倒れます。

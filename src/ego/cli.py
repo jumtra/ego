@@ -419,6 +419,14 @@ def _cmd_session(args):
     return 0
 
 
+def _cmd_run(args):
+    from .config import load_config
+    from .ptyrun import run_host
+    root=_root(args)
+    threshold=args.clear_tokens if args.clear_tokens is not None else load_config(root).clear_suggest_tokens
+    return run_host(args.host,args.args,root,threshold)
+
+
 def _cmd_code(args):
     from .codeintel import health,search,symbol,index,impact,affected_tests
     from .config import load_config
@@ -438,6 +446,13 @@ def _cmd_hook(args):
     from .config import load_config
     root=_root(args)
     raw=sys.stdin.read(1024*1024)
+    if args.event=="context-probe":
+        # Status line of a host started by `ego run`: report its context size to the wrapper.
+        try:
+            from .ptyrun import STATE_ENV,record_context
+            print(record_context(json.loads(raw),Path(os.environ[STATE_ENV])))
+        except (ValueError,OSError,SEHError,KeyError,TypeError):print("")
+        return 0
     if args.event=="statusline":
         # Prints the status line itself (plain text); any problem means an empty line.
         try:
@@ -453,8 +468,10 @@ def _cmd_hook(args):
             if args.event=="stop":
                 cfg=load_config(root)
                 # A nearly spent usage limit outranks a large context: there may be no later turn to save in.
-                out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts) or clear_advice(root,obj,cfg.clear_suggest_tokens)
-            else:out=clear_resume(root,obj)
+                # Under `ego run` the wrapper saves, clears and resumes: the hooks must not ask for the same again.
+                wrapped=bool(os.environ.get("EGO_RUN"))
+                out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts) or ({} if wrapped else clear_advice(root,obj,cfg.clear_suggest_tokens))
+            else:out={} if os.environ.get("EGO_RUN") else clear_resume(root,obj)
         except (ValueError,OSError,SEHError,KeyError,TypeError):out={}
         print(json.dumps(out,ensure_ascii=False));return 0
     cfg=load_config(root)
@@ -707,6 +724,11 @@ def build_parser()->argparse.ArgumentParser:
     r.add_argument("--from",dest="from_host",choices=["claude","codex","opencode","agy"],help="Take the latest checkpoint that CLI saved")
     r.add_argument("--launch",action="store_true",help="Start the target CLI in this terminal")
     sp.set_defaults(func=_cmd_session)
+    sp=sub.add_parser("run",help="Start an interactive CLI that ego checkpoints, clears and resumes by itself at the context limit");common(sp)
+    sp.add_argument("host",choices=["claude","codex","opencode","agy"])
+    sp.add_argument("--clear-tokens",type=int,metavar="N",help="Context tokens at which to rotate (default: clear_suggest_tokens)")
+    sp.add_argument("args",nargs="*",help="Arguments for the CLI itself, after --")
+    sp.set_defaults(func=_cmd_run)
     sp=sub.add_parser("context",help="Measure always-on and on-demand context against budgets");common(sp)
     s=sp.add_subparsers(dest="action",required=True);s.add_parser("audit");sp.set_defaults(func=_cmd_context)
     sp=sub.add_parser("code");common(sp);s=sp.add_subparsers(dest="action",required=True)
@@ -720,7 +742,7 @@ def build_parser()->argparse.ArgumentParser:
     sp=sub.add_parser("tool");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("list");r=s.add_parser("call");r.add_argument("name");r.add_argument("arguments");r.add_argument("--approve-external",action="store_true")
     sp.set_defaults(func=_cmd_tool)
-    sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool","stop","session-start","statusline"]);sp.set_defaults(func=_cmd_hook)
+    sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool","stop","session-start","statusline","context-probe"]);sp.set_defaults(func=_cmd_hook)
     sp=sub.add_parser("prompt");common(sp);s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("register");r.add_argument("name");r.add_argument("file");r.add_argument("--role",default="worker")
     r=s.add_parser("show");r.add_argument("name");r.add_argument("--version")
@@ -740,7 +762,8 @@ def main(argv:list[str]|None=None)->int:
     # Accept --root both directly after the command and after a nested action.
     # Relocation remains explicit; it does not rewrite user prompt arguments.
     args_list=list(argv if argv is not None else sys.argv[1:])
-    if "--root" in args_list:
+    own=args_list[:args_list.index("--")] if "--" in args_list else args_list  # after "--" the arguments belong to the wrapped CLI
+    if "--root" in own:
         idx=args_list.index("--root")
         if idx+1>=len(args_list):
             parser.error("--root requires a path")
