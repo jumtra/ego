@@ -10,178 +10,94 @@ Bring planning, task routing, tests, and memory to Claude Code, Codex, OpenCode,
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
-[English](docs/en/README.md) · [日本語 (Japanese)](docs/ja/README.md)
+**English** · [日本語](docs/ja/README.md)
 
 </div>
 
 ## Overview
 
-`ego` is a CLI-first harness that enables multiple AI coding agents (Claude Code, Codex, OpenCode, Antigravity) to plan, delegate tasks, test changes in isolated worktrees, and retain knowledge across sessions.
+`ego` is a CLI-first harness for AI coding CLIs (Claude Code, Codex, OpenCode, Antigravity / `agy`). It generates a shared `/work` skill, agents and instructions for each CLI, and provides commands for verified multi-host task runs, memory, and session handoff. It has no runtime dependencies beyond Python.
 
 <picture>
   <source media="(max-width: 600px)" srcset="docs/en/assets/workflow-en-mobile.svg">
   <img src="docs/en/assets/workflow-en.svg" alt="Request → Plan → Split UI and API work using a task specification → Tests → Approve and apply" width="1120">
 </picture>
 
-| | Goal | Capabilities |
+| | Goal | What ego does |
 |---|---|---|
-| ⚡ | Fix code in your usual AI CLI | Use `/work` to inspect, implement, and run tests. No lengthy documents needed for small fixes |
-| 🧩 | Delegate across multiple AI tools | Assign host and model per task. Respect dependencies and run parallel units |
-| ✅ | Verify before applying | Run tests and bounded repairs in working copies before approving changes |
-| 💾 | Resume in next session | Store and recall insights via Memory. Resume from checkpoints |
-| 🎛️ | Tailor to your workflow | Select hosts, default models, security policy, profile, and memory providers |
+| ⚡ | Fix code in your usual AI CLI | `/work` inspects, implements and tests. Small fixes get no planning documents |
+| 🧩 | Split work across AI CLIs | Host and model per task node; dependencies respected, independent nodes run in parallel |
+| ✅ | Verify before applying | Changes are made and tested in a staging copy or Git worktree, then applied only with approval |
+| 🔁 | Work until a command passes | Goal loop: plan → execute → evaluate → replan, bounded by iterations, budget and time |
+| 💾 | Continue later, or in another CLI | Memory, checkpoints, and handoff between Claude Code / Codex / OpenCode / AGY |
+| ♻️ | Keep long sessions small | `ego run <cli>` checkpoints, clears and resumes the session at a context threshold |
 
 ---
 
-## Usage
+## Quick start
 
-### 1 · Installation
+### 1 · Install
 
-Requires Python **3.11+** on macOS / Linux:
+Requires Python **3.11+** on macOS / Linux.
 
 ```bash
-# Recommended: global CLI, no clone needed (either one)
-uv tool install git+https://github.com/jumtra/ego
-pipx install git+https://github.com/jumtra/ego
-
-# pip-style install from a published release wheel (no git needed; replace the version with the latest release)
-pipx install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl
-uv tool install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl
-pip install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl  # inside a virtualenv
-
+uv tool install git+https://github.com/jumtra/ego    # or: pipx install git+https://github.com/jumtra/ego
 ego --version
-ego update --yes   # later: installs the latest verified release wheel
 ```
 
-Developing ego itself? Clone the repository and run `make install` (symlink) or `pip install -e .`. `ego update --yes` then fast-forwards that checkout instead, so the CLI follows whatever branch is checked out there.
+Release wheels, development installs and updating: [Setup](docs/en/setup.md).
 
-Add `~/.local/bin` to your `PATH` to access `ego` from anywhere.
-
----
-
-### 2 · Apply to a Project (`ego apply`)
-
-Run inside the target project directory:
+### 2 · Apply to a project
 
 ```bash
 cd /path/to/project
-ego apply
+ego apply          # interactive wizard; review the change list and confirm with y
 ```
 
-In an interactive terminal, a wizard will guide your choices. Review the diff and confirm with `y`.
+Scripted setup:
 
-#### Command Arguments & Options
-
-You can also pass arguments directly without interactive prompts:
-
-| Option | Description | Example |
-|---|---|---|
-| `--hosts <list>` | Comma-separated AI hosts to generate configs for | `--hosts claude,antigravity` |
-| `--policy <mode>` | Security policy: `strict` (default) or `relaxed` (allows autonomous push/edits) | `--policy relaxed` |
-| `--profile <name>` | Configuration profile: `minimal`, `balanced` (recommended), `full` | `--profile balanced` |
-| `--models <json>` | Default model mapping per host (JSON format) | `--models '{"claude":"sonnet"}'` |
-| `--graph <provider>` | Code intelligence: `none`, `codegraph`, `graphify` | `--graph none` |
-| `--memory <provider>` | Memory backend: `file` (.agent-memory), `engram` | `--memory file` |
-| `--runtime <mode>` | Runtime mode: `native` (direct) or `managed` (worktree copy) | `--runtime native` |
-| `--dry-run` | Preview generated changes without writing to disk | `--dry-run` |
-| `--check` | Exit with nonzero code if diff exists (for CI validation) | `--check` |
-| `--root <path>` | Target project path (defaults to current working directory) | `--root /path/to/project` |
-
-Example:
 ```bash
-# Non-interactive CI or scripted setup
-ego apply --hosts claude,antigravity --policy relaxed --profile balanced
+ego apply --hosts claude,codex --profile balanced --policy strict
 ```
 
----
+This writes `.ego/config.toml` plus the skills, agents and instruction blocks for the selected CLIs. Every option and generated file: [Setup](docs/en/setup.md). Every setting: [Configuration](docs/en/configuration.md).
 
-### 3 · Configuring `.ego/config.toml`
+### 3 · Work
 
-When you run `ego apply`, configuration is stored in **`.ego/config.toml`** at the project root.
-
-#### How to Modify Configuration
-
-1. **Direct Edit**: Open `.ego/config.toml` in your editor and modify settings.
-2. **Sync**: After editing, run `ego sync` to re-generate host-specific files:
-   ```bash
-   ego sync
-   ```
-
-#### Key Configuration Options
-
-```toml
-schema_version = 1
-profile = "balanced"            # "minimal" / "balanced" (recommended) / "full"
-clear_suggest_tokens = 0       # Claude Code / `ego run`: context tokens at which to checkpoint and clear (0 = off)
-run_yolo = false               # `ego run`: start the CLI with its skip-permissions switch (`--yolo` / `--no-yolo` per run)
-
-[hosts]
-enabled = [                     # Target AI agents to generate skills & rules for
-    "claude",                   # Claude Code (.claude/, CLAUDE.md)
-    "antigravity",              # Antigravity (.agents/, AGENTS.md)
-    "codex",                    # OpenAI Codex (.codex/)
-    "opencode",                 # OpenCode (.opencode/)
-]
-
-[hosts.models]                  # Default models per host (optional)
-claude = "sonnet"
-codex = "auto"
-
-[runtime]
-mode = "native"                 # "native" (direct execution) / "managed" (worktree testing)
-policy_mode = "strict"          # "strict" (safety hooks on) / "relaxed" (autonomous git operations)
-
-[runtime.security]
-command_allowlist = ["git", "python", "pytest"] # Permitted command names
-
-[memory]
-provider = "file"               # "file" (.agent-memory) / "engram" (external MCP)
-
-[code_intelligence]
-provider = "none"               # "none" / "codegraph" / "graphify"
-```
-
----
-
-### 4 · Everyday Workflow: Ask `/work`
-
-Launch your favorite AI CLI inside the project and describe your goal:
+Start your AI CLI in the project and ask:
 
 ```text
-/work Add timeout input validation and run related tests
+/work Add timeout input validation and run the related tests
 ```
 
-**Use `/work` as your everyday entry point.** The AI automatically operates internal `ego` subcommands:
-- Investigate → plan & split tasks → implement → test & verify → report diff
-- Before editing, it confirms why the change is wanted and how completion is judged. It asks one question at a time only when an unresolved point would change what gets built and a wrong guess would be costly; otherwise it proceeds and lists its assumptions in the report
-- Large or multi-host runs carry each stage's `intent`, `done_when`, `non_goals`, `assumptions` and `provides` into the worker prompts, so a stage knows why it exists and what later stages rely on
+`/work` is the everyday entry point. The AI picks the smallest workflow that fits and runs `ego` commands itself when a task needs managed execution. To let ego rotate the session automatically at a context limit, start the CLI through ego:
 
-The final report includes a token usage line printed by `ego` (for example `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`). Tokens are input + output + cache read + cache creation, and the figure is reported as printed.
+```bash
+ego run claude     # also: codex, opencode, agy
+```
 
----
+### 4 · Maintain
 
-### 5 · Maintenance & Useful Commands
-
-| Command | Description |
+| Command | Purpose |
 |---|---|
-| `ego doctor` | Diagnose health of installed host CLIs and providers |
-| `ego run <claude\|codex\|opencode\|agy>` | Run the CLI in a terminal ego owns; at `clear_suggest_tokens` it checkpoints, clears and resumes by itself. `--yolo` skips permission prompts |
-| `ego status` | Inspect drift between `.ego/config.toml` and generated files |
-| `ego projects list` | Show every applied project with the ego version that rendered it and its drift (`ego projects scan <dir>` registers existing ones) |
-| `ego update --yes --sync-all` | Update ego (git checkout: fast-forward; otherwise release wheel), then re-render all registered projects with their own settings |
-| `ego rollback` | Undo the last `ego apply` and restore previous snapshot |
-| `ego uninstall` | Cleanly remove all ego files and managed blocks from project |
-| `ego uninstall --cli` | Remove global symlinks from `~/.local/bin` (`make uninstall` also works) |
+| `ego doctor` | Check host CLIs, providers and configuration |
+| `ego status` | Show drift between `.ego/config.toml` and the generated files |
+| `ego sync --apply` | Re-generate files after editing `.ego/config.toml` |
+| `ego update --yes --sync-all` | Update ego, then re-render every registered project |
+| `ego rollback` | Undo the last apply |
+| `ego uninstall` | Remove ego from the project (`--cli` removes the CLI symlinks) |
 
 ---
 
-## Detailed Documentation
+## Documentation
 
-- **English**:
-  - [Command Reference](docs/en/commands.md)
-  - [Security Model](docs/en/security.md)
-  - [Capability Matrix](docs/en/implementation_matrix.md)
-- **日本語 (Japanese)**:
-  - [日本語ドキュメントトップ](docs/ja/README.md)
-  - [対話セットアップ詳細](docs/ja/apply_choices.md)
-  - [コンテキスト引き継ぎガイド](docs/ja/context_handoff.md)
+| Topic | English | 日本語 |
+|---|---|---|
+| Install, apply, update, uninstall | [Setup](docs/en/setup.md) | [セットアップ](docs/ja/setup.md) |
+| `.ego/config.toml`, environment variables | [Configuration](docs/en/configuration.md) | [設定](docs/ja/configuration.md) |
+| `/work`, managed runs, Task JSON, goal loop | [Workflows](docs/en/workflows.md) | [ワークフロー](docs/ja/workflows.md) |
+| Checkpoints, CLI handoff, `ego run` | [Sessions](docs/en/sessions.md) | [セッション](docs/ja/sessions.md) |
+| Every command and flag | [Command reference](docs/en/commands.md) | [コマンドリファレンス](docs/ja/commands.md) |
+| Trust boundaries and limits | [Security](docs/en/security.md) | [セキュリティ](docs/ja/security.md) |
+
+License: [MIT](LICENSE)
