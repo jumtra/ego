@@ -10,8 +10,8 @@
 | 会話をクリアして続ける | [`ego session resume`](#クリアと再開) |
 | 別の CLI で続ける | [`ego session resume --from` / `ego session handoff`](#別の-cli-で続ける) |
 | どの CLI でも、クリアと再開を自動で行う | [`ego run`](#ego-run-自動ローテーション) |
-| 素の Claude Code でクリアを促してもらう | [`clear_suggest_tokens` フック](#claude-code-のフック) |
-| Claude の使用上限が近づいたら CLI を切り替える | [`usage_switch_percent`](#使用上限での切り替えclaude-code) |
+| 素の Claude Code・Codex・OpenCode・AGY でクリアを促してもらう | [`clear_suggest_tokens` フック](#claude-code-のフック) |
+| Claude / Codex の使用上限が近づいたら CLI を切り替える | [`usage_switch_percent`](#使用上限での切り替えclaude-code-と-codex) |
 
 日常的には、これらのコマンドは AI 自身が実行します。「チェックポイントを保存して」や「codex の続きから」と頼んでください。
 
@@ -129,7 +129,7 @@ ego run codex --yolo                  # 権限確認なしで起動
 - **`--yolo`** は各 CLI 自身のスイッチに対応します。Claude Code と AGY は `--dangerously-skip-permissions`、Codex は `--dangerously-bypass-approvals-and-sandbox`、OpenCode は `--auto` です。`--` の後に既に指定したスイッチは重複させません。これは CLI の権限確認を取り除きます。[セキュリティ](security.md) を参照してください。
 - **AGY:** コンテキストを計測するため、ego はその実行中だけステータスラインを置き換えます（設定ファイルは変更しません）。独自の `--settings` を渡すと、自動ローテーションはオフになります。
 - **複数のインスタンス:** 同じプロジェクトで同じ CLI を複数開いている場合、ego は最も新しく更新された記録を読みます。それでも、対応するチェックポイントがなければクリアはしません。
-- `ego run` の中では、下記の Claude Code のクリアフックは動作を止めます。使用上限のフックは引き続き動作します。
+- `ego run` の中では、下記のクリアフックは動作を止めます。使用上限のフックは引き続き動作します。
 
 ## Claude Code のフック
 
@@ -147,9 +147,21 @@ ego apply --clear-suggest-tokens 120000     # または clear_suggest_tokens を
 - **自動再開:** `/clear` の後、直近 30 分以内に保存されたチェックポイント（または `ego session resume` で準備したもの）の再開コンテキストが 1 回注入されます。ターンは自動では始まりません。「続けて」などの短いメッセージを送ってください。
 - **しないこと:** フックがチャットをクリアすること、モデルを呼ぶこと、同じターンを 2 回ブロックすること、エラー時にターンを失敗させることはありません。
 
-フックはスラッシュコマンドを実行できないため、ここでは `/clear` を入力する必要があります。Codex、OpenCode、AGY には同等のフックがありません。それらには `ego run` を使ってください。
+フックはスラッシュコマンドを実行できないため、ここでは `/clear` を入力する必要があります。
 
-## 使用上限での切り替え（Claude Code）
+## Codex・OpenCode・AGY のフック
+
+同じ `clear_suggest_tokens` の設定で、`hosts` に含まれる他の CLI 用のフックも生成されます。`ego hook stop|session-start --host <cli>` を呼び、上記の Claude Code のフックと同じ動きをします。しきい値到達時と 25% 増えるごとのチェックポイント強制保存、クリア後の再開コンテキストの 1 回だけの注入、モデルは呼ばない、という点です。
+
+| CLI | 生成ファイル | コンテキストの計測元 | 補足 |
+|---|---|---|---|
+| Codex | `.codex/hooks.json`（`Stop`、`clear` 時の `SessionStart`） | セッション記録（`transcript_path`）内の `token_count` イベント | プロジェクトのフックは、初回に確認と信頼（`/hooks`）が必要です |
+| AGY | `.agents/hooks.json`（`Stop`、`SessionStart`） | 会話トランスクリプト内の最新のプランナー応答 | AGY にはクリアの目印がないため、保留中のチェックポイントは次のセッション開始時に注入されます |
+| OpenCode | `.opencode/plugins/ego.ts`（プラグイン） | セッションの最新のアシスタントメッセージ（プラグインが読み取り） | 追撃のプロンプトはプラグイン自身が送ります。再開コンテキストは返信なしで追加されます |
+
+`ego run` の中では、Claude Code のフックと同様にこれらのフックも動作を止めます。Codex・AGY・OpenCode のフックは、各 CLI の公開されているフックの仕様に沿って作られています。AGY と OpenCode はインストール済みの CLI で動作を確認しましたが、Codex の Stop のペイロードは端から端までは実行していません。
+
+## 使用上限での切り替え（Claude Code と Codex）
 
 ```toml
 usage_switch_percent = 85    # その後: ego sync --apply
@@ -162,6 +174,10 @@ usage_switch_percent = 85    # その後: ego sync --apply
 - **提案:** その後、`hosts` に設定されていてインストール済みの他の CLI それぞれについて、`ego session handoff` の起動コマンドを表示します。
 - **しないこと:** CLI は起動されず、何もクリアされず、使用量の推定も行われず、認証情報や使用量 API にはアクセスしません。1 回の長いターンの途中で上限に達した場合は、何も保存できません。
 - プロジェクトの `statusLine` はユーザーレベルの設定より優先されます。自分の設定を残すには、その入力 JSON を `ego hook statusline` にも渡してください。
+
+**Codex:** 同じ設定で `.codex/hooks.json` に `Stop` フックが追加されます。Codex は両方の使用枠をセッション記録に書き込むため、ステータスラインは不要です。フックはそこから読み取り、上記と同じ動きをします（設定済みの他の CLI を提案します）。
+
+**OpenCode と AGY** は、フックやプラグインに使用上限を報告しません。そのため `usage_switch_percent` はそこでは何もできず、この設定のためのフックは生成されません。ego は使用量を推定することもありません。
 
 ## ベストプラクティス
 

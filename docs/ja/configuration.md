@@ -74,8 +74,8 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 
 | キー | 既定値 | 範囲 | 効果 |
 |---|---|---|---|
-| `clear_suggest_tokens` | `0`（オフ） | `0` または 20000〜2000000 | このコンテキストサイズに達したらセッションをチェックポイント保存してクリアします。Claude Code のフックと、全 CLI の `ego run` が使います |
-| `usage_switch_percent` | `0`（オフ） | `0` または 50〜99 | Claude Code 専用。5 時間枠または 7 日枠の使用量がこの割合に達したら、チェックポイントを保存し、別の CLI への切り替えを提案します |
+| `clear_suggest_tokens` | `0`（オフ） | `0` または 20000〜2000000 | このコンテキストサイズに達したらセッションをチェックポイント保存してクリアします。各 CLI の生成フック（[セッション](sessions.md) を参照）と `ego run` が使います |
+| `usage_switch_percent` | `0`（オフ） | `0` または 50〜99 | Claude Code と Codex（使用上限を報告する CLI）のみ。5 時間枠または 7 日枠の使用量がこの割合に達したら、チェックポイントを保存し、別の CLI への切り替えを提案します |
 | `run_yolo` | `false` | bool | `ego run` が CLI を権限確認スキップのスイッチ付きで起動します。`--yolo` / `--no-yolo` で run ごとに上書き |
 
 3 つの詳細は [セッション](sessions.md) を参照してください。

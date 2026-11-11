@@ -187,13 +187,7 @@ RESUGGEST_GROWTH = 1.25
 AFTER_CLEAR = "再開コンテキストは自動で読み込まれるので、/clear 後に「続けて」と送ってください。"
 
 
-def context_tokens(transcript: Path, tail_bytes: int = 512 * 1024) -> int | None:
-    """Measured size of the main conversation: the last request's prompt tokens.
-
-    Read from the host transcript tail (input + cache read + cache creation of
-    the latest main-chain assistant message). None when it cannot be measured;
-    callers must then stay silent rather than guess.
-    """
+def _tail_objects(transcript: Path, tail_bytes: int) -> list[dict[str, Any]]:
     try:
         with transcript.open("rb") as f:
             f.seek(0, 2)
@@ -201,13 +195,50 @@ def context_tokens(transcript: Path, tail_bytes: int = 512 * 1024) -> int | None
             f.seek(max(0, size - tail_bytes))
             lines = f.read().decode("utf8", errors="replace").splitlines()
     except OSError:
-        return None
-    for line in reversed(lines):
+        return []
+    out = []
+    for line in lines:
         try:
             obj = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(obj, dict) or obj.get("type") != "assistant" or obj.get("isSidechain"):
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out
+
+
+def _codex_token_event(transcript: Path, tail_bytes: int) -> dict[str, Any] | None:
+    """The latest `token_count` event of a Codex rollout: its prompt size and the host-reported usage limits."""
+    for obj in reversed(_tail_objects(transcript, tail_bytes)):
+        payload = obj.get("payload")
+        if obj.get("type") == "event_msg" and isinstance(payload, dict) and payload.get("type") == "token_count":
+            return payload
+    return None
+
+
+def context_tokens(transcript: Path, tail_bytes: int = 512 * 1024, host: str = "claude") -> int | None:
+    """Measured size of the main conversation: the last request's prompt tokens.
+
+    Read from the host transcript tail (Claude: input + cache read + cache creation of
+    the latest main-chain assistant message; Codex: the latest token_count event, whose input
+    includes cached tokens; AGY: input + cache read of the latest planner response).
+    None when it cannot be measured; callers must then stay silent rather than guess.
+    """
+    if host == "codex":
+        event = _codex_token_event(transcript, tail_bytes)
+        try:
+            total = int(event["info"]["last_token_usage"]["input_tokens"]) if event else 0
+        except (KeyError, TypeError, ValueError):
+            total = 0
+        return total or None
+    for obj in reversed(_tail_objects(transcript, tail_bytes)):
+        if host == "agy":
+            if obj.get("type") == "PLANNER_RESPONSE" and obj.get("source") == "MODEL":
+                total = int(obj.get("input_tokens") or 0) + int(obj.get("cache_read_tokens") or 0)
+                if total > 0:
+                    return total
+            continue
+        if obj.get("type") != "assistant" or obj.get("isSidechain"):
             continue
         usage = obj.get("message", {}).get("usage") if isinstance(obj.get("message"), dict) else None
         if isinstance(usage, dict):
@@ -215,6 +246,23 @@ def context_tokens(transcript: Path, tail_bytes: int = 512 * 1024) -> int | None
             if total > 0:
                 return total
     return None
+
+
+def codex_limits(transcript: Path, tail_bytes: int = 512 * 1024) -> dict[str, Any]:
+    """Codex reports its usage limits in the rollout: {five_hour|seven_day: {used_percentage, resets_at}}."""
+    event = _codex_token_event(transcript, tail_bytes)
+    limits = event.get("rate_limits") if isinstance(event, dict) else None
+    out: dict[str, Any] = {}
+    for slot in ("primary", "secondary"):
+        window = limits.get(slot) if isinstance(limits, dict) else None
+        if not isinstance(window, dict):
+            continue
+        try:
+            minutes, used, resets = float(window["window_minutes"]), float(window["used_percent"]), float(window["resets_at"])
+        except (TypeError, KeyError, ValueError):
+            continue
+        out["five_hour" if minutes <= 360 else "seven_day"] = {"used_percentage": used, "resets_at": resets}
+    return out
 
 
 def _age_seconds(stamp: str) -> float:
@@ -287,10 +335,16 @@ def _disarm_clear_pending(root: Path, task_id: str) -> None:
             _store_pending(root, tasks)
 
 
-def auto_resume_installed(root: Path) -> bool:
+AUTO_RESUME_FILES = {"claude": ".claude/settings.json", "codex": ".codex/hooks.json",
+                     "agy": ".agents/hooks.json", "opencode": ".opencode/plugins/ego.ts"}
+
+
+def auto_resume_installed(root: Path, host: str = "claude") -> bool:
+    """Whether `host` has ego's session-start hook, which injects a saved checkpoint after a clear."""
     try:
-        return "hook session-start" in (root / ".claude" / "settings.json").read_text(encoding="utf8")
-    except OSError:
+        return "hook session-start" in (root / AUTO_RESUME_FILES[host]).read_text(encoding="utf8") or \
+            (host == "opencode" and "session-start" in (root / AUTO_RESUME_FILES[host]).read_text(encoding="utf8"))
+    except (OSError, KeyError):
         return False
 
 
@@ -301,7 +355,7 @@ def arm_auto_resume(root: Path, task_id: str, status: str | None = None) -> bool
     (only the Stop-hook suggestion and `session resume` did), so nothing was injected.
     """
     root = root.resolve()
-    if os.environ.get("EGO_RUN") or not auto_resume_installed(root):  # under `ego run` the wrapper types the resume prompt
+    if os.environ.get("EGO_RUN") or not any(auto_resume_installed(root, h) for h in AUTO_RESUME_FILES):  # under `ego run` the wrapper types the resume prompt
         return False
     if status == "COMPLETED":  # nothing left to resume; do not leave it competing with live tasks
         _disarm_clear_pending(root, task_id)
@@ -310,7 +364,7 @@ def arm_auto_resume(root: Path, task_id: str, status: str | None = None) -> bool
     return True
 
 
-def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[str, Any]:
+def clear_advice(root: Path, payload: dict[str, Any], threshold: int, host: str = "claude", info: dict[str, Any] | None = None) -> dict[str, Any]:
     """Stop-hook output that enforces the configured context limit (clear_suggest_tokens).
 
     On reaching the limit, and again at each growth step, a session without a current
@@ -318,9 +372,14 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[st
     conversation knows what to save. Every later turn above the limit reminds the user
     to /clear. It never clears anything and never blocks twice in a row.
     """
-    if threshold <= 0 or not isinstance(payload, dict) or not isinstance(payload.get("transcript_path"), str):
+    if threshold <= 0 or not isinstance(payload, dict):
         return {}
-    tokens = context_tokens(Path(payload["transcript_path"]).expanduser())
+    if isinstance(payload.get("context_tokens"), int):  # a host whose plugin measures it (OpenCode)
+        tokens = payload["context_tokens"]
+    elif isinstance(payload.get("transcript_path"), str):
+        tokens = context_tokens(Path(payload["transcript_path"]).expanduser(), host=host)
+    else:
+        return {}
     session = str(payload.get("session_id") or "unknown")[:80]
     root = root.resolve()
     state_path = safe_path(root, ADVICE_STATE)
@@ -351,8 +410,10 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[st
     size = f"約 {tokens // 1000}k トークン（しきい値 {threshold // 1000}k）"
     if checkpoint:
         _mark_clear_pending(root, checkpoint["task_id"], session if session != "unknown" else None)
+        if info is not None:
+            info["once"] = True  # said once per growth step, not on every later turn
         return {"systemMessage": f"ego: コンテキストは{size}です。チェックポイント {checkpoint['task_id']}（{checkpoint['status']}）は保存済みです。"
-                                 "/clear を実行してください。" + AFTER_CLEAR}
+                                 f"{HOST_CLEAR.get(host, '/clear')} を実行してください。" + AFTER_CLEAR}
     if save:
         return {"systemMessage": f"ego: コンテキストが{size}に達しました。チェックポイントを自動保存します。保存後に /clear を実行してください。",
                 "decision": "block",
@@ -414,7 +475,11 @@ def record_usage(payload: dict[str, Any], fallback_root: Path | None = None) -> 
     return "ego · " + " · ".join(f"{short} {used:.0f}%" for _, short, _, used, _ in windows)
 
 
-def usage_advice(root: Path, payload: dict[str, Any], percent: int, hosts: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
+HOST_NAME = {"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "agy": "AGY"}
+
+
+def usage_advice(root: Path, payload: dict[str, Any], percent: int, hosts: list[str] | tuple[str, ...] = (),
+                 host: str = "claude", limits: dict[str, Any] | None = None) -> dict[str, Any]:
     """Stop-hook output when the usage limit is nearly spent: have the session checkpoint itself, then propose a switch.
 
     Only the conversation knows what to save, so this asks for one more short turn
@@ -423,10 +488,12 @@ def usage_advice(root: Path, payload: dict[str, Any], percent: int, hosts: list[
     if percent <= 0 or not isinstance(payload, dict) or payload.get("stop_hook_active"):
         return {}
     root = root.resolve()
-    state = read_json(safe_path(root, USAGE_STATE))
-    if not isinstance(state, dict) or time.time() - float(state.get("at") or 0) > USAGE_FRESH:
-        return {}  # no recent measurement: stay silent rather than guess
-    windows = [w for w in _windows(state.get("rate_limits")) if w[3] >= percent]
+    if limits is None:
+        state = read_json(safe_path(root, USAGE_STATE))
+        if not isinstance(state, dict) or time.time() - float(state.get("at") or 0) > USAGE_FRESH:
+            return {}  # no recent measurement: stay silent rather than guess
+        limits = state.get("rate_limits")
+    windows = [w for w in _windows(limits) if w[3] >= percent]
     if not windows:
         return {}
     key, _, label, used, resets = max(windows, key=lambda w: w[3])
@@ -442,7 +509,7 @@ def usage_advice(root: Path, payload: dict[str, Any], percent: int, hosts: list[
         for old in sorted(seen, key=lambda k: seen[k].get("at", 0))[:-20]:
             seen.pop(old)
         write_json(advice_path, seen)
-    others = [h for h in hosts if h in HOST_LAUNCH and h != "claude" and shutil.which(HOST_LAUNCH[h][0])]
+    others = [h for h in hosts if h in HOST_LAUNCH and h != host and shutil.which(HOST_LAUNCH[h][0])]
     reset = dt.datetime.fromtimestamp(resets).strftime("%m/%d %H:%M")
     size = f"{label}の使用率が {used:.0f}%（しきい値 {percent}%、リセット {reset}）"
     switch = (f"Then run `ego session handoff <task-id> --to <cli> --root .` for the installed alternative(s) "
@@ -452,7 +519,7 @@ def usage_advice(root: Path, payload: dict[str, Any], percent: int, hosts: list[
               f"`ego session resume <task-id>` continues it after the limit resets ({reset}). ")
     return {"systemMessage": f"ego: {size}に達しました。チェックポイントを自動保存し、切り替え先を提案します。",
             "decision": "block",
-            "reason": f"ego: the Claude usage limit is nearly spent ({key} {used:.0f}% used, resets {reset}). "
+            "reason": f"ego: the {HOST_NAME.get(host, host)} usage limit is nearly spent ({key} {used:.0f}% used, resets {reset}). "
                       "Do no further task work now. Save this conversation's state with one "
                       "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... "
                       "--status <IN_PROGRESS|VERIFIED|BLOCKED|COMPLETED> --root .` (facts only; include uncommitted changes and "
@@ -577,7 +644,7 @@ def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dic
     record = load_checkpoint(root, task_id)
     if record is None:
         raise SEHError("HANDOFF_MISSING", "Save a checkpoint before clearing context", 3)
-    auto = host == "claude" and auto_resume_installed(root.resolve())
+    auto = auto_resume_installed(root.resolve(), host)
     if auto:
         _mark_clear_pending(root.resolve(), task_id)
     return {
@@ -627,3 +694,41 @@ def completion_message(record: dict[str, Any]) -> str:
     if state == "COMPARISON_READY":
         return "比較実行完了（採用待ち）：比較結果を確認して採用する候補を選んでください。"
     return f"未完了：実行状態は {state or 'UNKNOWN'} です。チェックポイントから再開してください。"
+
+
+def project_root(root: Path, *candidates: Any) -> Path:
+    """The project (the directory holding .ego) for a hook run from a host that does not say where it is."""
+    for start in (root, *(Path(str(c)) for c in candidates if c)):
+        try:
+            start = start.resolve()
+        except OSError:
+            continue
+        for directory in (start, *start.parents):
+            if (directory / ".ego").is_dir():
+                return directory
+    return root.resolve()
+
+
+def normalize_payload(host: str, obj: Any) -> dict[str, Any]:
+    """A host's hook input in the field names the advice functions use (Claude's)."""
+    if not isinstance(obj, dict):
+        return {}
+    if host == "agy":
+        return {"session_id": obj.get("conversationId"), "transcript_path": obj.get("transcriptPath"),
+                "stop_hook_active": obj.get("continuationActive") is True or int(obj.get("executionNum") or 0) > 0, "source": "clear",
+                "cwd": obj.get("cwd")}
+    return obj
+
+
+def adapt_output(host: str, event: str, out: dict[str, Any], once: bool = False) -> dict[str, Any]:
+    """The advice in the output format `host` reads for `event` (`stop` or `session-start`)."""
+    if host == "agy":
+        if event == "stop":
+            if out.get("decision") == "block":
+                return {"decision": "continue", "reason": out.get("reason", "")}
+            if once and out.get("systemMessage"):  # AGY has no message-to-user channel: have the agent relay it, once
+                return {"decision": "continue", "reason": f"ego: Tell the user, briefly and in their language: {out['systemMessage']} Then stop."}
+            return {}
+        context = (out.get("hookSpecificOutput") or {}).get("additionalContext")
+        return {"injectSteps": [{"systemMessage": {"systemMessage": f"{context}\nTell the user briefly that this checkpoint was loaded."}}]} if context else {}
+    return out

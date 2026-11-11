@@ -124,7 +124,8 @@ def test_session_resume_arms_auto_resume_only_when_the_hook_is_installed(tmp_pat
     armed = rotation_instructions(tmp_path, "t1", "claude")
     assert armed["auto_resume_after_clear"] is True and "injected automatically" in armed["instructions"]
     assert list(read_json(tmp_path / ".ego/state/clear_pending.json")["tasks"]) == ["t1"]
-    assert rotation_instructions(tmp_path, "t1", "codex")["auto_resume_after_clear"] is False
+    assert rotation_instructions(tmp_path, "t1", "codex")["auto_resume_after_clear"] is True  # the default hosts include Codex
+    assert rotation_instructions(tmp_path, "t1", "opencode")["auto_resume_after_clear"] is True
 
 
 def test_hooks_are_generated_only_on_request_and_call_the_installed_command(project: Path):
@@ -301,3 +302,117 @@ def test_usage_switch_hooks_and_statusline_cli(tmp_path: Path, monkeypatch, caps
     assert main(["hook", "stop", "--root", str(tmp_path)]) == 0
     out = json.loads(capsys.readouterr().out)
     assert "decision" not in out and "/clear" in out["systemMessage"]
+
+
+# --- Codex / OpenCode / AGY hooks -------------------------------------------------------------
+
+def _rollout(path: Path, tokens: int, *, five: float = 10.0, week: float = 20.0) -> Path:
+    event = {"type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": tokens}},
+             "rate_limits": {"primary": {"used_percent": five, "window_minutes": 300, "resets_at": time.time() + 3600},
+                             "secondary": {"used_percent": week, "window_minutes": 10080, "resets_at": time.time() + 86400}}}}
+    path.write_text(json.dumps({"type": "session_meta"}) + "\n" + json.dumps(event) + "\n")
+    return path
+
+
+def _agy_transcript(path: Path, tokens: int) -> Path:
+    path.write_text(json.dumps({"type": "USER_INPUT", "source": "USER_EXPLICIT"}) + "\n" +
+                    json.dumps({"type": "PLANNER_RESPONSE", "source": "MODEL", "input_tokens": tokens - 100, "cache_read_tokens": 100}) + "\n")
+    return path
+
+
+def _hook(monkeypatch, capsys, tmp_path: Path, event: str, host: str, payload: dict) -> dict:
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    assert main(["hook", event, "--host", host, "--root", str(tmp_path)]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def _project(tmp_path: Path, **settings) -> Path:
+    (tmp_path / ".ego").mkdir()
+    (tmp_path / ".ego/config.toml").write_text("".join(f"{k} = {v}\n" for k, v in settings.items()))
+    return tmp_path
+
+
+def test_context_is_measured_from_codex_and_agy_records(tmp_path: Path):
+    assert context_tokens(_rollout(tmp_path / "r.jsonl", 150000), host="codex") == 150000
+    assert context_tokens(_agy_transcript(tmp_path / "a.jsonl", 90000), host="agy") == 90000
+    assert context_tokens(tmp_path / "missing.jsonl", host="codex") is None
+
+
+def test_codex_stop_hook_asks_for_a_checkpoint_at_the_context_limit(tmp_path: Path, monkeypatch, capsys):
+    _project(tmp_path, clear_suggest_tokens=100000)
+    rollout = _rollout(tmp_path / "r.jsonl", 150000)
+    out = _hook(monkeypatch, capsys, tmp_path, "stop", "codex",
+                {"session_id": "s1", "transcript_path": str(rollout), "cwd": str(tmp_path), "stop_hook_active": False})
+    assert out["decision"] == "block" and "clear_suggest_tokens = 100000" in out["reason"]
+    again = _hook(monkeypatch, capsys, tmp_path, "stop", "codex",
+                  {"session_id": "s1", "transcript_path": str(rollout), "cwd": str(tmp_path), "stop_hook_active": True})
+    assert "decision" not in again
+
+
+def test_codex_stop_hook_switches_when_the_reported_usage_limit_is_nearly_spent(tmp_path: Path, monkeypatch, capsys):
+    _project(tmp_path, usage_switch_percent=85)
+    low = _rollout(tmp_path / "low.jsonl", 1000, five=40, week=50)
+    assert _hook(monkeypatch, capsys, tmp_path, "stop", "codex", {"session_id": "s", "transcript_path": str(low)}) == {}
+    high = _rollout(tmp_path / "high.jsonl", 1000, five=91, week=50)
+    out = _hook(monkeypatch, capsys, tmp_path, "stop", "codex", {"session_id": "s", "transcript_path": str(high)})
+    assert out["decision"] == "block" and "Codex usage limit" in out["reason"] and "five_hour 91%" in out["reason"]
+
+
+def test_agy_stop_hook_uses_its_own_output_format(tmp_path: Path, monkeypatch, capsys):
+    _project(tmp_path, clear_suggest_tokens=100000)
+    transcript = _agy_transcript(tmp_path / "a.jsonl", 150000)
+    payload = {"conversationId": "c1", "transcriptPath": str(transcript), "cwd": str(tmp_path), "hookEventName": "Stop"}
+    out = _hook(monkeypatch, capsys, tmp_path, "stop", "agy", payload)
+    assert out["decision"] == "continue" and "ego session checkpoint" in out["reason"]
+    assert _hook(monkeypatch, capsys, tmp_path, "stop", "agy", {**payload, "continuationActive": True}) == {}
+    assert _hook(monkeypatch, capsys, tmp_path, "stop", "agy", {**payload, "conversationId": "c2", "executionNum": 1}) == {}  # AGY reports continuationActive only sometimes
+
+
+def test_opencode_plugin_reports_its_measured_context(tmp_path: Path, monkeypatch, capsys):
+    _project(tmp_path, clear_suggest_tokens=100000)
+    out = _hook(monkeypatch, capsys, tmp_path, "stop", "opencode", {"session_id": "o1", "context_tokens": 130000})
+    assert out["decision"] == "block"
+    assert _hook(monkeypatch, capsys, tmp_path, "stop", "opencode", {"session_id": "o2", "context_tokens": 5000}) == {}
+
+
+def test_agy_and_opencode_have_no_usage_limit_to_act_on(tmp_path: Path, monkeypatch, capsys):
+    _project(tmp_path, usage_switch_percent=60)
+    (tmp_path / ".ego/state").mkdir()
+    (tmp_path / ".ego/state/usage_limits.json").write_text(json.dumps(
+        {"at": time.time(), "rate_limits": {"five_hour": {"used_percentage": 99, "resets_at": time.time() + 600}}}))
+    for host, payload in (("agy", {"conversationId": "c"}), ("opencode", {"session_id": "o", "context_tokens": 1})):
+        assert _hook(monkeypatch, capsys, tmp_path, "stop", host, payload) == {}  # Claude's reading is not theirs
+
+
+def test_session_start_injects_the_pending_checkpoint_in_each_hosts_format(tmp_path: Path, monkeypatch, capsys):
+    _project(tmp_path, clear_suggest_tokens=100000)
+    for host, payload in (("codex", {"source": "clear"}), ("agy", {"conversationId": "c", "cwd": str(tmp_path)}),
+                          ("opencode", {"source": "clear", "session_id": "o"})):
+        save_checkpoint(tmp_path, f"t-{host}", goal=f"goal {host}", status="IN_PROGRESS")
+        from ego.session import _mark_clear_pending
+        _mark_clear_pending(tmp_path, f"t-{host}")
+        out = _hook(monkeypatch, capsys, tmp_path, "session-start", host, payload)
+        text = json.dumps(out)
+        assert f"t-{host}" in text
+        if host == "agy":
+            assert out["injectSteps"][0]["systemMessage"]["systemMessage"]
+        else:
+            assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+
+
+def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path: Path):
+    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(Config()))
+    cfg = Config(); cfg.clear_suggest_tokens = 120000
+    files = generated_files(cfg)
+    codex = json.loads(files[".codex/hooks.json"])["hooks"]
+    assert codex["Stop"][0]["hooks"][0]["command"] == "ego hook stop --host codex --root ."
+    assert codex["SessionStart"][0]["matcher"] == "clear"
+    agy = json.loads(files[".agents/hooks.json"])["ego"]
+    assert agy["Stop"][0]["command"] == "ego hook stop --host agy --root ." and agy["Stop"][0]["type"] == "command"
+    assert "session.idle" in files[".opencode/plugins/ego.ts"] and "ego" in files[".opencode/plugins/ego.ts"]
+    usage_only = Config(); usage_only.usage_switch_percent = 85
+    only = generated_files(usage_only)
+    assert set(json.loads(only[".codex/hooks.json"])["hooks"]) == {"Stop"}  # Codex reports its limits
+    assert ".agents/hooks.json" not in only and ".opencode/plugins/ego.ts" not in only  # AGY / OpenCode do not
+    cfg.hosts = ["claude"]
+    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(cfg))

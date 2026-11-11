@@ -173,7 +173,7 @@ ego work cancel <loop_id>                    # 次のイテレーションの前
 | `--done-check` | ゴールが成立したときに終了コード 0 となるコマンド（必須、繰り返し指定可）。コマンド行または JSON の argv 配列 |
 | `--host` | `mock`（既定）、`claude`、`codex`、`opencode` |
 | `--scope` | ループが変更してよいファイルのカンマ区切り glob（既定 `src/**,tests/**`） |
-| `--max-iterations` | 既定 3 |
+| `--max-iterations` | 既定 3、1〜10 |
 | `--max-budget-usd`、`--max-wall-seconds` | 任意の上限 |
 | `--execute` | プランナーのモデル呼び出しを許可 |
 | `--plan-first` | 最初のイテレーションの前にプランナーを呼ぶ |

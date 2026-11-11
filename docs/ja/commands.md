@@ -113,6 +113,6 @@
 | `ego tool list` / `call <name> '<json args>' [--approve-external]` | 決定的なツール、および modules が宣言したツール |
 | `ego prompt register <name> <file> [--role worker]` / `show <name> [--version V]` / `extract <file> [--contract json\|reply]` | バージョン管理されたプロンプトと、出力コントラクトの解析 |
 | `ego pr create --title <t> --body <b> [--base main] --approve` / `reviews <number>` | `gh` CLI 経由のプルリクエスト操作 |
-| `ego hook <pre-tool\|stop\|session-start\|statusline\|context-probe>` | 生成されたホストのフックの入口。フックのペイロードを stdin から読む。手動で実行するものではない |
+| `ego hook <pre-tool\|stop\|session-start\|statusline\|context-probe>` | 生成されたホストのフックの入口。フックのペイロードを stdin から読む。`--host claude|codex|opencode|agy`（既定 `claude`）でペイロードと出力の形式を選ぶ。手動で実行するものではない |
 | `ego bench [--trials N]` | ego 自身の CLI のディスパッチ時間を計測 |
 | `ego --version` | バージョン |

@@ -74,8 +74,8 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 
 | Key | Default | Range | Effect |
 |---|---|---|---|
-| `clear_suggest_tokens` | `0` (off) | `0` or 20000–2000000 | Context size at which a session is checkpointed and cleared. Used by the Claude Code hooks and by `ego run` for every CLI |
-| `usage_switch_percent` | `0` (off) | `0` or 50–99 | Claude Code only: at this percentage of the 5-hour or 7-day usage limit, save a checkpoint and propose continuing in another CLI |
+| `clear_suggest_tokens` | `0` (off) | `0` or 20000–2000000 | Context size at which a session is checkpointed and cleared. Used by the generated hooks of every CLI (see [Sessions](sessions.md)) and by `ego run` |
+| `usage_switch_percent` | `0` (off) | `0` or 50–99 | Claude Code and Codex (the CLIs that report their usage limit): at this percentage of the 5-hour or 7-day usage limit, save a checkpoint and propose continuing in another CLI |
 | `run_yolo` | `false` | bool | `ego run` starts the CLI with its skip-permissions switch. `--yolo` / `--no-yolo` override per run |
 
 Details of all three: [Sessions](sessions.md).
