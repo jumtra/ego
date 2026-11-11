@@ -13,7 +13,7 @@ from ego import hostcompat, selfupdate
 from ego.hosts import build_command
 from ego.task_routing import resolve_routes, build_task_prompt
 from ego.work import execute, validate_task
-from ego.util import SEHError
+from ego.util import EgoError
 
 
 def fake_hosts(monkeypatch, tmp_path, *, claude_exit=0):
@@ -44,7 +44,7 @@ else:
         script.chmod(0o755)
         paths[name]=script
     monkeypatch.setenv('PATH',str(folder)+os.pathsep+os.environ.get('PATH',''))
-    monkeypatch.setenv('SEH_CACHE_DIR',str(tmp_path/'cache'))
+    monkeypatch.setenv('EGO_CACHE_DIR',str(tmp_path/'cache'))
     return paths
 
 
@@ -72,7 +72,7 @@ def test_flags_model_and_permission_profiles(monkeypatch,tmp_path):
     assert '--ask-for-approval' in codex and 'never' in codex
     open_code=build_command('opencode','hello',model='provider/model-x',read_only=False)
     assert '--auto' in open_code and '--model' in open_code
-    with pytest.raises(SEHError,match='isolated'):
+    with pytest.raises(EgoError,match='isolated'):
         build_command('codex','hello',autonomy='bypass')
     assert '--yolo' in build_command('codex','hello',autonomy='bypass',isolated=True)
     assert '--dangerously-skip-permissions' in build_command('claude','hello',autonomy='bypass',isolated=True)
@@ -146,7 +146,7 @@ def test_compare_never_merges_or_applies(monkeypatch,project,tmp_path):
     assert res['final_status']=='COMPARISON_READY'
     assert res['changed_files']==[]
     assert len(res['results']['review']['comparison'])==2
-    with pytest.raises(SEHError,match='Compare'):
+    with pytest.raises(EgoError,match='Compare'):
         execute(project,spec,trust_cli=True,apply=True,approve=True)
 
 
@@ -172,16 +172,16 @@ def test_selfupdate_digest_and_version(monkeypatch,tmp_path):
     path=selfupdate.fetch_verified_wheel(info,tmp_path/'update.whl')
     assert path.read_bytes()==wheel
     rel['assets'][0]['digest']='sha256:'+'0'*64
-    with pytest.raises(SEHError,match='digest mismatch'):
+    with pytest.raises(EgoError,match='digest mismatch'):
         selfupdate.fetch_verified_wheel(selfupdate.latest_release('1.4.1'),tmp_path/'invalid.whl')
     assert not (tmp_path/'invalid.whl').exists()
 
 
 def test_update_requires_approval_and_venv(monkeypatch,tmp_path):
-    with pytest.raises(SEHError,match='--yes'):
+    with pytest.raises(EgoError,match='--yes'):
         selfupdate.install_wheel(tmp_path/'x.whl','1.4.2')
     monkeypatch.setattr(selfupdate.sys,'prefix',getattr(selfupdate.sys,'base_prefix',selfupdate.sys.prefix))
-    with pytest.raises(SEHError,match='virtual environment'):
+    with pytest.raises(EgoError,match='virtual environment'):
         selfupdate.install_wheel(tmp_path/'x.whl','1.4.2',approved=True)
 
 
@@ -195,7 +195,7 @@ def test_update_installer_falls_back_to_uv_without_pip(monkeypatch,tmp_path):
     argv=selfupdate._installer_argv(wheel)
     assert argv[:5]==['/opt/uv','pip','install','--python',selfupdate.sys.executable] and '--no-deps' in argv and '--no-index' in argv
     monkeypatch.setattr(selfupdate.shutil,'which',lambda name:None)
-    with pytest.raises(SEHError,match='neither pip nor uv'):
+    with pytest.raises(EgoError,match='neither pip nor uv'):
         selfupdate._installer_argv(wheel)
 
 
@@ -223,7 +223,7 @@ def test_cli_flag_removal_fails_closed(monkeypatch,tmp_path):
                       'print(\'--model --sandbox --ask-for-approval\')')
     assert data!=script.read_text()
     script.write_text(data)
-    with pytest.raises(SEHError,match='required CLI switches absent'):
+    with pytest.raises(EgoError,match='required CLI switches absent'):
         build_command('codex','hello')
 
 
@@ -231,9 +231,9 @@ def test_local_wheel_requires_integrity_and_newer_version(tmp_path):
     wheel=fake_wheel('1.4.2')
     path=tmp_path/'ego-1.4.2-py3-none-any.whl'
     path.write_bytes(wheel)
-    with pytest.raises(SEHError,match='digest mismatch'):
+    with pytest.raises(EgoError,match='digest mismatch'):
         selfupdate.update_from_local_wheel(path,'0'*64,'1.4.1',yes=True)
-    with pytest.raises(SEHError,match='newer stable'):
+    with pytest.raises(EgoError,match='newer stable'):
         selfupdate.update_from_local_wheel(path,hashlib.sha256(wheel).hexdigest(),'1.4.2',yes=True)
 
 
@@ -251,7 +251,7 @@ def test_bin_wrappers_work_via_symlink(tmp_path):
     repo_root=Path(__file__).resolve().parent.parent
     bin_dir=tmp_path/'local'/'bin'
     bin_dir.mkdir(parents=True)
-    for name in ('ego','seh'):
+    for name in ("ego",):
         link=bin_dir/name
         link.symlink_to(repo_root/'bin'/name)
         proc=subprocess.run([str(link),'--version'],capture_output=True,text=True,timeout=10,check=False)
@@ -290,25 +290,26 @@ def test_selfupdate_allows_api_github_com_redirect(monkeypatch):
     assert data == b"{}"
 
 
-def test_make_install_creates_symlinks_without_clobbering_existing_seh(tmp_path):
+def test_make_install_creates_symlinks_without_clobbering_existing_file(tmp_path):
     import subprocess
     repo_root=Path(__file__).resolve().parent.parent
     bin_dir=tmp_path/'bin'
     bin_dir.mkdir()
-    existing_seh=bin_dir/'seh'
-    existing_seh.write_text('#!/bin/sh\necho existing\n')
-    existing_seh.chmod(0o755)
+    existing=bin_dir/'other'
+    existing.write_text('#!/bin/sh\necho existing\n')
+    existing.chmod(0o755)
     proc=subprocess.run(['make','install',f'BINDIR={bin_dir}'],cwd=repo_root,capture_output=True,text=True,timeout=10,check=False)
     assert proc.returncode==0, proc.stderr
     assert (bin_dir/'ego').is_symlink()
     assert not (bin_dir/'harness').exists()
-    assert not existing_seh.is_symlink() and existing_seh.read_text()=='#!/bin/sh\necho existing\n'
+    assert not existing.is_symlink() and existing.read_text()=='#!/bin/sh\necho existing\n'
     ver=subprocess.run([str(bin_dir/'ego'),'--version'],capture_output=True,text=True,timeout=10,check=False)
     assert ver.returncode==0 and 'ego ' in ver.stdout
     clean_bin=tmp_path/'clean_bin'
     proc2=subprocess.run(['make','install',f'BINDIR={clean_bin}'],cwd=repo_root,capture_output=True,text=True,timeout=10,check=False)
     assert proc2.returncode==0, proc2.stderr
-    assert (clean_bin/'ego').is_symlink() and (clean_bin/'seh').is_symlink()
+    assert (clean_bin/"ego").is_symlink()
+    assert not (clean_bin/"seh").exists()
     assert not (clean_bin/'harness').exists()
 
 
@@ -388,5 +389,5 @@ def test_node_notes_reach_worker_and_successor_prompts(tmp_path):
                                   {'done_when':'passes'},{'done_when':['']},{'provides':['a']*7}])
 def test_node_notes_are_bounded(notes):
     task={'goal':'g','nodes':[{'id':'a','prompt':'p','write_allowlist':['src/*'],**notes}]}
-    with pytest.raises(SEHError,match='INVALID_TASK|must be'):
+    with pytest.raises(EgoError,match='INVALID_TASK|must be'):
         validate_task(task)

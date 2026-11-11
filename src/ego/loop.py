@@ -23,7 +23,7 @@ from .context import clip_output
 from .policy import check_command
 from .session import save_checkpoint
 from .usage import summary_line, tokens_of
-from .util import SEHError, filehash, ident, now, read_json, safe_path, sha256, json_text, write_json
+from .util import EgoError, filehash, ident, now, read_json, safe_path, sha256, json_text, write_json
 
 MAX_ITERATIONS_CAP = 10
 MAX_HISTORY_CHARS = 2600
@@ -35,7 +35,7 @@ Planner = Callable[[str, str | None, Path], dict]
 
 def _loop_id(value: str) -> str:
     if not isinstance(value, str) or not value or not all(c.isalnum() or c in "-_" for c in value):
-        raise SEHError("INVALID_ID", str(value), 2)
+        raise EgoError("INVALID_ID", str(value), 2)
     return value
 
 
@@ -47,7 +47,7 @@ def with_done_gate(spec: dict, done_checks: list[list[str]]) -> dict:
     """Append the goal's checks as a final gate depending on every planned node."""
     nodes = [dict(n) for n in spec.get("nodes", [])]
     if any(n.get("id") == DONE_NODE for n in nodes):
-        raise SEHError("INVALID_TASK", f"Node id {DONE_NODE} is reserved", 2)
+        raise EgoError("INVALID_TASK", f"Node id {DONE_NODE} is reserved", 2)
     if len(nodes) == 1 and nodes[0].get("kind", "agent") == "agent" and nodes[0].get("checks") == done_checks:
         return {**spec, "nodes": nodes}  # the only node is already verified by exactly these checks
     gate = {"id": DONE_NODE, "kind": "gate", "depends_on": [n["id"] for n in nodes],
@@ -135,17 +135,17 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
     root = root.resolve()
     cfg = load_config(root)
     if not isinstance(goal, str) or not goal.strip() or len(goal) > 6000:
-        raise SEHError("INVALID_GOAL", "Missing/oversized goal", 2)
+        raise EgoError("INVALID_GOAL", "Missing/oversized goal", 2)
     if not done_checks or any(not isinstance(c, list) or not c for c in done_checks):
-        raise SEHError("DONE_CHECK_REQUIRED", "A loop needs at least one measurable check command (argv array)", 2)
+        raise EgoError("DONE_CHECK_REQUIRED", "A loop needs at least one measurable check command (argv array)", 2)
     for argv in done_checks:
         check_command(argv, cfg.allow_commands, cfg.policy_mode)
     if not 1 <= max_iterations <= MAX_ITERATIONS_CAP:
-        raise SEHError("INVALID_LOOP", f"max_iterations must be between 1 and {MAX_ITERATIONS_CAP}", 2)
+        raise EgoError("INVALID_LOOP", f"max_iterations must be between 1 and {MAX_ITERATIONS_CAP}", 2)
     if max_budget_usd is not None and max_budget_usd <= 0:
-        raise SEHError("INVALID_LOOP", "max_budget_usd must be positive", 2)
+        raise EgoError("INVALID_LOOP", "max_budget_usd must be positive", 2)
     if apply and not approve:
-        raise SEHError("APPROVAL_REQUIRED", "--apply requires --approve")
+        raise EgoError("APPROVAL_REQUIRED", "--apply requires --approve")
     scope = scope or ["src/**", "tests/**"]
     if planner is None:
         from .planner import plan_work
@@ -164,7 +164,7 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
     loop_id = _loop_id(loop_id or ident("loop"))
     path = ledger_path(root, loop_id)
     if path.exists():
-        raise SEHError("LOOP_EXISTS", loop_id)
+        raise EgoError("LOOP_EXISTS", loop_id)
     ledger: dict[str, Any] = {"loop_id": loop_id, "goal": goal.strip(), "done_checks": done_checks, "scope": scope,
                               "host": host, "created_at": now(), "status": "RUNNING", "iterations": [],
                               "cost_usd": 0.0, "cost_known": True,
@@ -210,7 +210,7 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
             result = execute(root, spec, host=host, apply=apply, approve=approve, trust_cli=trust_cli,
                              autonomy=autonomy, isolated=isolated, seed_from=seed, extra_allow=scope,
                              budget_usd=remaining, worktree=False)
-        except SEHError as exc:
+        except EgoError as exc:
             # A planner call that produced no usable plan was still paid for.
             failed_usage = getattr(exc, "planner_usage", None)
             if failed_usage is not None:
@@ -277,7 +277,7 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
 def loop_status(root: Path, loop_id: str) -> dict[str, Any]:
     ledger = read_json(ledger_path(root.resolve(), loop_id))
     if not ledger:
-        raise SEHError("LOOP_NOT_FOUND", loop_id, 3)
+        raise EgoError("LOOP_NOT_FOUND", loop_id, 3)
     return _summary(ledger)
 
 
@@ -288,17 +288,17 @@ def apply_loop(root: Path, loop_id: str, *, approve: bool = False) -> dict[str, 
     path = ledger_path(root, loop_id)
     ledger = read_json(path)
     if not ledger:
-        raise SEHError("LOOP_NOT_FOUND", loop_id, 3)
+        raise EgoError("LOOP_NOT_FOUND", loop_id, 3)
     if not approve:
-        raise SEHError("APPROVAL_REQUIRED", "loop-apply requires --approve")
+        raise EgoError("APPROVAL_REQUIRED", "loop-apply requires --approve")
     if ledger["status"] == "COMPLETED":
         return _summary(ledger)
     if ledger["status"] != "VERIFIED":
-        raise SEHError("LOOP_NOT_VERIFIED", f"Loop status is {ledger['status']}; only a VERIFIED loop can be applied", 3)
+        raise EgoError("LOOP_NOT_VERIFIED", f"Loop status is {ledger['status']}; only a VERIFIED loop can be applied", 3)
     run_id = ledger["iterations"][-1]["run_id"]
     record = read_json(root / ".ego" / "state" / "runs" / run_id / "record.json")
     if not record:
-        raise SEHError("RUN_NOT_FOUND", run_id, 3)
+        raise EgoError("RUN_NOT_FOUND", run_id, 3)
     result = execute(root, record["spec"], host=ledger.get("host", "mock"), run_id=run_id, resume=True,
                      apply=True, approve=True, extra_allow=ledger.get("scope"), worktree=False)
     if result.get("applied"):
@@ -314,7 +314,7 @@ def apply_loop(root: Path, loop_id: str, *, approve: bool = False) -> dict[str, 
 def cancel_loop(root: Path, loop_id: str) -> dict[str, Any]:
     path = ledger_path(root.resolve(), loop_id)
     if not path.exists():
-        raise SEHError("LOOP_NOT_FOUND", loop_id, 3)
+        raise EgoError("LOOP_NOT_FOUND", loop_id, 3)
     (path.parent / "cancel.flag").touch()
     return {"status": "CANCELLATION_REQUESTED", "loop_id": loop_id,
             "warning": "Stops before the next iteration; the running iteration finishes first"}

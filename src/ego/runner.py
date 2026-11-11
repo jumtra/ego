@@ -10,7 +10,7 @@ import subprocess
 import time
 from typing import Any
 from .hosts import build_command, capability
-from .util import SEHError, elapsed, redact
+from .util import EgoError, elapsed, redact
 from .policy import check_command
 
 @dataclass
@@ -33,8 +33,8 @@ class RunResult:
 
 def run_process(argv: list[str], cwd: Path, timeout: int, *, env: dict[str,str] | None = None, input_text: str | None = None) -> tuple[int,str,str,float]:
     start = time.monotonic()
-    if not argv: raise SEHError("INVALID_ARGV", "Empty command")
-    if timeout <= 0: raise SEHError("INVALID_TIMEOUT", str(timeout), 2)
+    if not argv: raise EgoError("INVALID_ARGV", "Empty command")
+    if timeout <= 0: raise EgoError("INVALID_TIMEOUT", str(timeout), 2)
     proc = subprocess.Popen(argv, cwd=str(cwd), stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, errors="replace", start_new_session=True, env=env)
     try:

@@ -19,6 +19,6 @@ jobs:
         run: python -m pytest -q
       - name: CLI smoke
         run: |
-          seh --version
-          seh modules list
-          seh optimize status --root examples/demo_project
+          ego --version
+          ego modules list
+          ego optimize status --root examples/demo_project

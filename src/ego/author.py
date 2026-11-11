@@ -2,7 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 import re
-from .util import SEHError, ident, now, read_json, write_json, sha256, safe_path
+from .util import EgoError, ident, now, read_json, write_json, sha256, safe_path
 from .candidates import new_candidate, validate_candidate
 from .evals import load_suite, run_eval, compare
 

@@ -8,7 +8,7 @@ write runs pass --dangerously-skip-permissions (read-only runs use plan mode).
 from __future__ import annotations
 from dataclasses import dataclass
 import shutil
-from .util import SEHError
+from .util import EgoError
 
 @dataclass(frozen=True)
 class HostCapability:
@@ -23,7 +23,7 @@ BINARIES = {"claude": "claude", "codex": "codex", "opencode": "opencode", "agy":
 
 
 def capability(host: str) -> HostCapability:
-    if host not in BINARIES: raise SEHError("UNKNOWN_HOST",host,2)
+    if host not in BINARIES: raise EgoError("UNKNOWN_HOST",host,2)
     if host=="mock":return HostCapability(host,None,True,True,"offline","Deterministic test adapter")
     path=shutil.which(BINARIES[host] or "")
     return HostCapability(host,path,bool(path),bool(path),"cli","ready" if path else "CLI not installed")
@@ -34,12 +34,12 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
                   autonomy: str = "auto", isolated: bool = False, lean: bool = False,
                   max_budget_usd: float | None = None) -> list[str]:
     cap=capability(host)
-    if not cap.supported:raise SEHError("HOST_UNAVAILABLE",cap.reason,3)
+    if not cap.supported:raise EgoError("HOST_UNAVAILABLE",cap.reason,3)
     if host=="mock":return []
     if autonomy not in ("auto","safe","bypass"):
-        raise SEHError("INVALID_AUTONOMY",autonomy,2)
+        raise EgoError("INVALID_AUTONOMY",autonomy,2)
     if autonomy=="bypass" and not isolated:
-        raise SEHError("ISOLATION_REQUIRED","Permission bypass requires externally isolated execution and explicit acceptance",3)
+        raise EgoError("ISOLATION_REQUIRED","Permission bypass requires externally isolated execution and explicit acceptance",3)
     from .hostcompat import inspect_host,require_flags
     info=inspect_host(host)
     if host=="claude":
@@ -120,4 +120,4 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         # --print takes the prompt as its value; the attached form keeps a prompt
         # that starts with '-' from being read as another switch.
         return argv+["--print="+prompt]
-    raise SEHError("HOST_UNAVAILABLE",host,3)
+    raise EgoError("HOST_UNAVAILABLE",host,3)

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from .config import HOSTS, VALID_EFFORTS
-from .util import SEHError, safe_path
+from .util import EgoError, safe_path
 from .context import clip_output
 
 ROUTABLE = set(HOSTS) | {"mock"}
@@ -31,9 +31,9 @@ class Route:
 
 def _strict_hosts(value: Any) -> list[str]:
     if not isinstance(value, list) or not value or not all(isinstance(h, str) and h in ROUTABLE for h in value):
-        raise SEHError("INVALID_ROUTE", "hosts must be a nonempty list of supported host names", 2)
+        raise EgoError("INVALID_ROUTE", "hosts must be a nonempty list of supported host names", 2)
     if len(value) != len(set(value)) or len(value) > 4:
-        raise SEHError("INVALID_ROUTE", "Duplicate or excessive hosts", 2)
+        raise EgoError("INVALID_ROUTE", "Duplicate or excessive hosts", 2)
     return value
 
 
@@ -44,20 +44,20 @@ def _parse_model_entry(entry: Any) -> tuple[str | None, str | None]:
     if isinstance(entry, str):
         val = entry.strip()
         if not val or len(val) > 128:
-            raise SEHError("INVALID_MODEL", "model must be a valid non-empty string <= 128 chars", 2)
+            raise EgoError("INVALID_MODEL", "model must be a valid non-empty string <= 128 chars", 2)
         model = None if val in ("auto", "native-default") else val
         return model, None
     if isinstance(entry, dict):
         raw_m = entry.get("model")
         if not isinstance(raw_m, str) or not raw_m.strip() or len(raw_m) > 128:
-            raise SEHError("INVALID_MODEL", "model in table must be a valid non-empty string <= 128 chars", 2)
+            raise EgoError("INVALID_MODEL", "model in table must be a valid non-empty string <= 128 chars", 2)
         model = None if raw_m.strip() in ("auto", "native-default") else raw_m.strip()
         raw_e = entry.get("effort")
         if raw_e is not None and (not isinstance(raw_e, str) or raw_e not in VALID_EFFORTS):
-            raise SEHError("INVALID_MODEL", f"effort must be one of {sorted(VALID_EFFORTS)}", 2)
+            raise EgoError("INVALID_MODEL", f"effort must be one of {sorted(VALID_EFFORTS)}", 2)
         effort = None if raw_e in (None, "auto") else raw_e
         return model, effort
-    raise SEHError("INVALID_MODEL", "model config must be a string or table", 2)
+    raise EgoError("INVALID_MODEL", "model config must be a string or table", 2)
 
 
 def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_model: str | None = None, default_models: dict[str, Any] | None = None):
@@ -67,7 +67,7 @@ def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_m
     """
     defaults = spec.get("defaults", {})
     if not isinstance(defaults, dict):
-        raise SEHError("INVALID_TASK", "defaults must be an object", 2)
+        raise EgoError("INVALID_TASK", "defaults must be an object", 2)
     chosen = node if ("hosts" in node or "host" in node) else defaults
     if "hosts" in chosen:
         hosts = _strict_hosts(chosen["hosts"])
@@ -79,21 +79,21 @@ def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_m
     # or compare strategy; it must not accidentally start extra vendors.
     strategy = node.get("strategy", "single" if "host" in node or "hosts" in node else defaults.get("strategy", "single"))
     if strategy not in STRATEGIES:
-        raise SEHError("INVALID_STRATEGY", f"Unknown strategy: {strategy}", 2)
+        raise EgoError("INVALID_STRATEGY", f"Unknown strategy: {strategy}", 2)
     if strategy == "single" and len(hosts) != 1:
-        raise SEHError("INVALID_STRATEGY", "Multiple hosts require fallback or compare", 2)
+        raise EgoError("INVALID_STRATEGY", "Multiple hosts require fallback or compare", 2)
     if strategy in ("fallback", "compare") and len(hosts) < 2:
-        raise SEHError("INVALID_STRATEGY", f"{strategy} requires at least two hosts", 2)
+        raise EgoError("INVALID_STRATEGY", f"{strategy} requires at least two hosts", 2)
     node_map = node.get("models", {})
     configured_map = default_models or {}
     default_map = dict(configured_map)
     default_map.update(defaults.get("models", {}))
     if not isinstance(node_map, dict) or not isinstance(defaults.get("models", {}), dict):
-        raise SEHError("INVALID_MODEL", "models must be an object", 2)
+        raise EgoError("INVALID_MODEL", "models must be an object", 2)
     for mapping in (default_map, node_map):
         for h, m in mapping.items():
             if h not in ROUTABLE:
-                raise SEHError("INVALID_MODEL", f"Unknown host in models: {h}", 2)
+                raise EgoError("INVALID_MODEL", f"Unknown host in models: {h}", 2)
             _parse_model_entry(m)
     for model_value in (node.get("model"), defaults.get("model"), default_model):
         if model_value is not None:
@@ -105,9 +105,9 @@ def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_m
         routes.append(Route(h, m, effort=eff))
     on = node.get("fallback_on", defaults.get("fallback_on", ["UNAVAILABLE", "TIMEOUT", "RATE_LIMIT"]))
     if not isinstance(on, list) or any(v not in FALLBACK_CAUSES for v in on):
-        raise SEHError("INVALID_FALLBACK", f"Supported fallback conditions: {sorted(FALLBACK_CAUSES)}", 2)
+        raise EgoError("INVALID_FALLBACK", f"Supported fallback conditions: {sorted(FALLBACK_CAUSES)}", 2)
     if node.get("kind", "agent") in ("gate", "code") and ("host" in node or "hosts" in node or "model" in node or "models" in node):
-        raise SEHError("INVALID_ROUTE", "code/gate nodes run deterministic commands, not AI models", 2)
+        raise EgoError("INVALID_ROUTE", "code/gate nodes run deterministic commands, not AI models", 2)
     return strategy, routes, frozenset(on)
 
 
@@ -118,12 +118,12 @@ def _note(value: Any) -> bool:
 def validate_node_notes(node: dict) -> None:
     """intent is one short string; the other notes are short lists of short strings."""
     if "intent" in node and not _note(node["intent"]):
-        raise SEHError("INVALID_TASK", f"intent of {node['id']} must be a nonempty string <= {MAX_NOTE_CHARS} chars", 2)
+        raise EgoError("INVALID_TASK", f"intent of {node['id']} must be a nonempty string <= {MAX_NOTE_CHARS} chars", 2)
     for key in NOTE_LISTS:
         if key not in node: continue
         items = node[key]
         if not isinstance(items, list) or len(items) > MAX_NOTE_ITEMS or not all(_note(i) for i in items):
-            raise SEHError("INVALID_TASK", f"{key} of {node['id']} must be a list of at most {MAX_NOTE_ITEMS} "
+            raise EgoError("INVALID_TASK", f"{key} of {node['id']} must be a list of at most {MAX_NOTE_ITEMS} "
                            f"nonempty strings <= {MAX_NOTE_CHARS} chars", 2)
 
 
@@ -133,29 +133,29 @@ def _bullets(items: list[str]) -> str:
 
 def validate_task_context(spec: dict, nodes: list[dict], *, default_host: str="mock") -> None:
     if not isinstance(spec.get("goal", ""), str) or not isinstance(spec.get("instructions", ""), str):
-        raise SEHError("INVALID_TASK", "goal/instructions must be strings", 2)
+        raise EgoError("INVALID_TASK", "goal/instructions must be strings", 2)
     if "instructions_file" in spec and not isinstance(spec["instructions_file"], str):
-        raise SEHError("INVALID_TASK", "instructions_file must be a relative path",2)
+        raise EgoError("INVALID_TASK", "instructions_file must be a relative path",2)
     if len(spec.get("goal", "")) + len(spec.get("instructions", "")) > MAX_INSTRUCTION_BYTES:
-        raise SEHError("INSTRUCTIONS_TOO_LARGE", "Task-wide instructions too long", 2)
+        raise EgoError("INSTRUCTIONS_TOO_LARGE", "Task-wide instructions too long", 2)
     by_id = {n["id"]:n for n in nodes}
     for node in nodes:
         validate_node_notes(node)
         kind = node.get("kind", "agent")
         if kind in ("code", "gate"):
             if any(k in node for k in ("host", "hosts", "models", "model", "strategy", "fallback_on")):
-                raise SEHError("INVALID_ROUTE", f"Deterministic node {node['id']} cannot select an AI model", 2)
+                raise EgoError("INVALID_ROUTE", f"Deterministic node {node['id']} cannot select an AI model", 2)
             continue
         strategy,routes,_ = resolve_routes(node, spec, default_host)
         if strategy == "compare" and any(node["id"] in other.get("depends_on",[]) for other in nodes):
-            raise SEHError("INVALID_TASK", "Compare nodes are terminal; select/review before using output", 2)
+            raise EgoError("INVALID_TASK", "Compare nodes are terminal; select/review before using output", 2)
         for key in ("instructions_file", "context_files"):
             if key == "instructions_file" and key in node and not isinstance(node[key], str):
-                raise SEHError("INVALID_TASK", f"{key} must be a path", 2)
+                raise EgoError("INVALID_TASK", f"{key} must be a path", 2)
             if key == "context_files":
                 files=node.get(key, [])
                 if not isinstance(files,list) or len(files)>MAX_CONTEXT_FILES or any(not isinstance(s,str) for s in files):
-                    raise SEHError("INVALID_TASK", "context_files must be a short list of paths", 2)
+                    raise EgoError("INVALID_TASK", "context_files must be a short list of paths", 2)
 
 
 def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", handoff: dict | None = None) -> str:
@@ -171,7 +171,7 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
     if spec.get("instructions_file"):
         rel=spec["instructions_file"]
         src=safe_path(cwd,rel,allow_missing=False)
-        if not src.is_file() or src.stat().st_size>MAX_INSTRUCTION_BYTES:raise SEHError("INSTRUCTIONS_TOO_LARGE",rel,2)
+        if not src.is_file() or src.stat().st_size>MAX_INSTRUCTION_BYTES:raise EgoError("INSTRUCTIONS_TOO_LARGE",rel,2)
         parts.append(f"## Shared instructions from {rel}\n" + src.read_text(encoding="utf8"))
     if node.get("role"): parts.append("## Assigned role\n" + str(node["role"]))
     if node.get("intent"): parts.append("## Why this stage exists\n" + node["intent"].strip())
@@ -186,8 +186,8 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
     if node.get("instructions_file"):
         rel=node["instructions_file"]
         src=safe_path(cwd, rel, allow_missing=False)
-        if not src.is_file():raise SEHError("INSTRUCTIONS_NOT_FILE", rel, 2)
-        if src.stat().st_size > MAX_INSTRUCTION_BYTES: raise SEHError("INSTRUCTIONS_TOO_LARGE", rel, 2)
+        if not src.is_file():raise EgoError("INSTRUCTIONS_NOT_FILE", rel, 2)
+        if src.stat().st_size > MAX_INSTRUCTION_BYTES: raise EgoError("INSTRUCTIONS_TOO_LARGE", rel, 2)
         parts.append(f"## Additional instructions from {rel}\n" + src.read_text(encoding="utf8"))
     context=node.get("context_files", [])
     for rel in context: safe_path(cwd, rel, allow_missing=False)
@@ -220,5 +220,5 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
     parts.append("Use minimal relevant context; do not create requirements or implementation-plan docs unless explicitly requested or technically necessary. State VERIFIED vs APPLIED precisely. Never edit files outside scope.")
     prompt="\n\n".join(parts)
     if len(prompt.encode("utf8")) > MAX_INSTRUCTION_BYTES * 2:
-        raise SEHError("INSTRUCTIONS_TOO_LARGE", "Prompt exceeds safe CLI envelope", 2)
+        raise EgoError("INSTRUCTIONS_TOO_LARGE", "Prompt exceeds safe CLI envelope", 2)
     return prompt

@@ -7,11 +7,9 @@ install:
 	@mkdir -p "$(BINDIR)"
 	@ln -sf "$(CURDIR)/bin/ego" "$(BINDIR)/ego"
 	@rm -f "$(BINDIR)/harness"
-	@test -e "$(BINDIR)/seh" || ln -sf "$(CURDIR)/bin/seh" "$(BINDIR)/seh"
 	@echo "Installed: $(BINDIR)/ego"
 
 uninstall:
-	@rm -f "$(BINDIR)/ego" "$(BINDIR)/harness" "$(BINDIR)/seh"
 	@echo "Uninstalled ego CLI from: $(BINDIR)"
 
 test:

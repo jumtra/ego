@@ -3,7 +3,7 @@ name: work
 description: "Plan and implement coding tasks with evidence-based checks and bounded repair. Use for feature development, bug fixes and structured code changes, not for casual questions."
 ---
 
-<!-- SEH:PROMPT:BEGIN -->
+<!-- EGO:PROMPT:BEGIN -->
 # Work — context-efficient delivery
 
 Choose the **smallest useful workflow** and keep context small: read only the files the change needs, show evidence rather than full tool logs, and let `ego` commands hold state instead of the conversation.
@@ -30,4 +30,4 @@ Prefer direct user instructions over ceremonial workflow. Write formal documents
 **Boundaries:** after a verified subtask, before changing feature area or host, or when context is crowded, checkpoint and start fresh. Read `references/checkpoint.md`.
 
 **Report:** write **完了** only after successful validation and application, with changed files and the **tests actually run**. If tests fail or edits were not applied, write **未完了** or **検証済み・未適用**; never claim completion without evidence.
-<!-- SEH:PROMPT:END -->
+<!-- EGO:PROMPT:END -->

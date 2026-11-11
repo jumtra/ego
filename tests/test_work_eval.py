@@ -3,7 +3,7 @@ import json
 import pytest
 from ego.work import execute,validate_task,status
 from ego.evals import run_eval,compare,load_suite
-from ego.util import SEHError
+from ego.util import EgoError
 
 def test_code_workflow_staged_apply(project):
     (project/"generate.py").write_text("from pathlib import Path\nPath('output.txt').write_text('ok')\n")
@@ -14,7 +14,7 @@ def test_code_workflow_staged_apply(project):
     assert result["final_status"]=="PASSED"
     assert not (project/"output.txt").exists()
     assert status(project,result["run_id"])["final_status"]=="PASSED"
-    with pytest.raises(SEHError):execute(project,task,apply=True)
+    with pytest.raises(EgoError):execute(project,task,apply=True)
     applied=execute(project,task,apply=True,approve=True)
     assert applied["applied"]
     assert (project/"output.txt").read_text()=="ok"
@@ -27,7 +27,7 @@ def test_workflow_scope_rejected(project):
     assert not (project/"unrelated.txt").exists()
 
 def test_workflow_cycles(project):
-    with pytest.raises(SEHError):validate_task({"nodes":[{"id":"a","kind":"agent","prompt":"x","write_allowlist":["a"],"depends_on":["b"]},{"id":"b","kind":"agent","prompt":"x","write_allowlist":["b"],"depends_on":["a"]}]})
+    with pytest.raises(EgoError):validate_task({"nodes":[{"id":"a","kind":"agent","prompt":"x","write_allowlist":["a"],"depends_on":["b"]},{"id":"b","kind":"agent","prompt":"x","write_allowlist":["b"],"depends_on":["a"]}]})
 
 def test_evaluation(project):
     path=project/"suite.json"

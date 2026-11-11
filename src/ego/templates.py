@@ -172,7 +172,7 @@ export default {
 
 def skill_md(name: str) -> str:
     desc, body = SKILLS[name]
-    return f'---\nname: {name}\ndescription: "{desc}"\n---\n\n<!-- SEH:PROMPT:BEGIN -->\n{body}<!-- SEH:PROMPT:END -->\n'
+    return f'---\nname: {name}\ndescription: "{desc}"\n---\n\n<!-- EGO:PROMPT:BEGIN -->\n{body}<!-- EGO:PROMPT:END -->\n'
 
 def agent_md(name: str) -> str:
     tools = "Read, Grep, Glob" if name == "reviewer" else "Read, Grep, Glob, Bash, Edit, Write"
@@ -246,8 +246,8 @@ def generated_files(cfg: Config) -> dict[str, str]:
             files[f".agents/agents/{name}.md"] = (f'---\nname: {name}\ndescription: "{AGENTS[name]}"\nsubagent: true\n---\n\n{AGENTS[name]}\n')
     return files
 
-MARK_BEGIN = "<!-- SEH:BEGIN managed; edit .ego/config.toml and run seh sync -->"
-MARK_END = "<!-- SEH:END managed -->"
+MARK_BEGIN = "<!-- EGO:BEGIN managed; edit .ego/config.toml and run ego sync -->"
+MARK_END = "<!-- EGO:END managed -->"
 
 def instruction_block(cfg: Config) -> str:
     policy_note = (

@@ -8,14 +8,14 @@ import json
 import re
 import shutil
 import subprocess
-from .util import SEHError
+from .util import EgoError
 from .runner import run_process
 
 PROVIDER_BINS={"codegraph":"codegraph","graphify":"graphify","none":None}
 
 
 def health(provider:str)->dict:
-    if provider not in PROVIDER_BINS:raise SEHError("UNKNOWN_CODE_PROVIDER",provider,2)
+    if provider not in PROVIDER_BINS:raise EgoError("UNKNOWN_CODE_PROVIDER",provider,2)
     cmd=PROVIDER_BINS[provider]
     path=shutil.which(cmd) if cmd else None
     supported={"none":["text_search","symbol_heuristic"],
@@ -29,7 +29,7 @@ def health(provider:str)->dict:
 
 def _cli(provider:str,root:Path,argv:list[str],timeout:int=120)->dict:
     path=shutil.which(provider)
-    if not path:raise SEHError("CODE_PROVIDER_UNAVAILABLE",f"{provider} is not installed",3)
+    if not path:raise EgoError("CODE_PROVIDER_UNAVAILABLE",f"{provider} is not installed",3)
     code,out,err,seconds=run_process([path]+argv,root,timeout)
     if code!=0:
         return {"provider":provider,"status":"CLI_FAILED","exit_code":code,"error":err[-1200:],"stdout":out[-2000:]}
@@ -39,7 +39,7 @@ def _cli(provider:str,root:Path,argv:list[str],timeout:int=120)->dict:
 
 
 def text_fallback(root:Path,query:str,limit:int=30)->dict:
-    if not query or len(query)>400:raise SEHError("BAD_QUERY",query,2)
+    if not query or len(query)>400:raise EgoError("BAD_QUERY",query,2)
     results=[];count=0
     root=root.resolve()
     skip={".git",".ego","node_modules",".venv","__pycache__","dist","build",".codegraph","graphify-out"}
@@ -94,7 +94,7 @@ def rank_files(root:Path,query:str,limit:int=8)->dict:
 
 
 def search(root:Path,query:str,provider:str="none",limit:int=30)->dict:
-    if provider not in PROVIDER_BINS:raise SEHError("UNKNOWN_CODE_PROVIDER",provider,2)
+    if provider not in PROVIDER_BINS:raise EgoError("UNKNOWN_CODE_PROVIDER",provider,2)
     if provider=="codegraph" and shutil.which("codegraph"):
         return _cli("codegraph",root,["query",query,"--limit",str(limit),"--json"])
     if provider=="graphify" and shutil.which("graphify"):
@@ -103,13 +103,13 @@ def search(root:Path,query:str,provider:str="none",limit:int=30)->dict:
 
 
 def symbol(root:Path,name:str,provider:str="none")->dict:
-    if not re.fullmatch(r"[A-Za-z_][\w.]{0,120}",name):raise SEHError("BAD_SYMBOL",name,2)
+    if not re.fullmatch(r"[A-Za-z_][\w.]{0,120}",name):raise EgoError("BAD_SYMBOL",name,2)
     return {"provider":provider,"strategy":"search","result":search(root,name,provider),"advanced_impact":"CALL_SEPARATE_API"}
 
 
 def index(root:Path,provider:str,execute:bool=False)->dict:
     if provider=="none":return {"provider":"none","status":"NOT_APPLICABLE"}
-    if provider not in PROVIDER_BINS:raise SEHError("UNKNOWN_CODE_PROVIDER",provider,2)
+    if provider not in PROVIDER_BINS:raise EgoError("UNKNOWN_CODE_PROVIDER",provider,2)
     if not shutil.which(provider):return {"provider":provider,"status":"UNAVAILABLE"}
     argv=["init","--local-only"] if provider=="codegraph" else ["extract","--code-only","--backend","none"]
     if not execute:return {"provider":provider,"status":"DRY_RUN","argv":[provider]+argv,"writes_external_index":True}

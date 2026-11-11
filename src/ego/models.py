@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from .util import read_json, write_json, SEHError
+from .util import read_json, write_json, EgoError
 from .config import load_config
 
 CACHE_TTL_SECONDS = 24 * 3600
@@ -31,7 +31,7 @@ def parse_agy_models(output: str) -> list[str]:
 def refresh_catalog(root: Path, *, hosts: list[str] | None = None, timeout: int = 12) -> dict:
     """Explicit/TTL refresh. Never invoked by ordinary ego work execution."""
     requested = hosts or list(HOSTS)
-    if any(h not in HOSTS for h in requested):raise SEHError("UNKNOWN_HOST", "Invalid refresh host",2)
+    if any(h not in HOSTS for h in requested):raise EgoError("UNKNOWN_HOST", "Invalid refresh host",2)
     cache = read_json(root/CATALOG_PATH, {}) or {}
     now=time.time()
     cache.setdefault("schema_version",1)
@@ -87,7 +87,7 @@ def refresh_catalog(root: Path, *, hosts: list[str] | None = None, timeout: int 
 
 
 def list_models(root: Path, *, host: str | None = None, refresh_if_stale: bool = True) -> dict:
-    if host is not None and host not in HOSTS:raise SEHError("UNKNOWN_HOST",host,2)
+    if host is not None and host not in HOSTS:raise EgoError("UNKNOWN_HOST",host,2)
     cache = read_json(root/CATALOG_PATH, {}) or {}
     rows=cache.get("hosts",{})
     required=[host] if host else list(HOSTS)

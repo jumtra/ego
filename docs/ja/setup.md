@@ -18,13 +18,13 @@ uv tool install git+https://github.com/jumtra/ego
 pipx install git+https://github.com/jumtra/ego
 
 # 公開済みリリース wheel から（バージョンは最新リリースに置き換えてください）
-pipx install https://github.com/jumtra/ego/releases/download/v0.0.10/ego-0.0.10-py3-none-any.whl
-pip install https://github.com/jumtra/ego/releases/download/v0.0.10/ego-0.0.10-py3-none-any.whl   # 仮想環境内で
+pipx install https://github.com/jumtra/ego/releases/download/v0.0.11/ego-0.0.11-py3-none-any.whl
+pip install https://github.com/jumtra/ego/releases/download/v0.0.11/ego-0.0.11-py3-none-any.whl   # 仮想環境内で
 
 ego --version
 ```
 
-パッケージは `ego` と、旧名の `seh` の 2 つのコマンドを導入します。
+パッケージは `ego` コマンドを導入します。
 
 **ego 本体の開発:** リポジトリをクローンし、`make install`（`bin/ego` を `~/.local/bin` にシンボリックリンク。`PREFIX=` / `BINDIR=` で変更可）または `pip install -e .` を実行します。`~/.local/bin` が `PATH` に含まれていることを確認してください。
 
@@ -132,7 +132,7 @@ ego apply --interactive --dry-run  # 書き込まずに選択を試す
 
 agent は `implementer`、`reviewer`（読み取り専用）、`fixer`、`evolver` の 4 種です。
 
-`CLAUDE.md` / `AGENTS.md` では、ego は `SEH:BEGIN` / `SEH:END` マーカーの間のブロックだけを管理します。それ以外の部分はユーザーのものです。その他の生成ファイルはハッシュで追跡され、ego が書いた内容のままの場合にのみ置き換えます。変更されていれば衝突（`BLOCKED`）として報告します。
+`CLAUDE.md` / `AGENTS.md` では、ego は `EGO:BEGIN` / `EGO:END` マーカーの間のブロックだけを管理します。それ以外の部分はユーザーのものです。その他の生成ファイルはハッシュで追跡され、ego が書いた内容のままの場合にのみ置き換えます。変更されていれば衝突（`BLOCKED`）として報告します。
 
 実行時の状態も `.ego/` 配下にあります。`state/`（run、loop、イベント）、`memory/`（メモリ項目と、`handoffs/` のチェックポイント）、`backups/`（適用時のスナップショット）、`locks/` です。`.ego/state/`、`.ego/backups/`、`.ego/locks/`、`.ego/memory/handoffs/` は Git に含めないでください。
 
@@ -155,7 +155,7 @@ ego status                # UP_TO_DATE / CHANGES_PENDING / BLOCKED、導入済�
 ego rollback              # 直前の apply のスナップショットを復元
 ego rollback <snapshot>   # .ego/backups/ の指定スナップショットを復元
 ego uninstall             # 確認を求める。-y / --yes で省略
-ego uninstall --cli       # ~/.local/bin の ego / seh シンボリックリンクを削除
+ego uninstall --cli       # ~/.local/bin の ego シンボリックリンクを削除
 ```
 
 `ego rollback` は、適用後に編集されたファイルを上書きしません。

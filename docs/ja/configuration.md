@@ -133,10 +133,10 @@ models = {claude = "sonnet", codex = "auto", opencode = "anthropic/claude-sonnet
 | 変数 | 用途 |
 |---|---|
 | `EGO_HOME` | プロジェクトレジストリ（`projects.json`）のディレクトリ。既定 `~/.config/ego` |
-| `SEH_CACHE_DIR` | 検出した CLI の機能のキャッシュ。既定 `~/.cache/seh` |
-| `SEH_ENGRAM_MCP_COMMAND` | Engram MCP サーバーを起動するコマンドライン（`memory = "engram"` に必須） |
-| `SEH_ENGRAM_WRITE_TOOL` | `ego memory add` が使う MCP ツール名 |
-| `SEH_ENGRAM_SEARCH_TOOL` | `ego memory search` が使う MCP ツール名 |
+| `EGO_CACHE_DIR` | 検出した CLI の機能のキャッシュ。既定 `~/.cache/ego` |
+| `EGO_ENGRAM_MCP_COMMAND` | Engram MCP サーバーを起動するコマンドライン（`memory = "engram"` に必須） |
+| `EGO_ENGRAM_WRITE_TOOL` | `ego memory add` が使う MCP ツール名 |
+| `EGO_ENGRAM_SEARCH_TOOL` | `ego memory search` が使う MCP ツール名 |
 | `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`XDG_DATA_HOME` | `ego run` が各 CLI のセッション記録を読むときに参照 |
 
 `EGO_RUN` は `ego run` が起動する CLI 向けに設定する変数です。手動で設定しないでください。

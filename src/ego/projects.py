@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 from . import __version__
-from .util import SEHError, exclusive_lock, now, read_json, write_json
+from .util import EgoError, exclusive_lock, now, read_json, write_json
 
 SCAN_SKIP = {"node_modules", ".git", ".venv", "venv", "__pycache__", "Library", ".cache", ".Trash"}
 MAX_SCAN_DEPTH = 6
@@ -42,7 +42,7 @@ def register_quietly(root: Path) -> None:
     """Called from apply: an unwritable home directory must never fail a project install."""
     try:
         register(root)
-    except (OSError, SEHError, ValueError):
+    except (OSError, EgoError, ValueError):
         pass
 
 
@@ -61,7 +61,7 @@ def project_info(root: Path) -> dict[str, Any]:
     info: dict[str, Any] = {"root": str(root), "harness_version": __version__}
     try:
         ownership = read_json(root / OWNERSHIP)
-    except SEHError:
+    except EgoError:
         ownership = None
     if not isinstance(ownership, dict):
         return {**info, "status": "MISSING" if not root.is_dir() else "NOT_APPLIED", "installed_version": None}
@@ -71,7 +71,7 @@ def project_info(root: Path) -> dict[str, Any]:
     try:
         cfg = load_config(root)
         plan = installation_plan(root, cfg)
-    except (SEHError, OSError, ValueError) as exc:
+    except (EgoError, OSError, ValueError) as exc:
         return {**info, "status": "ERROR", "message": str(exc)}
     changes = [c for c in plan["changes"] if c["action"] != "unchanged"]
     info.update(status="BLOCKED" if plan["conflicts"] else "CHANGES_PENDING" if changes else "UP_TO_DATE",
@@ -90,7 +90,7 @@ def scan(base: Path, depth: int = 4) -> list[str]:
     """Register every applied project (one with .ego/ownership.json) under base."""
     base = base.resolve()
     if not base.is_dir():
-        raise SEHError("NOT_FOUND", str(base), 3)
+        raise EgoError("NOT_FOUND", str(base), 3)
     depth = max(0, min(depth, MAX_SCAN_DEPTH))
     found: list[str] = []
 
@@ -123,7 +123,7 @@ def sync_project(root: Path, *, apply: bool) -> dict[str, Any]:
         return before
     try:
         result = apply_install(root, load_config(root))
-    except (SEHError, OSError, ValueError) as exc:
+    except (EgoError, OSError, ValueError) as exc:
         return {**before, "status": "ERROR", "message": str(exc)}
     return {**project_info(root), "status": "APPLIED", "previous_version": before["installed_version"],
             "snapshot_id": result["snapshot_id"], "changed": [c["path"] for c in result["changes"]]}

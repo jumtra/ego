@@ -2,7 +2,7 @@
 
 [Docs index](README.md) · [日本語](../ja/commands.md)
 
-`ego <command> --help` shows the flags of the installed version. `seh` is an alias of `ego`.
+`ego <command> --help` shows the flags of the installed version.
 
 ## Conventions
 

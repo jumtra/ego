@@ -16,13 +16,13 @@ uv tool install git+https://github.com/jumtra/ego
 pipx install git+https://github.com/jumtra/ego
 
 # From a published release wheel (replace the version with the latest release)
-pipx install https://github.com/jumtra/ego/releases/download/v0.0.10/ego-0.0.10-py3-none-any.whl
-pip install https://github.com/jumtra/ego/releases/download/v0.0.10/ego-0.0.10-py3-none-any.whl   # inside a virtualenv
+pipx install https://github.com/jumtra/ego/releases/download/v0.0.11/ego-0.0.11-py3-none-any.whl
+pip install https://github.com/jumtra/ego/releases/download/v0.0.11/ego-0.0.11-py3-none-any.whl   # inside a virtualenv
 
 ego --version
 ```
 
-The package installs two equivalent commands: `ego` and `seh` (older name).
+The package installs the `ego` command.
 
 **Developing ego itself:** clone the repository, then `make install` (symlinks `bin/ego` into `~/.local/bin`; override with `PREFIX=` / `BINDIR=`) or `pip install -e .`. Make sure `~/.local/bin` is on your `PATH`.
 
@@ -130,7 +130,7 @@ ego apply --interactive --dry-run  # try different choices without writing
 
 The four agents are `implementer`, `reviewer` (read-only), `fixer` and `evolver`.
 
-In `CLAUDE.md` / `AGENTS.md`, ego only manages the block between its `SEH:BEGIN` / `SEH:END` markers; the rest of the file is yours. Every other generated file is tracked by hash: ego replaces a file only while it still matches what ego wrote, and reports a conflict (`BLOCKED`) otherwise.
+In `CLAUDE.md` / `AGENTS.md`, ego only manages the block between its `EGO:BEGIN` / `EGO:END` markers; the rest of the file is yours. Every other generated file is tracked by hash: ego replaces a file only while it still matches what ego wrote, and reports a conflict (`BLOCKED`) otherwise.
 
 Runtime state lives under `.ego/` too: `state/` (runs, loops, events), `memory/` (memory items, checkpoints in `handoffs/`), `backups/` (apply snapshots), `locks/`. Keep `.ego/state/`, `.ego/backups/`, `.ego/locks/` and `.ego/memory/handoffs/` out of Git.
 
@@ -153,7 +153,7 @@ ego status                # UP_TO_DATE / CHANGES_PENDING / BLOCKED, installed vs
 ego rollback              # restore the snapshot of the last apply
 ego rollback <snapshot>   # restore a specific snapshot from .ego/backups/
 ego uninstall             # asks for confirmation; -y / --yes skips it
-ego uninstall --cli       # remove the ego/seh symlinks from ~/.local/bin
+ego uninstall --cli       # remove the ego symlink from ~/.local/bin
 ```
 
 `ego rollback` refuses to overwrite files edited after the apply.
