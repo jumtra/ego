@@ -6,7 +6,7 @@
 
 Claude Code・Codex・OpenCode・Antigravity に、計画・タスク分担・テスト・記憶を。
 
-![Version](https://img.shields.io/badge/version-0.0.9-2563eb)
+![Version](https://img.shields.io/badge/version-0.0.10-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
