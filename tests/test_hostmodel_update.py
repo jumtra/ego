@@ -185,6 +185,20 @@ def test_update_requires_approval_and_venv(monkeypatch,tmp_path):
         selfupdate.install_wheel(tmp_path/'x.whl','1.4.2',approved=True)
 
 
+def test_update_installer_falls_back_to_uv_without_pip(monkeypatch,tmp_path):
+    import importlib.util
+    wheel=tmp_path/'x.whl'
+    monkeypatch.setattr(importlib.util,'find_spec',lambda name:object())
+    assert selfupdate._installer_argv(wheel)[1:4]==['-m','pip','install']
+    monkeypatch.setattr(importlib.util,'find_spec',lambda name:None)
+    monkeypatch.setattr(selfupdate.shutil,'which',lambda name:'/opt/uv' if name=='uv' else None)
+    argv=selfupdate._installer_argv(wheel)
+    assert argv[:5]==['/opt/uv','pip','install','--python',selfupdate.sys.executable] and '--no-deps' in argv and '--no-index' in argv
+    monkeypatch.setattr(selfupdate.shutil,'which',lambda name:None)
+    with pytest.raises(SEHError,match='neither pip nor uv'):
+        selfupdate._installer_argv(wheel)
+
+
 def test_node_precedence_over_task_and_code_node_under_compare_defaults(project):
     from ego.task_routing import resolve_routes
     spec={"defaults":{"hosts":["claude","codex"],"strategy":"fallback","models":{"codex":"default-codex"}}}

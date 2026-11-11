@@ -24,6 +24,7 @@ from .util import SEHError
 REPO = "jumtra/ego"
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
 PACKAGE = "ego"
+INSTALL_SPEC = f"git+https://github.com/{REPO}"
 MAX_DOWNLOAD = 30*1024*1024
 DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 VERS_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
@@ -125,16 +126,27 @@ def fetch_verified_wheel(info: dict, target: Path) -> Path:
 
 def _check_venv_or_raise() -> None:
     if sys.prefix==getattr(sys,"base_prefix",sys.prefix):
-        repo_hint=" (or run 'git pull' if running from a git checkout)" if (Path(__file__).resolve().parent.parent.parent / ".git").is_dir() else ""
-        raise SEHError("VENV_REQUIRED",f"Upgrade via a virtual environment or pipx; system Python is not modified{repo_hint}",3)
+        raise SEHError("VENV_REQUIRED","Upgrade via a virtual environment, pipx or 'uv tool'; system Python is not modified. "
+                       f"Reinstall with: pipx install {INSTALL_SPEC}",3)
+
+
+def _installer_argv(path: Path) -> list[str]:
+    """pip of this environment, else uv: environments made by 'uv tool' or uv-backed pipx carry no pip."""
+    import importlib.util
+    if importlib.util.find_spec("pip"):
+        return [sys.executable,"-m","pip","install","--no-deps","--no-index","--force-reinstall",str(path)]
+    uv=shutil.which("uv")
+    if uv:
+        return [uv,"pip","install","--python",sys.executable,"--no-deps","--no-index","--reinstall",str(path)]
+    raise SEHError("UPDATE_NO_INSTALLER","This environment has neither pip nor uv. "
+                   f"Reinstall with: pipx install --force {INSTALL_SPEC}  (or: uv tool install --force {INSTALL_SPEC})",3)
 
 
 def install_wheel(path: Path, version: str, *, approved: bool=False) -> dict:
     if not approved:
         raise SEHError("APPROVAL_REQUIRED","Use --yes or confirm interactively to install an update",3)
     _check_venv_or_raise()
-    proc=subprocess.run([sys.executable,"-m","pip","install","--no-deps","--no-index","--force-reinstall",str(path)],
-                        capture_output=True,text=True,timeout=180,check=False)
+    proc=subprocess.run(_installer_argv(path),capture_output=True,text=True,timeout=180,check=False)
     if proc.returncode:
         raise SEHError("UPDATE_INSTALL_FAILED",(proc.stderr or proc.stdout)[-1600:],3)
     check=subprocess.run([sys.executable,"-m","ego","--version"],capture_output=True,text=True,timeout=15,check=False)

@@ -41,14 +41,15 @@ Claude Code・Codex・OpenCode・Antigravityに、計画・分担・テスト・
 Python **3.11以上**、macOS / Linuxで実行します。
 
 ```bash
-# 方法1: シンボリックリンクで手軽に導入する場合
-make install
-
-# 方法2: pip で通常インストールする場合
-pip install -e .
+# 推奨: クローン不要のグローバルCLI(どちらか一方)
+uv tool install git+https://github.com/jumtra/ego
+pipx install git+https://github.com/jumtra/ego
 
 ego --version
+ego update --yes   # 以後の更新: 検証済みの最新リリース wheel を導入
 ```
+
+ego 自体を開発する場合は、リポジトリをクローンして `make install`(シンボリックリンク)か `pip install -e .` を使います。この場合 `ego update --yes` はそのチェックアウトを fast-forward するので、CLI はそこで checkout 中のブランチに追従します。
 
 `~/.local/bin` を PATH に追加すると、どのプロジェクトからでも `ego` コマンドを利用できます。
 
