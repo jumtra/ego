@@ -17,7 +17,7 @@ def call(*argv):
 
 
 def test_entrypoint_without_install():
-    assert 'ego 0.0.8' in call('--version')
+    assert 'ego 0.0.9' in call('--version')
     data = call('optimize', 'status')
     assert data['mode'] == 'off'
     assert data['fast_path_extra_model_calls'] == 0
