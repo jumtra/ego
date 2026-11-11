@@ -43,7 +43,7 @@ def test_manual_rotation_never_pretends_to_clear(tmp_path: Path):
         rotation_instructions(tmp_path,'issue1','claude')
     save_checkpoint(tmp_path,'issue1',goal='Ship feature',completed=['unit tests passed'],
                     next_steps=['review git diff'], status='VERIFIED')
-    for host, command in [('claude','/clear'),('codex','/clear'),('opencode','/new'),('agy',None)]:
+    for host, command in [('claude','/clear'),('codex','/clear'),('opencode','/new'),('agy','/clear')]:
         info=rotation_instructions(tmp_path,'issue1',host)
         assert info['clear_command']==command
         assert info['clear_is_manual'] is True
@@ -348,5 +348,5 @@ def test_continue_another_clis_work_inside_the_open_cli(tmp_path: Path, monkeypa
     assert json.loads(capsys.readouterr().out)["task_id"] == "feat-7"
     # Plain resume (clearing this CLI) uses the detected host's own instructions.
     assert main(["session", "resume", "feat-7", "--root", root]) == 0
-    assert json.loads(capsys.readouterr().out)["clear_command"] is None
+    assert json.loads(capsys.readouterr().out)["clear_command"] == "/clear"
     assert "session resume --from" in instruction_block(Config())

@@ -6,7 +6,7 @@
 
 Claude Code・Codex・OpenCode・Antigravityに、計画・分担・テスト・記憶を。
 
-![Version](https://img.shields.io/badge/version-0.0.7-2563eb)
+![Version](https://img.shields.io/badge/version-0.0.8-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
@@ -108,6 +108,8 @@ ego apply --hosts claude,antigravity --policy relaxed --profile balanced
 ```toml
 schema_version = 1
 profile = "balanced"            # "minimal" (最小) / "balanced" (推奨) / "full" (全機能)
+clear_suggest_tokens = 0       # Claude Code / `ego run`: このコンテキストトークン数でチェックポイント保存とクリア（0 で無効）
+run_yolo = false               # `ego run`: CLIを権限確認スキップ付きで起動（起動ごとに `--yolo` / `--no-yolo` で上書き）
 
 [hosts]
 enabled = [                     # 連携するAIエージェント
@@ -160,6 +162,7 @@ provider = "none"               # "none" / "codegraph" / "graphify"
 | コマンド | 説明 |
 |---|---|
 | `ego doctor` | インストール済みのAI CLIや設定の健全性を診断 |
+| `ego run <claude\|codex\|opencode\|agy>` | CLIを ego 管理の端末で起動し、`clear_suggest_tokens` に達したら自動でチェックポイント保存・クリア・再開。`--yolo` で権限確認をスキップ |
 | `ego status` | 設定のドリフト（手動編集や競合）を確認 |
 | `ego projects list` | 適用済みプロジェクトごとの適用バージョンとドリフトを一覧（既存分は `ego projects scan <dir>` で登録） |
 | `ego update --yes --sync-all` | ego 本体を更新（git checkout は fast-forward、それ以外はリリース wheel）し、登録済み全プロジェクトを各自の設定のまま再生成 |

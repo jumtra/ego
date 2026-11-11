@@ -30,6 +30,4 @@ Prefer direct user instructions over ceremonial workflow. Write formal documents
 **Boundaries:** after a verified subtask, before changing feature area or host, or when context is crowded, checkpoint and start fresh. Read `references/checkpoint.md`.
 
 **Report:** write **完了** only after successful validation and application, with changed files and the **tests actually run**. If tests fail or edits were not applied, write **未完了** or **検証済み・未適用**; never claim completion without evidence.
-
-Include the token usage line from the command output (`usage_text`, e.g. `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`) when a plan, work, or loop command reports it. Tokens are input + output + cache read + cache creation; report the figure as printed and do not recompute it.
 <!-- SEH:PROMPT:END -->

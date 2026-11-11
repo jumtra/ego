@@ -22,7 +22,7 @@ wheels = [
 
 [[package]]
 name = "ego"
-version = "0.0.7"
+version = "0.0.8"
 source = { editable = "." }
 
 [package.optional-dependencies]
