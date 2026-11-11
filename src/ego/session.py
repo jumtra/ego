@@ -311,10 +311,12 @@ def arm_auto_resume(root: Path, task_id: str, status: str | None = None) -> bool
 
 
 def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[str, Any]:
-    """Stop-hook output: tell the user, once per growth step, that a fresh session is due.
+    """Stop-hook output that enforces the configured context limit (clear_suggest_tokens).
 
-    Shown to the user only (systemMessage); it adds nothing to the model's
-    context and never clears or blocks anything.
+    On reaching the limit, and again at each growth step, a session without a current
+    checkpoint is given one short extra turn (decision "block") to save one: only the
+    conversation knows what to save. Every later turn above the limit reminds the user
+    to /clear. It never clears anything and never blocks twice in a row.
     """
     if threshold <= 0 or not isinstance(payload, dict) or not isinstance(payload.get("transcript_path"), str):
         return {}
@@ -326,27 +328,42 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int) -> dict[st
     with exclusive_lock(safe_path(root, ".ego/locks/session-advice.lock")):
         state = read_json(state_path, {})
         state = state if isinstance(state, dict) else {}
-        last = state.get(session, {}).get("tokens")
+        entry = state.get(session) if isinstance(state.get(session), dict) else {}
+        last = entry.get("tokens")
         if tokens is None or tokens < threshold:
-            if last is not None and tokens is not None:  # compacted or cleared: allow a new suggestion later
+            if last is not None and tokens is not None:  # compacted or cleared: enforce again at the next crossing
                 state.pop(session, None); write_json(state_path, state)
             return {}
-        if last is not None and last <= tokens < last * RESUGGEST_GROWTH:
-            return {}
-        state[session] = {"tokens": tokens, "at": time.time()}
-        for old in sorted(state, key=lambda k: state[k].get("at", 0))[:-20]:
-            state.pop(old)
-        write_json(state_path, state)
-    size = f"約 {tokens // 1000}k トークン（提案しきい値 {threshold // 1000}k）"
-    # A checkpoint another live session saved says nothing about this conversation:
-    # offering it here would have the user clear unsaved work.
-    foreign = {t for t, e in _pending_tasks(root).items() if e.get("session") and e["session"] != session}
-    checkpoint = latest_open_checkpoint(root, exclude=foreign)
+        step = last is None or tokens >= last * RESUGGEST_GROWTH
+        # A checkpoint another live session saved says nothing about this conversation:
+        # offering it here would have the user clear unsaved work.
+        foreign = {t for t, e in _pending_tasks(root).items() if e.get("session") and e["session"] != session}
+        # At a growth step the checkpoint must postdate the previous step: the work since is not in it.
+        max_age = min(FRESH_CHECKPOINT, time.time() - float(entry.get("at") or 0)) if step and last is not None else FRESH_CHECKPOINT
+        checkpoint = latest_open_checkpoint(root, max_age, exclude=foreign)
+        # The extra turn this hook asked for (or another hook's) is ending: never block it again.
+        save = step and checkpoint is None and not payload.get("stop_hook_active")
+        if step and (checkpoint is not None or save):
+            state[session] = {"tokens": tokens, "at": time.time()}
+            for old in sorted(state, key=lambda k: state[k].get("at", 0))[:-20]:
+                state.pop(old)
+            write_json(state_path, state)
+    size = f"約 {tokens // 1000}k トークン（しきい値 {threshold // 1000}k）"
     if checkpoint:
         _mark_clear_pending(root, checkpoint["task_id"], session if session != "unknown" else None)
         return {"systemMessage": f"ego: コンテキストは{size}です。チェックポイント {checkpoint['task_id']}（{checkpoint['status']}）は保存済みです。"
-                                 "区切りが良ければ /clear を実行してください。" + AFTER_CLEAR}
-    return {"systemMessage": f"ego: コンテキストは{size}です。区切りの良いところで「チェックポイントを保存して」と依頼し、"
+                                 "/clear を実行してください。" + AFTER_CLEAR}
+    if save:
+        return {"systemMessage": f"ego: コンテキストが{size}に達しました。チェックポイントを自動保存します。保存後に /clear を実行してください。",
+                "decision": "block",
+                "reason": f"ego: this conversation's context is {tokens} tokens, at or above this project's limit "
+                          f"(clear_suggest_tokens = {threshold}). Do no further task work in this turn. Save this conversation's state with one "
+                          "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... "
+                          "--status <IN_PROGRESS|VERIFIED|BLOCKED|COMPLETED> --root .` (facts only; include uncommitted changes and "
+                          "known failures; reuse the task ID if one was already checkpointed). Then tell the user, briefly and in "
+                          "their language, that the checkpoint is saved and that they should run /clear and then send "
+                          "\"続けて\" to resume from it. Then stop."}
+    return {"systemMessage": f"ego: コンテキストは{size}です。「チェックポイントを保存して」と依頼し、"
                              "その後 /clear を実行してください。" + AFTER_CLEAR}
 
 

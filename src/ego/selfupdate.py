@@ -1,4 +1,4 @@
-"""Conservative self-update via publisher's GitHub Release wheel.
+"""Conservative self-update: a git checkout fast-forwards to its upstream; otherwise the publisher's GitHub Release wheel.
 
 No arbitrary update URL, no shell interpolation, no dependency resolution, and
 no changes to project .ego state. Only stable newer versions with an
@@ -145,15 +145,75 @@ def install_wheel(path: Path, version: str, *, approved: bool=False) -> dict:
             "project_data_changed":False,"warning":"The previous wheel should be saved for rollback before updating"}
 
 
+def source_checkout() -> Path | None:
+    """The git checkout this code runs from (make install / pip install -e), else None."""
+    repo=Path(__file__).resolve().parent.parent.parent
+    return repo if (repo/".git").exists() and (repo/"run_ego.py").is_file() else None
+
+
+def self_argv() -> list[str]:
+    """Command that starts a fresh process on the code now on disk (after an update)."""
+    repo=source_checkout()
+    return [sys.executable,str(repo/"run_ego.py")] if repo else [sys.executable,"-m","ego"]
+
+
+def _confirm(question: str, yes: bool) -> None:
+    if yes:return
+    if not sys.stdin.isatty():raise SEHError("APPROVAL_REQUIRED","Noninteractive install requires --yes",3)
+    if input(f"{question} [y/N] ").strip().lower() not in ("y","yes"):raise SEHError("UPDATE_ABORTED","Cancelled",2)
+
+
+_INIT_VERSION_RE=re.compile(r'^__version__\s*=\s*"([^"]+)"',re.M)
+
+
+def git_update(repo: Path, current_version: str, *, apply: bool=False, yes: bool=False) -> dict:
+    """Update a git checkout: fetch its upstream, then fast-forward only.
+
+    Never merges, rebases, stashes or discards: local commits or conflicting edits stop the update.
+    """
+    git=shutil.which("git")
+    if not git:raise SEHError("GIT_REQUIRED","git is needed to update a git checkout",3)
+    env={**os.environ,"GIT_TERMINAL_PROMPT":"0"}
+    def run(*argv: str, timeout: int=30) -> subprocess.CompletedProcess:
+        try:return subprocess.run([git,"-C",str(repo),*argv],capture_output=True,text=True,timeout=timeout,check=False,env=env)
+        except subprocess.TimeoutExpired as exc:raise SEHError("UPDATE_NETWORK",f"git {argv[0]} timed out",3) from exc
+    def out(*argv: str) -> str:
+        proc=run(*argv)
+        return proc.stdout.strip() if proc.returncode==0 else ""
+    upstream=out("rev-parse","--abbrev-ref","--symbolic-full-name","@{u}")
+    if not upstream:
+        raise SEHError("UPDATE_NO_UPSTREAM",f"The checkout at {repo} has no upstream branch; set one with 'git branch --set-upstream-to'",3)
+    fetch=run("fetch","--quiet",timeout=120)
+    if fetch.returncode:raise SEHError("UPDATE_NETWORK",(fetch.stderr or fetch.stdout).strip()[-800:],3)
+    behind=int(out("rev-list","--count","HEAD..@{u}") or 0)
+    ahead=int(out("rev-list","--count","@{u}..HEAD") or 0)
+    match=_INIT_VERSION_RE.search(out("show","@{u}:src/ego/__init__.py"))
+    info={"mode":"git","repo":str(repo),"branch":out("rev-parse","--abbrev-ref","HEAD"),"upstream":upstream,
+          "current":current_version,"latest":match.group(1) if match else None,
+          "commits_behind":behind,"commits_ahead":ahead,
+          "uncommitted_changes":bool(out("status","--porcelain","--untracked-files=no")),
+          "update_available":behind>0}
+    if not apply or not behind:return info
+    if ahead:
+        raise SEHError("UPDATE_DIVERGED",f"{repo} has {ahead} local commit(s) not in {upstream}; rebase or merge manually",3)
+    _confirm(f"Fast-forward {repo} by {behind} commit(s) to {upstream} (ego {info['latest']})?",yes)
+    merged=run("merge","--ff-only","@{u}",timeout=120)
+    if merged.returncode:
+        raise SEHError("UPDATE_GIT_FAILED",(merged.stderr or merged.stdout).strip()[-1200:],3)
+    try:found=_INIT_VERSION_RE.search((repo/"src"/"ego"/"__init__.py").read_text(encoding="utf8"))
+    except OSError:found=None
+    return {**info,"status":"INSTALLED","version":found.group(1) if found else info["latest"],
+            "commits_applied":behind,"restart_required":False,"project_data_changed":False}
+
+
 def self_update(current_version: str, *, apply:bool=False, yes:bool=False, dest:Path|None=None) -> dict:
+    repo=source_checkout()
+    if repo:return git_update(repo,current_version,apply=apply,yes=yes)
     info=latest_release(current_version)
     if not apply or not info["update_available"]:return info
     if not info["can_install"]:raise SEHError("UPDATE_UNVERIFIED_RELEASE",info["reason"],3)
     _check_venv_or_raise()
-    if not yes:
-        if not sys.stdin.isatty():raise SEHError("APPROVAL_REQUIRED","Noninteractive install requires --yes",3)
-        reply=input(f"Install verified ego {info['latest']}? [y/N] ").strip().lower()
-        if reply not in ("y","yes"):raise SEHError("UPDATE_ABORTED","Cancelled",2)
+    _confirm(f"Install verified ego {info['latest']}?",yes)
     cache=dest or Path.home()/".cache"/"seh"/"updates"/info["latest"]
     wheel=fetch_verified_wheel(info,cache/info["asset"]["name"])
     return {**info,**install_wheel(wheel,info["latest"],approved=True)}

@@ -140,7 +140,7 @@ def generated_files(cfg: Config) -> dict[str, str]:
         for name in RULES:
             files[f".claude/rules/{name}.md"] = f"# {name.title()}\n\n{RULES[name]}"
         # No hook unless asked for: the pre-tool policy hook comes with the full
-        # profile, the clear suggestion with clear_suggest_tokens. Neither calls a model.
+        # profile, the context-limit hooks with clear_suggest_tokens. Neither calls a model.
         hooks: dict[str, list] = {}
         if cfg.profile == "full":
             hooks["PreToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "ego hook pre-tool --root ."}]}]

@@ -29,6 +29,7 @@ def _cmd_apply(args):
     if args.memory is not None: cfg.memory = args.memory
     if args.runtime is not None: cfg.runtime_mode = args.runtime
     if getattr(args, "policy", None) is not None: cfg.policy_mode = args.policy
+    if getattr(args, "clear_suggest_tokens", None) is not None: cfg.clear_suggest_tokens = args.clear_suggest_tokens
     if getattr(args, "models", None) is not None:
         try:
             parsed = json.loads(args.models)
@@ -100,6 +101,7 @@ def _cmd_status(args):
         "root": str(root),
         "installed_version": installed_version,
         "harness_version": __version__,
+        "version_differs": installed_version != __version__,
         "last_snapshot_id": last_snapshot_id,
         "changes": changes,
         "conflicts": plan["conflicts"],
@@ -162,12 +164,33 @@ def _cmd_init(args):
     _print(result);return 0
 
 def _cmd_sync(args):
+    if args.all:
+        from .projects import sync_all
+        result=sync_all(apply=args.apply)
+        _print(result)
+        return 5 if any(k in result["counts"] for k in ("ERROR","BLOCKED")) else 0
     from .config import load_config
     from .install import installation_plan,apply_install
     cfg=load_config(_root(args))
     result=apply_install(_root(args),cfg) if args.apply else installation_plan(_root(args),cfg)
     if not args.apply:result.pop("wanted",None)
     _print(result);return 0
+
+def _cmd_projects(args):
+    from .projects import list_projects,register,unregister,scan,project_info,registry_path
+    if args.action=="list":
+        _print({"harness_version":__version__,"registry":str(registry_path()),"projects":list_projects()});return 0
+    if args.action=="scan":
+        _print({"registered":scan(Path(args.dir),args.depth)});return 0
+    results=[]
+    for raw in args.paths:
+        path=Path(raw).resolve()
+        if args.action=="add":
+            info=project_info(path)
+            if info["status"] in ("MISSING","NOT_APPLIED"):raise SEHError("PROJECT_NOT_INITIALIZED",f"{path}: no ego installation (.ego/ownership.json)",3)
+            register(path);results.append(info)
+        else:results.append({"root":str(path),"removed":unregister(path)})
+    _print(results);return 0
 
 def _cmd_doctor(args):
     from .config import load_config
@@ -497,7 +520,10 @@ def _cmd_models(args):
 
 
 def _cmd_update(args):
-    from .selfupdate import self_update, update_from_local_wheel
+    from .selfupdate import self_update, update_from_local_wheel, self_argv
+    project=_root(args)
+    if args.sync and not (project/".ego"/"config.toml").exists():
+        raise SEHError("PROJECT_NOT_INITIALIZED","--sync requires existing .ego/config.toml",3)
     if args.wheel:
         if not args.sha256:
             raise SEHError("DIGEST_REQUIRED","--wheel requires --sha256",2)
@@ -506,16 +532,21 @@ def _cmd_update(args):
         if args.sha256:
             raise SEHError("INVALID_UPDATE","--sha256 requires --wheel",2)
         result=self_update(__version__,apply=not args.check,yes=args.yes)
-    if args.sync and result.get("status")=="INSTALLED":
+    if (args.sync or args.sync_all) and not args.check:
         import subprocess
-        project=_root(args)
-        if not (project/".ego"/"config.toml").exists():
-            raise SEHError("PROJECT_NOT_INITIALIZED","--sync requires existing .ego/config.toml",3)
-        # Launch the just-installed version in a new process; no stale templates.
-        p=subprocess.run([sys.executable,"-m","ego","sync","--root",str(project),"--apply"],capture_output=True,text=True,timeout=90)
-        if p.returncode:
+        # Projects are synced whether or not a newer version was just installed: they may lag the CLI.
+        # A new process runs the code now on disk; no stale templates.
+        target=["--all"] if args.sync_all else ["--root",str(project)]
+        p=subprocess.run([*self_argv(),"sync",*target,"--apply"],capture_output=True,text=True,timeout=300)
+        try:synced=json.loads(p.stdout)
+        except ValueError:synced=None
+        if synced is None or (p.returncode and not args.sync_all):
             raise SEHError("PROJECT_SYNC_FAILED",p.stderr[-1600:] or p.stdout[-1600:],3)
-        result["project_sync"]=json.loads(p.stdout)
+        if args.sync_all:result["projects_sync"]=synced
+        else:
+            synced.pop("wanted",None);result["project_sync"]=synced
+        _print(result)
+        return 5 if p.returncode else 0
     _print(result)
     return 0
 
@@ -537,6 +568,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--runtime",choices=["native","managed"],help="Default runtime; per-task runtime remains configurable")
     sp.add_argument("--policy",choices=["strict","relaxed"],help="Policy mode (strict: safe default; relaxed: loose mode allowing git push and edits)")
     sp.add_argument("--models",help="Default models JSON mapping, e.g. '{\"claude\":\"sonnet\"}'")
+    sp.add_argument("--clear-suggest-tokens",type=int,metavar="N",help="Claude Code: at N context tokens the Stop hook has the session checkpoint and suggests /clear (0 = off)")
     mode = sp.add_mutually_exclusive_group()
     mode.add_argument("--interactive",action="store_true",help="Always ask for choices, even when stdin is redirected")
     mode.add_argument("--non-interactive",action="store_true",help="Never prompt (for scripts and CI)")
@@ -560,7 +592,15 @@ def build_parser()->argparse.ArgumentParser:
     init.add_argument("--memory",choices=["file","engram"])
     init.add_argument("--detect-tests",action="store_true",help="Add verified test command candidates to config")
     init.add_argument("--apply",action="store_true");init.set_defaults(func=_cmd_init)
-    sp=sub.add_parser("sync",help="Re-render host configurations");common(sp);sp.add_argument("--apply",action="store_true");sp.set_defaults(func=_cmd_sync)
+    sp=sub.add_parser("sync",help="Re-render host configurations");common(sp);sp.add_argument("--apply",action="store_true")
+    sp.add_argument("--all",action="store_true",help="Every registered project (see 'ego projects list'), each with its own saved config");sp.set_defaults(func=_cmd_sync)
+    sp=sub.add_parser("projects",help="Projects ego is applied to: installed version and drift of each")
+    s=sp.add_subparsers(dest="action",required=True)
+    s.add_parser("list")
+    r=s.add_parser("add",help="Register already-applied projects");r.add_argument("paths",nargs="+")
+    r=s.add_parser("remove",help="Forget projects (their files are untouched)");r.add_argument("paths",nargs="+")
+    r=s.add_parser("scan",help="Register every applied project found under a directory");r.add_argument("dir");r.add_argument("--depth",type=int,default=4)
+    sp.set_defaults(func=_cmd_projects)
     sp=sub.add_parser("doctor");common(sp);sp.set_defaults(func=_cmd_doctor)
     sp=sub.add_parser("hosts",help="Inspect installed host CLI versions and supported flags");common(sp)
     s=sp.add_subparsers(dest="action",required=True)
@@ -572,12 +612,13 @@ def build_parser()->argparse.ArgumentParser:
     q=s.add_parser("list");q.add_argument("--host",choices=["claude","codex","opencode","agy"]);q.add_argument("--no-refresh",action="store_true")
     q=s.add_parser("refresh");q.add_argument("--host",choices=["claude","codex","opencode","agy"])
     sp.set_defaults(func=_cmd_models)
-    sp=sub.add_parser("update",help="Fetch and verify latest trusted GitHub Release; install with confirmation");common(sp)
+    sp=sub.add_parser("update",help="Update ego itself: fast-forward a git checkout, or install the verified latest GitHub Release wheel");common(sp)
     sp.add_argument("--check",action="store_true",help="Check availability only; do not install")
     sp.add_argument("--yes",action="store_true",help="Approve verified update in non-interactive mode")
     sp.add_argument("--wheel",help="Offline wheel upgrade from an explicitly trusted local file")
     sp.add_argument("--sha256",help="Expected SHA256 digest for --wheel")
-    sp.add_argument("--sync",action="store_true",help="After install, synchronize owned host config in --root project")
+    sp.add_argument("--sync",action="store_true",help="Then re-render the --root project with its saved config")
+    sp.add_argument("--sync-all",action="store_true",help="Then re-render every registered project, each with its own saved config")
     sp.set_defaults(func=_cmd_update)
     sp=sub.add_parser("modules");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("list");r=s.add_parser("resolve");r.add_argument("modules");r=s.add_parser("scaffold");r.add_argument("name");r.add_argument("--apply",action="store_true");sp.set_defaults(func=_cmd_modules)

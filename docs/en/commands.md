@@ -40,9 +40,19 @@ ego models list --host opencode
 ego models refresh
 ego work run --task task.json --hosts claude,codex --strategy fallback --models '{"claude":"sonnet","codex":"auto"}' --trust-cli
 ego work run --task task.json --autonomy bypass --attest-external-sandbox --trust-cli  # external OS isolation REQUIRED
-ego update --check
+ego update --check                 # git checkout: commits behind upstream; wheel install: latest release
+ego update --yes                   # git checkout: fetch + fast-forward only; otherwise verified release wheel
+ego update --yes --sync-all        # then re-render every registered project with its own saved config
 ego update --yes --sync --root /your/project
+ego projects list                  # each applied project: installed_version, version_differs, drift status
+ego projects scan ~/Develop        # register projects applied before the registry existed
+ego sync --all [--apply]           # preview / re-render all registered projects (no CLI update)
+ego apply --clear-suggest-tokens 120000
 ```
+
+`ego update` detects how ego is installed. From a git checkout (`make install`, `pip install -e .`) it runs `git fetch` and a fast-forward-only merge of the checkout's upstream branch: local commits or conflicting edits stop the update, and nothing is merged, rebased, stashed or discarded. Otherwise it installs the latest GitHub Release wheel after SHA256 verification (virtual environment or pipx only). Both need `--yes` or an interactive confirmation.
+
+`ego apply` and `ego sync --apply` record the project in a user-level registry (`~/.config/ego/projects.json`, or `$EGO_HOME/projects.json`; paths only). `ego projects list` and `ego status` show the version that rendered each project (`installed_version`) next to the running CLI (`harness_version`). `ego sync --all --apply` and `ego update --sync-all` re-render every registered project from its own `.ego/config.toml`, so each keeps its settings; a project with user-modified owned files is reported `BLOCKED` and left untouched (exit code 5), the others are still applied.
 
 `ego` is the primary console command installed by `make install` or `pip install -e .`. For Task JSON examples, see [examples/multihost/task.json](../examples/multihost/task.json).
 
@@ -70,5 +80,5 @@ Loop end states: `VERIFIED` (goal holds in the staged copy, nothing applied), `C
 
 Checkpoints are host-neutral, so a session saved in one CLI continues in another: `ego session checkpoint` records the saving CLI (detected from the environment the CLI gives its commands, or `--host <cli>`), `ego session list` shows open checkpoints from any CLI, `ego session resume --from <cli>` continues that CLI's latest checkpoint inside the CLI that is already open (ask it to "continue from codex"), and `ego session handoff [task_id] --to <claude|codex|opencode|agy>` prints the command that opens the target CLI on the resume prompt (`--launch` starts it from a real terminal). `resume` and `handoff` default to the latest open interactive checkpoint. No conversation transcript is carried over.
 
-`clear_suggest_tokens` (default 0 = off) generates Claude Code hooks: after each turn `ego hook stop` measures the conversation size from the host transcript and, above the threshold, shows the user a `/clear` suggestion; after `/clear`, `ego hook session-start` injects the resume prompt of a checkpoint saved in the last 30 minutes or armed by `ego session resume`. Neither hook calls a model, blocks a turn or clears anything.
+`clear_suggest_tokens` (default 0 = off; set it in `.ego/config.toml` or with `ego apply --clear-suggest-tokens N`) generates Claude Code hooks that enforce a context limit: after each turn `ego hook stop` measures the conversation size from the host transcript. On reaching the limit, and again each time the context has grown 25% since, a session without a current checkpoint gets one short extra turn (Stop `decision: "block"`) in which it must save `ego session checkpoint` and tell the user to `/clear`; a session that already saved one is only told to `/clear`. Every later turn above the limit repeats the `/clear` reminder to the user. After `/clear`, `ego hook session-start` injects the resume prompt of a checkpoint saved in the last 30 minutes or armed by `ego session resume`. The hooks are mechanical (no model decides whether they fire), never clear anything themselves, and never block the same turn twice.
 
