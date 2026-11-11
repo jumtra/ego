@@ -6,7 +6,7 @@
 
 Claude Code・Codex・OpenCode・Antigravityに、計画・分担・テスト・記憶を。
 
-![Version](https://img.shields.io/badge/version-0.0.8-2563eb)
+![Version](https://img.shields.io/badge/version-0.0.9-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
@@ -44,6 +44,11 @@ Python **3.11以上**、macOS / Linuxで実行します。
 # 推奨: クローン不要のグローバルCLI(どちらか一方)
 uv tool install git+https://github.com/jumtra/ego
 pipx install git+https://github.com/jumtra/ego
+
+# 公開済みリリース wheel から pip 形式で導入(git 不要。バージョンは最新リリースに置き換え)
+pipx install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl
+uv tool install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl
+pip install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl  # 仮想環境内で
 
 ego --version
 ego update --yes   # 以後の更新: 検証済みの最新リリース wheel を導入

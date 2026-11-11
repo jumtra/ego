@@ -764,8 +764,14 @@ def main(argv:list[str]|None=None)->int:
     # Accept --root both directly after the command and after a nested action.
     # Relocation remains explicit; it does not rewrite user prompt arguments.
     args_list=list(argv if argv is not None else sys.argv[1:])
-    own=args_list[:args_list.index("--")] if "--" in args_list else args_list  # after "--" the arguments belong to the wrapped CLI
-    if "--root" in own:
+    # After "--" the arguments belong to the wrapped CLI. Split them off before argparse: on Python 3.11
+    # argparse rejects them when a positional with nargs="*" precedes "--" (`ego run codex --yolo -- --model x`).
+    passthrough:list[str]=[]
+    if "--" in args_list:
+        cut=args_list.index("--")
+        passthrough=args_list[cut+1:]
+        args_list=args_list[:cut]
+    if "--root" in args_list:
         idx=args_list.index("--root")
         if idx+1>=len(args_list):
             parser.error("--root requires a path")
@@ -773,6 +779,9 @@ def main(argv:list[str]|None=None)->int:
         if args_list:args_list[1:1]=pair
         else:args_list.extend(pair)
     args=parser.parse_args(args_list)
+    if passthrough:
+        if not hasattr(args,"args"):parser.error(f"unrecognized arguments: -- {' '.join(passthrough)}")
+        args.args=passthrough
     try:return args.func(args)
     except SEHError as exc:
         print(json.dumps({"status":"ERROR","reason_code":exc.code,"message":str(exc)},ensure_ascii=False),file=sys.stderr)

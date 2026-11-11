@@ -6,7 +6,7 @@
 
 Bring planning, task routing, tests, and memory to Claude Code, Codex, OpenCode, and Antigravity.
 
-![Version](https://img.shields.io/badge/version-0.0.8-2563eb)
+![Version](https://img.shields.io/badge/version-0.0.9-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
@@ -43,6 +43,11 @@ Requires Python **3.11+** on macOS / Linux:
 # Recommended: global CLI, no clone needed (either one)
 uv tool install git+https://github.com/jumtra/ego
 pipx install git+https://github.com/jumtra/ego
+
+# pip-style install from a published release wheel (no git needed; replace the version with the latest release)
+pipx install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl
+uv tool install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl
+pip install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl  # inside a virtualenv
 
 ego --version
 ego update --yes   # later: installs the latest verified release wheel
