@@ -1,24 +1,44 @@
-# Security model and bounded execution
+# Security model
 
-The harness is not a general-purpose OS sandbox. A copied folder or worktree protects against accidental merges but does **not** prevent an executed process from reading `HOME`, other paths, environment variables or contacting the network. **This limitation is deliberately enforced by defaults and reflected by `ego doctor`.**
+[Docs index](README.md) · [日本語](../ja/security.md)
 
-- `ego init` and `ego sync` are dry-run by default. User-authored files are never silently deleted. Ownership hashes, marker blocks and snapshots protect generated content. Legacy Skill removal requires matching SHA-256 hashes and explicit approval.
-- Managed work does not mutate the original workspace without `--apply --approve` and checks write allowlists and stale base file hashes. Real agents can invoke arbitrary tools inside their own CLI process, so `--trust-cli` is required. Test commands run as argv arrays, not via `shell=True`; allowed command names alone are **not** an OS security boundary.
-- Optimize is OFF by default. Unmetered sessions require explicit `--spend-approval human:<ref>`. Real model experiments refuse to run without a verified sandbox unless an operator explicitly sets `--trusted-local`, which **removes the sandbox guarantee**. An API's estimated cost after execution is not a hard cost cap: `require_metered` blocks without a cost-limiter integration.
-- Skill/prompt candidate changes are limited to a harness-owned Skill description, a marker-bounded Skill body or the tool guidance file. Never auto-edit scripts, CI, policy, security rules, permission configurations or non-owned user files. Promote requires independent Eval evidence and approval; all promotions are reversible until external edits invalidate the base hash.
-- Env settings, agent outputs and external text are untrusted. Tool subprocesses use argv not a shell, no implicit `curl | sh`, and a redactor removes typical credentials from persisted run results. Credentials embedded in arbitrary source files, diagrams or badly formatted transcripts may not be detected: handle sensitive projects with stronger controls.
-- An `approval_ref` is a **local operator acknowledgement/audit identifier**, not proof of identity. Production multi-user approval would need an external authentication and policy service.
-- The optional Engram MCP provider starts an explicit trusted external command from `SEH_ENGRAM_MCP_COMMAND`. Tool names are configured separately by the user. Its compatibility is not presumed until a real server handshake passes.
-- AGY is run through its CLI like the other hosts when the `agy` binary is installed. Whether your AGY plan permits automated CLI use is the operator's responsibility to confirm. AGY print mode cannot answer a permission prompt, so write runs pass `--dangerously-skip-permissions` without requiring `--attest-external-sandbox`; read-only nodes and `--autonomy safe` use `--mode plan`. Edits still land in the run's staging copy or worktree, but commands AGY runs are not sandboxed by the harness.
-- External CodeGraph/Graphify are never silently installed. `ego code index --execute` uses their documented commands and may write local indexes. External generated Skill/Hook files should not be layered on top of harness-owned files without inspecting conflicts.
+**ego is not an OS sandbox.** A staging copy or Git worktree protects your working tree from unreviewed changes. It does not stop a process that an AI CLI starts from reading your home directory, environment variables or other paths, or from using the network. `ego doctor` reports the sandbox as unverified for this reason.
 
-### Deployment guidance
+## What ego does protect
 
-For important repositories, use an external sandbox or disposable VM with no production credentials, fixed network policies, read-only source snapshots and least-privilege tokens. Enable GitHub branch protection / required checks separately; local CLI code cannot enforce server-side protections. Do not check `.ego/state`, logs, index artifacts or secrets into Git.
+| Area | Protection |
+|---|---|
+| Your files during setup | `ego init` and `ego sync` preview unless `--apply`. Generated files are tracked by hash; a file you edited is never overwritten (`BLOCKED`). `CLAUDE.md` / `AGENTS.md` are changed only inside the managed block. Each apply creates a snapshot for `ego rollback` |
+| Your working tree during managed runs | Work happens in a staging copy or worktree. Applying needs `--apply --approve`, every changed file must match a `write_allowlist`, and the target must be unchanged since the run started (`STALE_BASE`) |
+| Check commands | Run as argv arrays without a shell, limited to `allow_commands`. Shells, `python -c`, and destructive patterns are refused. In `strict` policy, `git push`, `reset`, `clean` and `rebase` are refused too |
+| Starting real AI CLIs | Requires `--trust-cli`. Skipping permissions requires `--autonomy bypass` together with `--attest-external-sandbox` |
+| Prompts | Output of earlier nodes is never appended to later prompts verbatim; later nodes read the verified files. Reference files and checkpoints are labeled as untrusted data |
+| Skill and prompt changes | Limited to harness-owned skill descriptions, marker-bounded skill bodies and the tool guide. Promotion needs evaluation evidence and `--approve`, and is reversible |
+| Spending | `ego optimize` is off by default; unmetered experiments need `--spend-approval`. Planner model calls need `--execute` |
+| Updates | `ego update` pins the GitHub repository, HTTPS, the wheel name, a stable version and the SHA256 from the GitHub API. No arbitrary URLs, shell pipelines or dependency installation. A git checkout is only fast-forwarded |
+| Stored data | Checkpoints and memory stay in the project. No conversation transcripts are collected. A redactor removes typical credential formats from persisted run results |
 
-## Vendor CLI drift and self-update hardening
+## What it does not protect
 
-- Flag compatibility is probed by executing only vendor `--version` / `--help` commands and cached by executable fingerprint and TTL. No downloaded help text is executed as a script, and missing required flags fail closed.
-- External OS-level isolation is NOT inferred from temp directories or Git worktrees. Raw permission bypass is an explicitly attested risk, not the normal default.
-- Updates pin the GitHub repository, HTTPS scheme, release wheel naming, stable version, GitHub API asset SHA256, local wheel metadata, and package identity. No arbitrary remote sources, shell pipelines or automatic dependency installation.
-- `ego update` needs a verified published release; it does not claim end-to-end signature validation or guaranteed automatic rollback. Keep the previous wheel/venv available. `--sync` affects only owned generated files; existing project state remains the source of truth.
+- **Processes started by an AI CLI.** Allowed command names and policy hooks are advisory, not a security boundary.
+- **`--yolo` and `bypass`.** `ego run --yolo`, `run_yolo = true` and `--autonomy bypass` remove the CLI's own permission prompts. Use them only where that is acceptable.
+- **AGY write runs.** AGY's print mode cannot answer a permission prompt, so managed write runs pass `--dangerously-skip-permissions` even without `--attest-external-sandbox`; read-only nodes and `--autonomy safe` use plan mode. Edits still land in the staging copy, but commands AGY runs are not contained. Whether your AGY plan permits automated CLI use is yours to confirm.
+- **Costs.** Reported costs are the CLI's own estimates after the fact, not a hard cap. `--max-budget-usd` stops a run or loop between steps once the reported cost exceeds it.
+- **Secrets in content.** Redaction is best-effort; credentials inside source files, diagrams or unusual formats may not be detected.
+- **Identity.** An `--approval-ref` is a local audit note, not proof of who approved.
+- **Server-side rules.** Branch protection and required checks must be configured on GitHub.
+- **`relaxed` policy.** It tells the AI it may push and edit configuration on request, and turns off most hook checks.
+
+## External tools
+
+- AI CLIs, CodeGraph, Graphify and Engram are never installed by ego. `ego code index --execute` runs the provider's documented indexing command and may write a local index.
+- Engram is started from `SEH_ENGRAM_MCP_COMMAND`, a command you configure and trust. Its compatibility is not assumed until a real server responds.
+- CLI flag support is detected by running only the vendor's `--version` / `--help`, cached per executable. A required flag that is missing fails closed.
+
+## Recommendations
+
+For important repositories, run managed work in an external sandbox or disposable VM with no production credentials, a fixed network policy and least-privilege tokens. Keep `policy_mode = "strict"`. Do not commit `.ego/state/`, `.ego/backups/`, `.ego/locks/`, `.ego/memory/handoffs/`, logs or secrets.
+
+## What is verified
+
+The test suite runs offline with the `mock` host. It covers configuration, installation and rollback, task routing, the run and loop engines, checkpoints, hooks, the `ego run` wrapper logic and the updater's verification. Behavior of the real vendor CLIs is reached through adapters that are checked against each CLI's reported flags, not exercised end to end in the tests. The Engram, CodeGraph, Graphify and `gh` integrations are adapters that depend on the external tool. Confirm these on your machine with `ego doctor` and a small trial run.

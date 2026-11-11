@@ -4,7 +4,7 @@
 
 **ひとつの依頼を、検証できる変更へ。**
 
-Claude Code・Codex・OpenCode・Antigravityに、計画・分担・テスト・記憶を。
+Claude Code・Codex・OpenCode・Antigravity に、計画・タスク分担・テスト・記憶を。
 
 ![Version](https://img.shields.io/badge/version-0.0.9-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
@@ -16,163 +16,88 @@ Claude Code・Codex・OpenCode・Antigravityに、計画・分担・テスト・
 
 ## 概要
 
-`ego` は、複数のAIコーディングエージェント（Claude Code、Codex、OpenCode、Antigravity）に対して、安全な計画立案、タスク分担、テスト駆動検証、知見の記憶・引き継ぎを提供するCLIハーネスです。
+`ego` は AI コーディング CLI（Claude Code、Codex、OpenCode、Antigravity / `agy`）のためのハーネスです。各 CLI 向けに共通の `/work` skill、agent、指示を生成し、検証付きの複数ホストによるタスク実行、メモリ、セッションの引き継ぎのためのコマンドを提供します。Python 以外の実行時依存はありません。
 
 <picture>
   <source media="(max-width: 600px)" srcset="assets/workflow-ja-mobile.svg">
   <img src="assets/workflow-ja.svg" alt="依頼 → 計画 → タスク定義に従って画面とAPIを分担 → テスト → 承認して適用" width="1120">
 </picture>
 
-| | やりたいこと | できること |
+| | やりたいこと | ego がすること |
 |---|---|---|
-| ⚡ | いつものAI CLIですぐ直す | `/work`で必要なファイルを読み、実装・テスト。小さな修正に大きな計画書は不要 |
-| 🧩 | 複数のAIに分担する | タスクごとにHost・Modelを指定。依存関係に沿って実行し、独立した作業は並列化 |
-| ✅ | 結果を確かめて反映する | 作業用コピーでテスト・回数制限付き修正。検証済みの変更を承認して適用 |
-| 💾 | 次の作業へ引き継ぐ | 知見を保存・検索。チェックポイントに目的・結果・次の作業を残して再開 |
-| 🔬 | 開発手順そのものを改善する | Skill・プロンプトの候補を評価・比較してから採用。最適化は初期OFF |
-| 🎛️ | プロジェクトに合わせる | 対話式セットアップでHost・規定モデル・Profile・Policy・Memory・コード解析・実行方式を選択 |
+| ⚡ | いつもの AI CLI ですぐ直す | `/work` が調査・実装・テストを行う。小さな修正に計画書は不要 |
+| 🧩 | 複数の AI CLI に分担する | ノードごとにホストとモデルを指定。依存関係を守り、独立したノードは並列実行 |
+| ✅ | 確かめてから反映する | ステージング用コピーか Git worktree で変更とテストを行い、承認後にのみ適用 |
+| 🔁 | コマンドが通るまで作業する | ゴールループ: 計画 → 実行 → 評価 → 再計画。イテレーション、予算、時間で上限を設定 |
+| 💾 | 後で、または別の CLI で続ける | Claude Code / Codex / OpenCode / AGY の間でメモリ、チェックポイント、引き継ぎ |
+| ♻️ | 長いセッションを小さく保つ | `ego run <cli>` がコンテキストのしきい値でチェックポイント、クリア、再開を行う |
 
 ---
 
-## 使用方法
+## クイックスタート
 
 ### 1 · インストール
 
-Python **3.11以上**、macOS / Linuxで実行します。
+macOS / Linux で Python **3.11 以上**が必要です。
 
 ```bash
-# 推奨: クローン不要のグローバルCLI(どちらか一方)
-uv tool install git+https://github.com/jumtra/ego
-pipx install git+https://github.com/jumtra/ego
-
-# 公開済みリリース wheel から pip 形式で導入(git 不要。バージョンは最新リリースに置き換え)
-pipx install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl
-uv tool install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl
-pip install https://github.com/jumtra/ego/releases/download/v0.0.9/ego-0.0.9-py3-none-any.whl  # 仮想環境内で
-
+uv tool install git+https://github.com/jumtra/ego    # または: pipx install git+https://github.com/jumtra/ego
 ego --version
-ego update --yes   # 以後の更新: 検証済みの最新リリース wheel を導入
 ```
 
-ego 自体を開発する場合は、リポジトリをクローンして `make install`(シンボリックリンク)か `pip install -e .` を使います。この場合 `ego update --yes` はそのチェックアウトを fast-forward するので、CLI はそこで checkout 中のブランチに追従します。
+リリース wheel、開発用インストール、更新: [セットアップ](setup.md)
 
-`~/.local/bin` を PATH に追加すると、どのプロジェクトからでも `ego` コマンドを利用できます。
-
----
-
-### 2 · プロジェクトへの適用（`ego apply`）
-
-対象プロジェクトのディレクトリで実行します：
+### 2 · プロジェクトへ適用
 
 ```bash
 cd /path/to/project
-ego apply
+ego apply          # 対話ウィザード。変更一覧を確認して y で確定
 ```
 
-通常の対話ターミナルでは、選択ウィザードが表示されます。設定を選んで差分を確認し、`y` で適用します。
+スクリプトから指定する場合:
 
-#### コマンド引数・フラグ一覧
-
-対話を使わず、引数で直接指定して適用することも可能です：
-
-| 引数・オプション | 説明 | 指定例 |
-|---|---|---|
-| `--hosts <list>` | 生成対象のAIホストをカンマ区切りで指定 | `--hosts claude,antigravity` |
-| `--policy <mode>` | セキュリティ方針（`strict`: 安全重視 / `relaxed`: 自律開発モード） | `--policy relaxed` |
-| `--profile <name>` | 生成プロファイル（`minimal`, `balanced`, `full`） | `--profile balanced` |
-| `--models <json>` | ホストごとの規定モデルを指定（JSON形式） | `--models '{"claude":"sonnet"}'` |
-| `--graph <provider>` | コード解析プロバイダ（`none`, `codegraph`, `graphify`） | `--graph none` |
-| `--memory <provider>` | 記憶プロバイダ（`file`, `engram`） | `--memory file` |
-| `--runtime <mode>` | 実行環境（`native`: 直接実行 / `managed`: 作業コピー検証） | `--runtime native` |
-| `--dry-run` | ファイルを変更せず、変更予定の差分のみを表示 | `--dry-run` |
-| `--check` | 差分の有無を検証（CI用：差分があれば非ゼロ終了） | `--check` |
-| `--root <path>` | 適用対象のプロジェクトパス（既定値: カレントディレクトリ） | `--root /path/to/project` |
-
-例：
 ```bash
-# CIや自動化スクリプトでの非対話適用
-ego apply --hosts claude,antigravity --policy relaxed --profile balanced
+ego apply --hosts claude,codex --profile balanced --policy strict
 ```
 
----
+これにより `.ego/config.toml` と、選択した CLI 向けの skill、agent、指示ブロックが書き込まれます。すべてのオプションと生成ファイル: [セットアップ](setup.md)。すべての設定項目: [設定](configuration.md)
 
-### 3 · 設定ファイル（`.ego/config.toml`）の変更方法
+### 3 · 作業する
 
-`ego apply` を実行すると、プロジェクトルートに **`.ego/config.toml`** が作成されます。
-
-#### 変更手順
-
-1. **直接編集**: `.ego/config.toml` をお好みのエディタで直接編集します。
-2. **同期（反映）**: 編集後、必ず以下のコマンドを実行して各AIツール向けの設定ファイルを再生成します。
-   ```bash
-   ego sync
-   ```
-
-#### 主な設定項目と意味
-
-```toml
-schema_version = 1
-profile = "balanced"            # "minimal" (最小) / "balanced" (推奨) / "full" (全機能)
-clear_suggest_tokens = 0       # Claude Code / `ego run`: このコンテキストトークン数でチェックポイント保存とクリア（0 で無効）
-run_yolo = false               # `ego run`: CLIを権限確認スキップ付きで起動（起動ごとに `--yolo` / `--no-yolo` で上書き）
-
-[hosts]
-enabled = [                     # 連携するAIエージェント
-    "claude",                   # Claude Code (.claude/, CLAUDE.md)
-    "antigravity",              # Antigravity (.agents/, AGENTS.md)
-    "codex",                    # OpenAI Codex (.codex/)
-    "opencode",                 # OpenCode (.opencode/)
-]
-
-[hosts.models]                  # 各ホストで使う既定モデル（オプション）
-claude = "sonnet"
-codex = "auto"
-
-[runtime]
-mode = "native"                 # "native" (通常実行) / "managed" (作業用コピーで検証)
-policy_mode = "strict"          # "strict" (保護フック有効) / "relaxed" (AIに自律push等を許可)
-
-[runtime.security]
-command_allowlist = ["git", "python", "pytest"] # 許可するコマンド名
-
-[memory]
-provider = "file"               # "file" (.agent-memory) / "engram" (外部MCP)
-
-[code_intelligence]
-provider = "none"               # "none" / "codegraph" / "graphify"
-```
-
-> [!TIP]
-> 個人開発やプロトタイプで、AIに `git push` や設定変更まで自律して任せたい場合は、`runtime.policy_mode = "relaxed"` に設定すると便利です。
-
----
-
-### 4 · 日常の作業（`/work` に依頼する）
-
-プロジェクトでAI CLI（Claude Code や Antigravity 等）を起動し、チャットでやりたいことを伝えます。
+プロジェクトで AI CLI を起動し、次のように依頼します。
 
 ```text
-/work タイムアウト値の入力チェックを追加して、関連テストを実行して
+/work Add timeout input validation and run the related tests
 ```
 
-**普段の入口は `/work` です。** AIが自動的に必要な `ego` サブコマンドを内部で呼び出します：
-- 調査 → 計画・タスク分割 → 実装 → テスト検証 → 結果報告
-- 編集前に「なぜ必要か」と「何をもって完了か」を確認します。結論が変わる未確定点があり、誤推測のやり直しが高くつく場合に限り、質問は1問ずつ行います。それ以外は前提を置いて進め、報告に前提を明記します
-- 大規模・複数ホストの実行では、各ステージの `intent`・`done_when`・`non_goals`・`assumptions`・`provides` をワーカーへのプロンプトに渡します。ステージが存在する理由と、後続ステージが何に依存するかを把握できます
+`/work` が日常的な入口です。AI は依頼に合う最も軽いワークフローを選び、管理された実行が必要なときは `ego` コマンドを自分で実行します。コンテキストの上限でセッションを ego に自動ローテーションさせたい場合は、ego を通じて CLI を起動します。
+
+```bash
+ego run claude     # codex、opencode、agy も可
+```
+
+### 4 · 保守する
+
+| コマンド | 用途 |
+|---|---|
+| `ego doctor` | ホスト CLI、プロバイダ、設定を確認 |
+| `ego status` | `.ego/config.toml` と生成ファイルのズレを表示 |
+| `ego sync --apply` | `.ego/config.toml` を編集した後、ファイルを再生成 |
+| `ego update --yes --sync-all` | ego を更新し、登録済みの全プロジェクトを再生成 |
+| `ego rollback` | 直前の apply を取り消す |
+| `ego uninstall` | プロジェクトから ego を削除（`--cli` で CLI のシンボリックリンクを削除） |
 
 ---
 
-### 5 · 便利な運用コマンド
+## ドキュメント
 
-| コマンド | 説明 |
-|---|---|
-| `ego doctor` | インストール済みのAI CLIや設定の健全性を診断 |
-| `ego run <claude\|codex\|opencode\|agy>` | CLIを ego 管理の端末で起動し、`clear_suggest_tokens` に達したら自動でチェックポイント保存・クリア・再開。`--yolo` で権限確認をスキップ |
-| `ego status` | 設定のドリフト（手動編集や競合）を確認 |
-| `ego projects list` | 適用済みプロジェクトごとの適用バージョンとドリフトを一覧（既存分は `ego projects scan <dir>` で登録） |
-| `ego update --yes --sync-all` | ego 本体を更新（git checkout は fast-forward、それ以外はリリース wheel）し、登録済み全プロジェクトを各自の設定のまま再生成 |
-| `ego rollback` | 直前の `ego apply` での変更を元に戻す（バックアップから復元） |
-| `ego uninstall` | プロジェクトから ego の管理ファイル・ブロックを安全に削除 |
-| `ego uninstall --cli` | `~/.local/bin` から ego のグローバルCLIをアンインストール |
+| トピック | English | 日本語 |
+|---|---|---|
+| インストール、適用、更新、アンインストール | [Setup](../en/setup.md) | [セットアップ](setup.md) |
+| `.ego/config.toml`、環境変数 | [Configuration](../en/configuration.md) | [設定](configuration.md) |
+| `/work`、管理実行、タスク JSON、ゴールループ | [Workflows](../en/workflows.md) | [ワークフロー](workflows.md) |
+| チェックポイント、CLI 間の引き継ぎ、`ego run` | [Sessions](../en/sessions.md) | [セッション](sessions.md) |
+| 全コマンドとフラグ | [Command reference](../en/commands.md) | [コマンドリファレンス](commands.md) |
+| 信頼の境界と制限 | [Security](../en/security.md) | [セキュリティ](security.md) |
 
-詳細なオプションは [コマンド一覧](../en/commands.md) や [セットアップの詳細](apply_choices.md) を参照してください。
+ライセンス: [MIT](../../LICENSE)
