@@ -39,19 +39,41 @@ def test_context_is_measured_from_the_last_main_chain_request(tmp_path: Path):
     assert context_tokens(tmp_path / "empty.jsonl") is None
 
 
-def test_suggestion_fires_once_per_growth_step_and_stays_silent_when_unmeasured(tmp_path: Path):
+def test_limit_forces_one_checkpoint_turn_per_growth_step_and_reminds_in_between(tmp_path: Path):
     assert clear_advice(tmp_path, _stop(tmp_path, 80000), 120000) == {}
     assert clear_advice(tmp_path, _stop(tmp_path, 130000), 0) == {}
     assert clear_advice(tmp_path, {"session_id": "s1", "transcript_path": str(tmp_path / "none.jsonl")}, 120000) == {}
     first = clear_advice(tmp_path, _stop(tmp_path, 130000), 120000)
-    assert "130k" in first["systemMessage"] and "チェックポイントを保存して" in first["systemMessage"]
-    assert set(first) == {"systemMessage"}  # user-facing only: no block, nothing added to model context
-    assert clear_advice(tmp_path, _stop(tmp_path, 140000), 120000) == {}
-    assert "170k" in clear_advice(tmp_path, _stop(tmp_path, 170000), 120000)["systemMessage"]
-    assert "130k" in clear_advice(tmp_path, _stop(tmp_path, 130000, session="other"), 120000)["systemMessage"]
-    # After compaction drops below the threshold, a later crossing suggests again.
+    # Reaching the limit is enforced, not advised: the session gets one extra turn to save itself.
+    assert first["decision"] == "block" and "ego session checkpoint" in first["reason"] and "/clear" in first["reason"]
+    assert "130k" in first["systemMessage"] and "120k" in first["systemMessage"]
+    # That extra turn ending is never blocked again; above the limit every turn reminds the user.
+    ending = clear_advice(tmp_path, {**_stop(tmp_path, 131000), "stop_hook_active": True}, 120000)
+    assert set(ending) == {"systemMessage"} and "/clear" in ending["systemMessage"]
+    reminder = clear_advice(tmp_path, _stop(tmp_path, 140000), 120000)
+    assert set(reminder) == {"systemMessage"} and "140k" in reminder["systemMessage"]
+    assert clear_advice(tmp_path, _stop(tmp_path, 170000), 120000)["decision"] == "block"
+    assert clear_advice(tmp_path, _stop(tmp_path, 130000, session="other"), 120000)["decision"] == "block"
+    # After compaction drops below the limit, a later crossing is enforced again.
     assert clear_advice(tmp_path, _stop(tmp_path, 40000), 120000) == {}
-    assert "125k" in clear_advice(tmp_path, _stop(tmp_path, 125000), 120000)["systemMessage"]
+    assert clear_advice(tmp_path, _stop(tmp_path, 125000), 120000)["decision"] == "block"
+
+
+def test_a_turn_another_hook_extended_does_not_use_up_the_forced_save(tmp_path: Path):
+    extended = clear_advice(tmp_path, {**_stop(tmp_path, 130000), "stop_hook_active": True}, 120000)
+    assert set(extended) == {"systemMessage"}
+    assert clear_advice(tmp_path, _stop(tmp_path, 130000), 120000)["decision"] == "block"
+
+
+def test_growth_step_needs_a_checkpoint_newer_than_the_previous_step(tmp_path: Path):
+    save_checkpoint(tmp_path, "t1", goal="g", status="IN_PROGRESS")
+    saved = clear_advice(tmp_path, _stop(tmp_path, 130000), 120000)
+    assert set(saved) == {"systemMessage"} and "t1" in saved["systemMessage"]  # already saved: no extra turn
+    # 25% more context since then is not in that checkpoint: save again.
+    assert clear_advice(tmp_path, _stop(tmp_path, 170000), 120000)["decision"] == "block"
+    save_checkpoint(tmp_path, "t1", goal="g", completed=["more"], status="IN_PROGRESS")
+    after = clear_advice(tmp_path, {**_stop(tmp_path, 171000), "stop_hook_active": True}, 120000)
+    assert set(after) == {"systemMessage"} and "t1" in after["systemMessage"]
 
 
 def test_fresh_checkpoint_makes_clear_resume_automatic_exactly_once(tmp_path: Path):
@@ -179,8 +201,8 @@ def test_parallel_sessions_never_receive_each_others_checkpoint(tmp_path: Path, 
     assert "taskA, taskB" in both["systemMessage"]
     # Each session's Stop hook offers only the checkpoint that session saved.
     assert "taskA" in clear_advice(tmp_path, _stop(tmp_path, 150000, session="sess-a"), 120000)["systemMessage"]
-    third = clear_advice(tmp_path, _stop(tmp_path, 150000, session="sess-c"), 120000)["systemMessage"]
-    assert "taskA" not in third and "taskB" not in third and "チェックポイントを保存して" in third
+    third = clear_advice(tmp_path, _stop(tmp_path, 150000, session="sess-c"), 120000)
+    assert "taskA" not in str(third) and "taskB" not in str(third) and third["decision"] == "block"
     # Finishing one task leaves a single candidate, which is then injected exactly once.
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-b")
     save_checkpoint(tmp_path, "taskB", goal="taskB work", status="COMPLETED")
@@ -274,7 +296,8 @@ def test_usage_switch_hooks_and_statusline_cli(tmp_path: Path, monkeypatch, caps
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_stop(tmp_path, 200000))))
     assert main(["hook", "stop", "--root", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out)["decision"] == "block"
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_stop(tmp_path, 200000))))
+    # The extra turn that usage block asked for is ending: the context limit only reminds, it cannot block again.
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({**_stop(tmp_path, 200000), "stop_hook_active": True})))
     assert main(["hook", "stop", "--root", str(tmp_path)]) == 0
     out = json.loads(capsys.readouterr().out)
     assert "decision" not in out and "/clear" in out["systemMessage"]

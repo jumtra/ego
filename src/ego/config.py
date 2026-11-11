@@ -27,7 +27,7 @@ class Config:
     timeout_seconds: int = 3600
     max_turns: int = 30  # agentic turns per managed worker invocation
     worker_context: str = "lean"  # "lean" (no inherited MCP servers) or "inherit"
-    clear_suggest_tokens: int = 0  # Claude Code: suggest /clear above this measured context size; 0 = off
+    clear_suggest_tokens: int = 0  # Claude Code: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
     usage_switch_percent: int = 0  # Claude Code: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
     models: dict[str, Any] = field(default_factory=dict)
     isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
@@ -115,8 +115,8 @@ def dump_config(cfg: Config) -> str:
         "#   max_turns = 30             # worker 1 回あたりの最大ターン数\n"
         "#   worker_context = \"lean\"   # \"lean\": ユーザーの MCP サーバーを継承しない / \"inherit\": 継承する\n"
         "#\n"
-        "# セッションクリアの自動提案 (clear_suggest_tokens, Claude Code のみ):\n"
-        "#   clear_suggest_tokens = 120000  # 実測コンテキストがこの値を超えたら /clear を提案。0 で無効\n"
+        "# セッションクリアのしきい値 (clear_suggest_tokens, Claude Code のみ。Stop hook が強制):\n"
+        "#   clear_suggest_tokens = 120000  # 実測コンテキストがこの値に達したらチェックポイントを自動保存させ /clear を提案。0 で無効\n"
         "#\n"
         "# 使用量上限が近いときの自動保存と切り替え提案 (usage_switch_percent, Claude Code のみ):\n"
         "#   usage_switch_percent = 85  # 5時間/7日枠の使用率がこの%以上でチェックポイント保存と別CLIへの切り替えを提案。0 で無効\n"

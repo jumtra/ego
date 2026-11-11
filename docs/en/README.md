@@ -156,6 +156,8 @@ Launch your favorite AI CLI inside the project and describe your goal:
 |---|---|
 | `ego doctor` | Diagnose health of installed host CLIs and providers |
 | `ego status` | Inspect drift between `.ego/config.toml` and generated files |
+| `ego projects list` | Show every applied project with the ego version that rendered it and its drift (`ego projects scan <dir>` registers existing ones) |
+| `ego update --yes --sync-all` | Update ego (git checkout: fast-forward; otherwise release wheel), then re-render all registered projects with their own settings |
 | `ego rollback` | Undo the last `ego apply` and restore previous snapshot |
 | `ego uninstall` | Cleanly remove all ego files and managed blocks from project |
 | `ego uninstall --cli` | Remove global symlinks from `~/.local/bin` (`make uninstall` also works) |

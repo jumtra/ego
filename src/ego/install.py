@@ -146,6 +146,8 @@ def apply_install(root: Path, cfg: Config) -> dict:
                 elif path.exists(): path.unlink()
             write_json(ownership_path, old_data)
             raise
+    from .projects import register_quietly
+    register_quietly(root)
     return {"status": "APPLIED", "snapshot_id": snapshot_id, "changes": [x for x in plan["changes"] if x["action"] != "unchanged"]}
 
 
@@ -250,6 +252,11 @@ def uninstall_project(root: Path) -> dict:
     if legacy_harness.exists() and legacy_harness.is_dir():
         shutil.rmtree(legacy_harness, ignore_errors=True)
         removed.append(".harness")
+    try:
+        from .projects import unregister
+        unregister(root)
+    except (OSError, SEHError, ValueError):
+        pass
     return {"status": "UNINSTALLED", "root": str(root), "removed": removed}
 
 

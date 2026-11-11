@@ -160,6 +160,8 @@ provider = "none"               # "none" / "codegraph" / "graphify"
 |---|---|
 | `ego doctor` | インストール済みのAI CLIや設定の健全性を診断 |
 | `ego status` | 設定のドリフト（手動編集や競合）を確認 |
+| `ego projects list` | 適用済みプロジェクトごとの適用バージョンとドリフトを一覧（既存分は `ego projects scan <dir>` で登録） |
+| `ego update --yes --sync-all` | ego 本体を更新（git checkout は fast-forward、それ以外はリリース wheel）し、登録済み全プロジェクトを各自の設定のまま再生成 |
 | `ego rollback` | 直前の `ego apply` での変更を元に戻す（バックアップから復元） |
 | `ego uninstall` | プロジェクトから ego の管理ファイル・ブロックを安全に削除 |
 | `ego uninstall --cli` | `~/.local/bin` から ego のグローバルCLIをアンインストール |
