@@ -33,7 +33,7 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 from .session import HOST_CLEAR, RESUGGEST_GROWTH, context_tokens, latest_open_checkpoint, resume_prompt
-from .util import SEHError, read_json, safe_path, write_json
+from .util import EgoError, read_json, safe_path, write_json
 
 RUN_ENV = "EGO_RUN"              # set for the host: its own ego hooks stand down, this process rotates instead
 STATE_ENV = "EGO_RUN_STATE"      # where a host status line reports context size (hosts without a readable record)
@@ -396,7 +396,7 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
             last_poll = at
             try:
                 typed = rotator.step(probe(host, root, started, state), calm, at)
-            except (OSError, SEHError, ValueError, KeyError, TypeError):
+            except (OSError, EgoError, ValueError, KeyError, TypeError):
                 typed = []  # a record we cannot read means "do nothing", never "stop the session"
             if typed:
                 queue.extend(typed)
@@ -423,12 +423,12 @@ def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool 
     if yolo:
         args = with_yolo(host, args)
     if threshold <= 0:
-        raise SEHError("CLEAR_THRESHOLD_UNSET", "Set clear_suggest_tokens in .ego/config.toml or pass --clear-tokens N", 2)
+        raise EgoError("CLEAR_THRESHOLD_UNSET", "Set clear_suggest_tokens in .ego/config.toml or pass --clear-tokens N", 2)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        raise SEHError("RUN_NEEDS_TTY", "ego run bridges an interactive CLI and needs a terminal", 3)
+        raise EgoError("RUN_NEEDS_TTY", "ego run bridges an interactive CLI and needs a terminal", 3)
     binary = shutil.which(host)
     if binary is None:
-        raise SEHError("HOST_UNAVAILABLE", f"{host} is not installed on PATH", 3)
+        raise EgoError("HOST_UNAVAILABLE", f"{host} is not installed on PATH", 3)
     root = root.resolve()
     env = dict(os.environ)
     env[RUN_ENV] = host

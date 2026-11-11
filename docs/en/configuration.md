@@ -133,10 +133,10 @@ Checkpoints are separate from memory items and always stored in `.ego/memory/han
 | Variable | Purpose |
 |---|---|
 | `EGO_HOME` | Directory of the project registry (`projects.json`). Default `~/.config/ego` |
-| `SEH_CACHE_DIR` | Cache for detected host CLI capabilities. Default `~/.cache/seh` |
-| `SEH_ENGRAM_MCP_COMMAND` | Command line that starts the Engram MCP server (required for `memory = "engram"`) |
-| `SEH_ENGRAM_WRITE_TOOL` | MCP tool name used by `ego memory add` |
-| `SEH_ENGRAM_SEARCH_TOOL` | MCP tool name used by `ego memory search` |
+| `EGO_CACHE_DIR` | Cache for detected host CLI capabilities. Default `~/.cache/ego` |
+| `EGO_ENGRAM_MCP_COMMAND` | Command line that starts the Engram MCP server (required for `memory = "engram"`) |
+| `EGO_ENGRAM_WRITE_TOOL` | MCP tool name used by `ego memory add` |
+| `EGO_ENGRAM_SEARCH_TOOL` | MCP tool name used by `ego memory search` |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_DATA_HOME` | Respected when `ego run` reads each CLI's session records |
 
 `EGO_RUN` is set by `ego run` for the CLI it starts; do not set it yourself.

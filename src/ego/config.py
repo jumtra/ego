@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import tomllib
 from typing import Any
-from .util import SEHError, atomic_text
+from .util import EgoError, atomic_text
 
 HOSTS = ("claude", "codex", "opencode", "agy")
 PROVIDERS = ("codegraph", "graphify", "none")
@@ -38,51 +38,51 @@ class Config:
 
     def validate(self) -> None:
         if self.schema_version != 1 or self.profile not in {"minimal", "balanced", "full"}:
-            raise SEHError("INVALID_CONFIG", "Unknown schema/profile", 2)
+            raise EgoError("INVALID_CONFIG", "Unknown schema/profile", 2)
         if self.policy_mode not in POLICIES:
-            raise SEHError("INVALID_CONFIG", f"policy_mode must be one of {POLICIES}", 2)
+            raise EgoError("INVALID_CONFIG", f"policy_mode must be one of {POLICIES}", 2)
         if not self.hosts or any(h not in HOSTS for h in self.hosts) or len(set(self.hosts)) != len(self.hosts):
-            raise SEHError("INVALID_CONFIG", "Invalid/duplicate hosts", 2)
+            raise EgoError("INVALID_CONFIG", "Invalid/duplicate hosts", 2)
         if self.code_intelligence not in PROVIDERS or self.memory not in MEMORY or self.runtime_mode not in ("native", "managed"):
-            raise SEHError("INVALID_CONFIG", "Invalid provider/runtime", 2)
+            raise EgoError("INVALID_CONFIG", "Invalid provider/runtime", 2)
         if self.isolation not in ("copy", "worktree"):
-            raise SEHError("INVALID_CONFIG", "isolation must be 'copy' or 'worktree'", 2)
+            raise EgoError("INVALID_CONFIG", "isolation must be 'copy' or 'worktree'", 2)
         if not isinstance(self.cleanup_worktree, bool):
-            raise SEHError("INVALID_CONFIG", "cleanup_worktree must be a boolean", 2)
+            raise EgoError("INVALID_CONFIG", "cleanup_worktree must be a boolean", 2)
         if not 1 <= self.max_parallel <= 8 or not 1 <= self.max_attempts <= 5 or not 5 <= self.timeout_seconds <= 7200:
-            raise SEHError("INVALID_CONFIG", "Invalid runtime limits", 2)
+            raise EgoError("INVALID_CONFIG", "Invalid runtime limits", 2)
         if not isinstance(self.max_turns, int) or not 1 <= self.max_turns <= 200:
-            raise SEHError("INVALID_CONFIG", "max_turns must be between 1 and 200", 2)
+            raise EgoError("INVALID_CONFIG", "max_turns must be between 1 and 200", 2)
         if not isinstance(self.clear_suggest_tokens, int) or not (self.clear_suggest_tokens == 0 or 20000 <= self.clear_suggest_tokens <= 2000000):
-            raise SEHError("INVALID_CONFIG", "clear_suggest_tokens must be 0 (off) or between 20000 and 2000000", 2)
+            raise EgoError("INVALID_CONFIG", "clear_suggest_tokens must be 0 (off) or between 20000 and 2000000", 2)
         if not isinstance(self.usage_switch_percent, int) or not (self.usage_switch_percent == 0 or 50 <= self.usage_switch_percent <= 99):
-            raise SEHError("INVALID_CONFIG", "usage_switch_percent must be 0 (off) or between 50 and 99", 2)
+            raise EgoError("INVALID_CONFIG", "usage_switch_percent must be 0 (off) or between 50 and 99", 2)
         if not isinstance(self.run_yolo, bool):
-            raise SEHError("INVALID_CONFIG", "run_yolo must be a boolean", 2)
+            raise EgoError("INVALID_CONFIG", "run_yolo must be a boolean", 2)
         if self.worker_context not in ("lean", "inherit"):
-            raise SEHError("INVALID_CONFIG", "worker_context must be 'lean' or 'inherit'", 2)
+            raise EgoError("INVALID_CONFIG", "worker_context must be 'lean' or 'inherit'", 2)
         if not isinstance(self.models, dict):
-            raise SEHError("INVALID_CONFIG", "models must be a dictionary", 2)
+            raise EgoError("INVALID_CONFIG", "models must be a dictionary", 2)
         for h, m in self.models.items():
             if h not in HOSTS:
-                raise SEHError("INVALID_CONFIG", f"Unsupported host '{h}' in models", 2)
+                raise EgoError("INVALID_CONFIG", f"Unsupported host '{h}' in models", 2)
             if isinstance(m, str):
                 if not m.strip() or len(m) > 128:
-                    raise SEHError("INVALID_CONFIG", f"Invalid model ID for host '{h}'", 2)
+                    raise EgoError("INVALID_CONFIG", f"Invalid model ID for host '{h}'", 2)
             elif isinstance(m, dict):
                 model_name = m.get("model")
                 if not isinstance(model_name, str) or not model_name.strip() or len(model_name) > 128:
-                    raise SEHError("INVALID_CONFIG", f"Host '{h}' table config requires a valid 'model' string", 2)
+                    raise EgoError("INVALID_CONFIG", f"Host '{h}' table config requires a valid 'model' string", 2)
                 effort = m.get("effort")
                 if effort is not None and (not isinstance(effort, str) or effort not in VALID_EFFORTS):
-                    raise SEHError("INVALID_CONFIG", f"Host '{h}' effort must be one of {sorted(VALID_EFFORTS)}", 2)
+                    raise EgoError("INVALID_CONFIG", f"Host '{h}' effort must be one of {sorted(VALID_EFFORTS)}", 2)
                 extra_keys = set(m.keys()) - {"model", "effort"}
                 if extra_keys:
-                    raise SEHError("INVALID_CONFIG", f"Unknown keys in models.{h}: {sorted(extra_keys)}", 2)
+                    raise EgoError("INVALID_CONFIG", f"Unknown keys in models.{h}: {sorted(extra_keys)}", 2)
             else:
-                raise SEHError("INVALID_CONFIG", f"Model config for host '{h}' must be a string or table", 2)
+                raise EgoError("INVALID_CONFIG", f"Model config for host '{h}' must be a string or table", 2)
         if any(not isinstance(cmd, list) or not cmd or any(not isinstance(x, str) for x in cmd) for cmd in self.tests):
-            raise SEHError("INVALID_CONFIG", "Tests must be argv arrays", 2)
+            raise EgoError("INVALID_CONFIG", "Tests must be argv arrays", 2)
 
 def _tomlval(value: Any) -> str:
     if isinstance(value, bool): return "true" if value else "false"
@@ -172,10 +172,10 @@ def load_config(root: Path) -> Config:
         else:
             return Config()
     try: raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc: raise SEHError("INVALID_CONFIG", str(exc), 2) from exc
+    except (OSError, ValueError) as exc: raise EgoError("INVALID_CONFIG", str(exc), 2) from exc
     data = _normalize_loaded_data(raw)
     unknown = set(data) - set(vars(Config()))
-    if unknown: raise SEHError("INVALID_CONFIG", f"Unknown keys: {sorted(unknown)}", 2)
+    if unknown: raise EgoError("INVALID_CONFIG", f"Unknown keys: {sorted(unknown)}", 2)
     cfg = Config(**data)
     cfg.validate()
     return cfg
@@ -198,19 +198,19 @@ class OptConfig:
 
     def validate(self) -> None:
         if self.schema_version != 1 or self.mode not in ("off", "analyze", "shadow", "assisted") or self.profile not in ("lite", "full"):
-            raise SEHError("INVALID_OPT_CONFIG", "Bad mode/profile", 2)
+            raise EgoError("INVALID_OPT_CONFIG", "Bad mode/profile", 2)
         if self.max_candidates not in range(1, 9) or not 1 <= self.max_rounds <= 5 or not 0 <= self.max_probe_runs <= 40 or not 30 <= self.max_wall_seconds <= 7200 or not 100 <= self.max_candidate_bytes <= 32768:
-            raise SEHError("INVALID_OPT_CONFIG", "Bad optimization limits", 2)
+            raise EgoError("INVALID_OPT_CONFIG", "Bad optimization limits", 2)
         if self.cost_policy not in ("manual_consent", "require_metered") or not self.require_human_approval:
-            raise SEHError("INVALID_OPT_CONFIG", "Budget and approvals cannot be bypassed", 2)
+            raise EgoError("INVALID_OPT_CONFIG", "Budget and approvals cannot be bypassed", 2)
 
 def load_opt(root: Path) -> OptConfig:
     path = root / ".ego" / "optimization.toml"
     if not path.exists(): return OptConfig()
     try: data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc: raise SEHError("INVALID_OPT_CONFIG", str(exc), 2) from exc
+    except (OSError, ValueError) as exc: raise EgoError("INVALID_OPT_CONFIG", str(exc), 2) from exc
     unknown = set(data) - set(vars(OptConfig()))
-    if unknown: raise SEHError("INVALID_OPT_CONFIG", f"Unknown: {sorted(unknown)}", 2)
+    if unknown: raise EgoError("INVALID_OPT_CONFIG", f"Unknown: {sorted(unknown)}", 2)
     result = OptConfig(**data); result.validate(); return result
 
 def save_opt(root: Path, opt: OptConfig) -> None:

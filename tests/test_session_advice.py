@@ -15,7 +15,7 @@ from ego.loop import run_loop
 from ego.runner import RunResult
 from ego.session import (clear_advice, clear_resume, context_tokens, rotation_instructions, save_checkpoint)
 from ego.templates import generated_files
-from ego.util import SEHError, read_json
+from ego.util import EgoError, read_json
 from ego.work import execute
 
 
@@ -138,7 +138,7 @@ def test_hooks_are_generated_only_on_request_and_call_the_installed_command(proj
     full = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
     assert full["PreToolUse"][0]["hooks"][0]["command"] == "ego hook pre-tool --root ."
     (project / ".ego/config.toml").write_text("clear_suggest_tokens = 5\n")
-    with pytest.raises(SEHError):
+    with pytest.raises(EgoError):
         load_config(project)
 
 
@@ -159,7 +159,7 @@ def test_hook_cli_never_fails_the_host_turn(tmp_path: Path, monkeypatch, capsys)
 def test_merge_conflict_does_not_leave_the_run_marked_running(tmp_path: Path):
     (tmp_path / "w.py").write_text("from pathlib import Path\nimport os\nPath('same.txt').write_text(str(os.getpid()))\n")
     spec = {"goal": "g", "nodes": [{"id": n, "kind": "code", "argv": ["python3", "w.py"], "write_allowlist": ["same.txt"]} for n in ("a", "b")]}
-    with pytest.raises(SEHError) as conflict:
+    with pytest.raises(EgoError) as conflict:
         execute(tmp_path, spec, run_id="run-conflict")
     assert conflict.value.code == "MERGE_CONFLICT"
     assert read_json(tmp_path / ".ego/state/runs/run-conflict/record.json")["final_status"] == "MERGE_CONFLICT"
@@ -283,7 +283,7 @@ def test_usage_switch_hooks_and_statusline_cli(tmp_path: Path, monkeypatch, caps
     assert set(settings["hooks"]) == {"Stop"}  # no SessionStart(clear) hook without clear_suggest_tokens
     assert settings["statusLine"] == {"type": "command", "command": "ego hook statusline"}
     cfg.usage_switch_percent = 30
-    with pytest.raises(SEHError):
+    with pytest.raises(EgoError):
         cfg.validate()
     (tmp_path / ".ego").mkdir()
     (tmp_path / ".ego/config.toml").write_text("usage_switch_percent = 85\nclear_suggest_tokens = 120000\n")

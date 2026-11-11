@@ -12,7 +12,7 @@ from ego.config import Config, load_config
 from ego.context import ALWAYS_ON_BUDGET, SKILL_BODY_BUDGET, audit, clip_output
 from ego.loop import DONE_NODE, history_text, run_loop
 from ego.runner import RunResult, parse_host_usage
-from ego.util import SEHError
+from ego.util import EgoError
 from ego.work import compact_result, execute, usage_summary
 
 
@@ -102,7 +102,7 @@ def _fake_claude(monkeypatch, tmp_path: Path, flags: str):
                       "print('claude 9.9.9' if '--version' in sys.argv else " + repr(flags) + ")\n")
     script.chmod(0o755)
     monkeypatch.setenv("PATH", str(folder) + os.pathsep + os.environ.get("PATH", ""))
-    monkeypatch.setenv("SEH_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("EGO_CACHE_DIR", str(tmp_path / "cache"))
 
 
 def test_lean_worker_drops_inherited_mcp_and_carries_turn_and_budget_limits(monkeypatch, tmp_path: Path):
@@ -143,7 +143,7 @@ def test_worker_context_config_is_validated(tmp_path: Path):
     cfg = load_config(tmp_path)
     assert cfg.worker_context == "inherit" and cfg.max_turns == 12
     (tmp_path / ".ego/config.toml").write_text('worker_context = "everything"\n')
-    with pytest.raises(SEHError):
+    with pytest.raises(EgoError):
         load_config(tmp_path)
 
 
@@ -222,7 +222,7 @@ def test_loop_replans_from_bounded_history_and_carries_verified_work(tmp_path: P
 
 def test_loop_applies_only_with_approval_and_only_after_the_goal_holds(tmp_path: Path):
     _loop_project(tmp_path)
-    with pytest.raises(SEHError):
+    with pytest.raises(EgoError):
         run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=lambda *a: {}, apply=True)
 
     def planner(goal, history, workdir):
@@ -266,10 +266,10 @@ def test_loop_respects_iteration_and_budget_limits(tmp_path: Path):
 
 
 def test_loop_requires_a_measurable_allowed_check(tmp_path: Path):
-    with pytest.raises(SEHError) as missing:
+    with pytest.raises(EgoError) as missing:
         run_loop(tmp_path, "g", done_checks=[], planner=lambda *a: {})
     assert missing.value.code == "DONE_CHECK_REQUIRED"
-    with pytest.raises(SEHError) as denied:
+    with pytest.raises(EgoError) as denied:
         run_loop(tmp_path, "g", done_checks=[["bash", "-c", "true"]], planner=lambda *a: {})
     assert denied.value.code == "COMMAND_DENIED"
 
@@ -328,7 +328,7 @@ def test_stale_target_blocks_a_later_loop_apply(tmp_path: Path):
     result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=planner, scope=["*.txt"])
     assert result["status"] == "VERIFIED"
     (tmp_path / "a.txt").write_text("edited by the user meanwhile")
-    with pytest.raises(SEHError) as stale:
+    with pytest.raises(EgoError) as stale:
         apply_loop(tmp_path, result["loop_id"], approve=True)
     assert stale.value.code == "STALE_BASE"
     assert (tmp_path / "a.txt").read_text() == "edited by the user meanwhile"

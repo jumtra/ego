@@ -12,7 +12,7 @@ from ego.session import (save_checkpoint, load_checkpoint, resume_prompt,
 from ego.task_routing import build_task_prompt
 from ego.templates import skill_md, instruction_block
 from ego.config import Config
-from ego.util import SEHError
+from ego.util import EgoError
 from ego.work import execute
 
 
@@ -39,7 +39,7 @@ def test_checkpoint_is_compact_redacted_atomic_and_revisioned(tmp_path: Path):
 
 
 def test_manual_rotation_never_pretends_to_clear(tmp_path: Path):
-    with pytest.raises(SEHError,match='Save a checkpoint'):
+    with pytest.raises(EgoError,match='Save a checkpoint'):
         rotation_instructions(tmp_path,'issue1','claude')
     save_checkpoint(tmp_path,'issue1',goal='Ship feature',completed=['unit tests passed'],
                     next_steps=['review git diff'], status='VERIFIED')
@@ -70,11 +70,11 @@ def test_manual_cli_roundtrip(tmp_path: Path, capsys):
 
 def test_path_guard_and_note_limits(tmp_path: Path):
     for tid in ('../oops','a/b','', 'a'*81):
-        with pytest.raises(SEHError):
+        with pytest.raises(EgoError):
             save_checkpoint(tmp_path,tid,goal='X')
-    with pytest.raises(SEHError):
+    with pytest.raises(EgoError):
         save_checkpoint(tmp_path,'a',goal='X',evidence=['x']*9)
-    with pytest.raises(SEHError):
+    with pytest.raises(EgoError):
         save_checkpoint(tmp_path,'a',goal='X',status='PASSED')
 
 
@@ -206,7 +206,7 @@ print(json.dumps({'status':status,'response':'echo:'+prompt+';'+' '.join(a for a
 """)
     script.chmod(0o755)
     monkeypatch.setenv('PATH',str(script.parent)+os.pathsep+os.environ.get('PATH',''))
-    monkeypatch.setenv('SEH_CACHE_DIR',str(tmp_path/'cache'))
+    monkeypatch.setenv('EGO_CACHE_DIR',str(tmp_path/'cache'))
     write=build_command('agy','--fix it',model='gemini-x',effort='low',read_only=False)
     assert write[1:]==['--output-format','json','--model','gemini-x','--effort','low',
                        '--dangerously-skip-permissions','--print=--fix it']
@@ -226,7 +226,7 @@ def test_checkpoint_records_saving_host_and_keeps_it_across_revisions(tmp_path: 
     assert save_checkpoint(tmp_path, "t1", goal="g", host="codex")["host"] == "codex"
     assert save_checkpoint(tmp_path, "t1", goal="g2")["host"] == "codex"
     assert save_checkpoint(tmp_path, "t1", goal="g3", host="opencode")["host"] == "opencode"
-    with pytest.raises(SEHError, match="Unsupported interactive host"):
+    with pytest.raises(EgoError, match="Unsupported interactive host"):
         save_checkpoint(tmp_path, "t1", goal="g", host="vim")
     monkeypatch.setenv("CLAUDECODE", "1")
     assert main(["session", "checkpoint", "--root", str(tmp_path), "--task-id", "t2", "--goal", "g"]) == 0
@@ -235,7 +235,7 @@ def test_checkpoint_records_saving_host_and_keeps_it_across_revisions(tmp_path: 
 
 def test_any_cli_can_find_and_hand_off_another_clis_checkpoint(tmp_path: Path, monkeypatch, capsys):
     from ego.session import handoff, list_checkpoints, resolve_task
-    with pytest.raises(SEHError, match="No open checkpoint"):
+    with pytest.raises(EgoError, match="No open checkpoint"):
         resolve_task(tmp_path, None)
     save_checkpoint(tmp_path, "old-1", goal="Earlier work", host="claude")
     save_checkpoint(tmp_path, "done-1", goal="Finished", status="COMPLETED", host="claude")
@@ -266,7 +266,7 @@ def test_any_cli_can_find_and_hand_off_another_clis_checkpoint(tmp_path: Path, m
         import shlex
         assert shlex.split(info["launch_command"]) == info["launch_argv"]
     assert handoff(tmp_path, "old-1", "agy")["task_id"] == "old-1"
-    with pytest.raises(SEHError, match="Save a checkpoint"):
+    with pytest.raises(EgoError, match="Save a checkpoint"):
         handoff(tmp_path, "nope", "codex")
 
     capsys.readouterr()

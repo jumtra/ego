@@ -2,7 +2,7 @@
 
 [ドキュメント索引](README.md) · [English](../en/commands.md)
 
-`ego <command> --help` で、インストール済みバージョンのフラグを確認できます。`seh` は `ego` のエイリアスです。
+`ego <command> --help` で、インストール済みバージョンのフラグを確認できます。
 
 ## 共通事項
 

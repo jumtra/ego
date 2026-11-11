@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "seh_version": "2.0.0a0",
+  "ego_version": "2.0.0a0",
   "hosts": {
     "claude": {
       "cli": "claude",

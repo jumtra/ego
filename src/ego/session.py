@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .util import SEHError, exclusive_lock, now, read_json, redact, safe_path, write_json
+from .util import EgoError, exclusive_lock, now, read_json, redact, safe_path, write_json
 
 SCHEMA = 1
 MAX_ITEM_CHARS = 350
@@ -44,7 +44,7 @@ def detect_host() -> str | None:
 
 def _id(value: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", value):
-        raise SEHError("INVALID_TASK_ID", "Use an alphanumeric task ID (max 80 chars) with '-' or '_'", 2)
+        raise EgoError("INVALID_TASK_ID", "Use an alphanumeric task ID (max 80 chars) with '-' or '_'", 2)
     return value
 
 
@@ -52,9 +52,9 @@ def _notes(values: list[str] | tuple[str, ...] | None) -> list[str]:
     if values is None:
         return []
     if not isinstance(values, (list, tuple)) or len(values) > MAX_NOTES:
-        raise SEHError("INVALID_HANDOFF", f"At most {MAX_NOTES} notes per field", 2)
+        raise EgoError("INVALID_HANDOFF", f"At most {MAX_NOTES} notes per field", 2)
     if not all(isinstance(x, str) for x in values):
-        raise SEHError("INVALID_HANDOFF", "Notes must be strings", 2)
+        raise EgoError("INVALID_HANDOFF", "Notes must be strings", 2)
     return [redact(x.strip())[:MAX_ITEM_CHARS] for x in values if x.strip()]
 
 
@@ -68,7 +68,7 @@ def load_checkpoint(root: Path, task_id: str) -> dict[str, Any] | None:
     if record is None:
         return None
     if not isinstance(record, dict) or record.get("schema_version") != SCHEMA or record.get("task_id") != task_id:
-        raise SEHError("INVALID_HANDOFF", "Checkpoint schema or task ID mismatch", 2)
+        raise EgoError("INVALID_HANDOFF", "Checkpoint schema or task ID mismatch", 2)
     return record
 
 
@@ -93,13 +93,13 @@ def save_checkpoint(
     """
     _id(task_id)
     if status not in {"IN_PROGRESS", "VERIFIED", "COMPLETED", "BLOCKED"}:
-        raise SEHError("INVALID_HANDOFF", "Unsupported checkpoint status", 2)
+        raise EgoError("INVALID_HANDOFF", "Unsupported checkpoint status", 2)
     if source not in {"interactive", "managed"}:
-        raise SEHError("INVALID_HANDOFF", "Unsupported source", 2)
+        raise EgoError("INVALID_HANDOFF", "Unsupported source", 2)
     if not isinstance(goal, str) or not goal.strip():
-        raise SEHError("INVALID_HANDOFF", "Nonempty goal required", 2)
+        raise EgoError("INVALID_HANDOFF", "Nonempty goal required", 2)
     if host is not None and host not in HOST_CLEAR:
-        raise SEHError("UNKNOWN_HOST", f"Unsupported interactive host: {host}", 2)
+        raise EgoError("UNKNOWN_HOST", f"Unsupported interactive host: {host}", 2)
     root = root.resolve()
     path = safe_path(root, handoff_relpath(task_id))
     lock = safe_path(root, f".ego/locks/handoff-{task_id}.lock")
@@ -298,7 +298,7 @@ def _pending_tasks(root: Path) -> dict[str, dict[str, Any]]:
         try:
             if isinstance(entry, dict) and time.time() - float(entry.get("at", 0)) <= PENDING_TTL:
                 fresh[_id(task_id)] = entry
-        except (SEHError, TypeError, ValueError):
+        except (EgoError, TypeError, ValueError):
             continue
     return fresh
 
@@ -549,7 +549,7 @@ def clear_resume(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         return {}
     try:
         record = load_checkpoint(root, next(iter(tasks)))
-    except SEHError:
+    except EgoError:
         return {}
     if record is None:
         return {}
@@ -575,16 +575,16 @@ def list_checkpoints(root: Path, include_completed: bool = False) -> list[dict[s
 def resolve_task(root: Path, task_id: str | None, from_host: str | None = None) -> str:
     """An explicit ID, or the most recently saved open interactive checkpoint (of one CLI, with from_host)."""
     if from_host is not None and from_host not in HOST_CLEAR:
-        raise SEHError("UNKNOWN_HOST", f"Unsupported interactive host: {from_host}", 2)
+        raise EgoError("UNKNOWN_HOST", f"Unsupported interactive host: {from_host}", 2)
     if task_id:
         return _id(task_id)
     for item in list_checkpoints(root):
         if item["source"] == "interactive" and from_host in (None, item["host"]):
             return item["task_id"]
     if from_host:
-        raise SEHError("HANDOFF_MISSING", f"No open checkpoint saved by {from_host}. It must be saved there first "
+        raise EgoError("HANDOFF_MISSING", f"No open checkpoint saved by {from_host}. It must be saved there first "
                        f"(`ego session checkpoint ... --host {from_host}`); `ego session list` shows what exists", 3)
-    raise SEHError("HANDOFF_MISSING", "No open checkpoint; save one with `ego session checkpoint`", 3)
+    raise EgoError("HANDOFF_MISSING", "No open checkpoint; save one with `ego session checkpoint`", 3)
 
 
 def pickup(root: Path, task_id: str | None, from_host: str) -> dict[str, Any]:
@@ -592,7 +592,7 @@ def pickup(root: Path, task_id: str | None, from_host: str) -> dict[str, Any]:
     task_id = resolve_task(root, task_id, from_host)
     record = load_checkpoint(root, task_id)
     if record is None:
-        raise SEHError("HANDOFF_MISSING", "Save a checkpoint before handing off", 3)
+        raise EgoError("HANDOFF_MISSING", "Save a checkpoint before handing off", 3)
     return {
         "task_id": task_id,
         "from_host": record.get("host"),
@@ -612,11 +612,11 @@ def handoff(root: Path, task_id: str | None, to_host: str, from_host: str | None
     conversation of the previous CLI is read or carried over.
     """
     if to_host not in HOST_LAUNCH:
-        raise SEHError("UNKNOWN_HOST", f"Unsupported interactive host: {to_host}", 2)
+        raise EgoError("UNKNOWN_HOST", f"Unsupported interactive host: {to_host}", 2)
     task_id = resolve_task(root, task_id, from_host)
     record = load_checkpoint(root, task_id)
     if record is None:
-        raise SEHError("HANDOFF_MISSING", "Save a checkpoint before handing off", 3)
+        raise EgoError("HANDOFF_MISSING", "Save a checkpoint before handing off", 3)
     prompt = resume_prompt(record)
     argv = [*HOST_LAUNCH[to_host], prompt]
     available = shutil.which(argv[0]) is not None
@@ -640,10 +640,10 @@ def handoff(root: Path, task_id: str | None, to_host: str, from_host: str | None
 
 def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dict[str, Any]:
     if host not in HOST_CLEAR:
-        raise SEHError("UNKNOWN_HOST", f"Unsupported interactive host: {host}", 2)
+        raise EgoError("UNKNOWN_HOST", f"Unsupported interactive host: {host}", 2)
     record = load_checkpoint(root, task_id)
     if record is None:
-        raise SEHError("HANDOFF_MISSING", "Save a checkpoint before clearing context", 3)
+        raise EgoError("HANDOFF_MISSING", "Save a checkpoint before clearing context", 3)
     auto = auto_resume_installed(root.resolve(), host)
     if auto:
         _mark_clear_pending(root.resolve(), task_id)

@@ -6,33 +6,20 @@ import shutil
 import time
 from .config import Config, save_config, dump_config
 from .templates import generated_files, root_instructions, MARK_BEGIN, MARK_END, LEGACY_WORK_HASHES
-from .util import SEHError, safe_path, filehash, sha256, read_json, write_json, atomic_text, ident, exclusive_lock
+from .util import EgoError, safe_path, filehash, sha256, read_json, write_json, atomic_text, ident, exclusive_lock
 
 OWNERSHIP = ".ego/ownership.json"
-
-LEGACY_MARKERS = (
-    ("<!-- seh:begin -->", "<!-- seh:end -->"),
-    ("<!-- SEH:BEGIN managed; edit .harness/config.toml and run seh sync -->", "<!-- SEH:END managed -->"),
-)
-
 
 def _apply_block(previous: str, block: str) -> str:
     if MARK_BEGIN in previous and MARK_END in previous:
         if previous.count(MARK_BEGIN) != 1 or previous.count(MARK_END) != 1:
-            raise SEHError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
+            raise EgoError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
         a = previous.index(MARK_BEGIN)
         b = previous.index(MARK_END) + len(MARK_END)
         return previous[:a] + block.rstrip("\n") + previous[b:]
-    for legacy_begin, legacy_end in LEGACY_MARKERS:
-        if legacy_begin in previous and legacy_end in previous:
-            if previous.count(legacy_begin) != 1 or previous.count(legacy_end) != 1:
-                raise SEHError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
-            a = previous.index(legacy_begin)
-            b = previous.index(legacy_end) + len(legacy_end)
-            return previous[:a] + block.rstrip("\n") + previous[b:]
     if MARK_BEGIN not in previous and MARK_END not in previous:
         return previous.rstrip() + ("\n\n" if previous.strip() else "") + block
-    raise SEHError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
+    raise EgoError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
 
 
 def installation_plan(root: Path, cfg: Config) -> dict:
@@ -69,7 +56,7 @@ def installation_plan(root: Path, cfg: Config) -> dict:
         from .config import load_config
         try:
             current = load_config(root)
-        except SEHError:
+        except EgoError:
             current = None
         wanted[".ego/config.toml"] = cfg_file.read_text(encoding="utf-8") if current == cfg else dump_config(cfg)
     else:
@@ -86,7 +73,7 @@ def installation_plan(root: Path, cfg: Config) -> dict:
             action = "create"
         elif rel == ".ego/config.toml":
             action = "update_config"
-        elif rel in ("CLAUDE.md", "AGENTS.md") and any(mb in path.read_text(encoding="utf-8") for mb in (MARK_BEGIN, *(b for b, _ in LEGACY_MARKERS))):
+        elif rel in ("CLAUDE.md", "AGENTS.md") and MARK_BEGIN in path.read_text(encoding="utf-8"):
             action = "update_block"
         elif rel in ("CLAUDE.md", "AGENTS.md"):
             action = "append_block"
@@ -109,7 +96,7 @@ def apply_install(root: Path, cfg: Config) -> dict:
     root = root.resolve()
     with exclusive_lock(root / ".ego" / "locks" / "install.lock"):
         plan = installation_plan(root, cfg)
-        if plan["conflicts"]: raise SEHError("OWNERSHIP_CONFLICT", str(plan["conflicts"]))
+        if plan["conflicts"]: raise EgoError("OWNERSHIP_CONFLICT", str(plan["conflicts"]))
         ownership_path = root / OWNERSHIP
         old_data = read_json(ownership_path, {"files": {}})
         snapshot_id = ident("snapshot")
@@ -152,11 +139,11 @@ def apply_install(root: Path, cfg: Config) -> dict:
 
 
 def rollback(root: Path, snapshot_id: str) -> dict:
-    if not snapshot_id.startswith("snapshot-") or not snapshot_id.replace("snapshot-", "").isalnum(): raise SEHError("INVALID_ID", snapshot_id, 2)
+    if not snapshot_id.startswith("snapshot-") or not snapshot_id.replace("snapshot-", "").isalnum(): raise EgoError("INVALID_ID", snapshot_id, 2)
     root = root.resolve()
     backup = safe_path(root, f".ego/backups/{snapshot_id}")
     meta = read_json(backup / "meta.json")
-    if not meta: raise SEHError("NOT_FOUND", snapshot_id, 3)
+    if not meta: raise EgoError("NOT_FOUND", snapshot_id, 3)
     with exclusive_lock(root / ".ego" / "locks" / "install.lock"):
         for rel, existed in meta["paths"].items():
             path = safe_path(root, rel)
@@ -184,7 +171,7 @@ def remove_legacy(root: Path, approved_hashes: dict[str, str]) -> dict:
     with exclusive_lock(root / ".ego" / "locks" / "install.lock"):
         snap = root / ".ego" / "backups" / ident("legacy")
         for rel, wanted_hash in approved_hashes.items():
-            if rel not in allowed or wanted_hash != allowed[rel]: raise SEHError("APPROVAL_MISMATCH", rel)
+            if rel not in allowed or wanted_hash != allowed[rel]: raise EgoError("APPROVAL_MISMATCH", rel)
             p = safe_path(root, rel)
             dest = snap / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -197,14 +184,14 @@ def remove_legacy(root: Path, approved_hashes: dict[str, str]) -> dict:
 def restore_legacy(root: Path, snapshot_id: str) -> dict:
     """Restore exactly one previously snapshotted set of legacy files, without clobbering."""
     if not snapshot_id.startswith("legacy-") or not snapshot_id.replace("legacy-", "").isalnum():
-        raise SEHError("INVALID_ID", snapshot_id, 2)
+        raise EgoError("INVALID_ID", snapshot_id, 2)
     backup = safe_path(root, f".ego/backups/{snapshot_id}", allow_missing=False)
     files = [p for p in backup.rglob("*") if p.is_file() and not p.is_symlink()]
     paths = [p.relative_to(backup).as_posix() for p in files]
     with exclusive_lock(root / ".ego" / "locks" / "install.lock"):
         for rel in paths:
             if safe_path(root, rel).exists():
-                raise SEHError("RESTORE_CONFLICT", rel)
+                raise EgoError("RESTORE_CONFLICT", rel)
         for p, rel in zip(files, paths):
             target = safe_path(root, rel)
             target.parent.mkdir(parents=True,exist_ok=True)
@@ -255,7 +242,7 @@ def uninstall_project(root: Path) -> dict:
     try:
         from .projects import unregister
         unregister(root)
-    except (OSError, SEHError, ValueError):
+    except (OSError, EgoError, ValueError):
         pass
     return {"status": "UNINSTALLED", "root": str(root), "removed": removed}
 
@@ -264,7 +251,7 @@ def uninstall_cli(bindir: Path | None = None) -> dict:
     if bindir is None:
         bindir = Path.home() / ".local" / "bin"
     deleted = []
-    for name in ("ego", "harness", "seh"):
+    for name in ("ego", "harness"):
         p = bindir / name
         if p.is_symlink() or p.exists():
             p.unlink()

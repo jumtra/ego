@@ -15,7 +15,7 @@ import time
 import uuid
 from typing import Any
 
-class SEHError(Exception):
+class EgoError(Exception):
     def __init__(self, code: str, message: str, exit_code: int = 4):
         super().__init__(message)
         self.code, self.exit_code = code, exit_code
@@ -44,7 +44,7 @@ def json_text(obj: Any) -> str:
 
 def atomic_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=".seh-", dir=path.parent)
+    fd, name = tempfile.mkstemp(prefix=".ego-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(content)
@@ -67,7 +67,7 @@ def read_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default
     try: return json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeError, ValueError) as exc: raise SEHError("INVALID_JSON", f"{path}: {exc}", 2) from exc
+    except (UnicodeError, ValueError) as exc: raise EgoError("INVALID_JSON", f"{path}: {exc}", 2) from exc
 
 
 def safe_path(root: Path, relative: str, *, allow_missing: bool = True) -> Path:
@@ -75,16 +75,16 @@ def safe_path(root: Path, relative: str, *, allow_missing: bool = True) -> Path:
     root = root.resolve()
     p = Path(relative)
     if not relative or p.is_absolute() or ".." in p.parts or "\\" in relative or "\x00" in relative:
-        raise SEHError("PATH_DENIED", f"Unsafe relative path: {relative}")
+        raise EgoError("PATH_DENIED", f"Unsafe relative path: {relative}")
     if any(part == ".git" for part in p.parts):
-        raise SEHError("PATH_DENIED", "Writing into .git is forbidden")
+        raise EgoError("PATH_DENIED", "Writing into .git is forbidden")
     cur = root
     for part in p.parts:
         cur = cur / part
-        if cur.is_symlink(): raise SEHError("SYMLINK_DENIED", f"Symlink path: {cur}")
+        if cur.is_symlink(): raise EgoError("SYMLINK_DENIED", f"Symlink path: {cur}")
     resolved = cur.resolve(strict=False)
-    if not resolved.is_relative_to(root): raise SEHError("PATH_ESCAPE", relative)
-    if not allow_missing and not resolved.exists(): raise SEHError("NOT_FOUND", relative, 3)
+    if not resolved.is_relative_to(root): raise EgoError("PATH_ESCAPE", relative)
+    if not allow_missing and not resolved.exists(): raise EgoError("NOT_FOUND", relative, 3)
     return resolved
 
 

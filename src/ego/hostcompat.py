@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from .util import SEHError, read_json, write_json
+from .util import EgoError, read_json, write_json
 
 BINARIES = {"claude": "claude", "codex": "codex", "opencode": "opencode", "agy": "agy"}
 CACHE_TTL = 7 * 86400
@@ -19,7 +19,7 @@ FLAG_RE = re.compile(r"(?<![\w-])--[a-z][a-z0-9-]*")
 
 
 def cache_path() -> Path:
-    return Path(os.environ.get("SEH_CACHE_DIR", str(Path.home()/".cache"/"seh"))) / "host_capabilities.json"
+    return Path(os.environ.get("EGO_CACHE_DIR", str(Path.home()/".cache"/"ego"))) / "host_capabilities.json"
 
 
 def _fingerprint(executable: str) -> str:
@@ -38,7 +38,7 @@ def _bounded(argv: list[str], timeout: float) -> tuple[bool, str]:
 
 def inspect_host(host: str, *, refresh: bool = False, timeout: int = 5) -> dict:
     if host not in BINARIES:
-        raise SEHError("UNKNOWN_HOST", host, 2)
+        raise EgoError("UNKNOWN_HOST", host, 2)
     executable = shutil.which(BINARIES[host])
     if not executable:
         return {"host": host, "available": False, "supported": False, "reason": "CLI not installed", "flags": [], "version": None}
@@ -68,7 +68,7 @@ def inspect_host(host: str, *, refresh: bool = False, timeout: int = 5) -> dict:
 def require_flags(info: dict, *names: str) -> None:
     missing=sorted(set(names)-set(info.get("flags",[])))
     if not info.get("supported") or missing:
-        raise SEHError("CLI_INCOMPATIBLE", f"{info.get('host')}: required CLI switches absent: {missing}. Run 'ego hosts refresh' after updating the vendor CLI.",3)
+        raise EgoError("CLI_INCOMPATIBLE", f"{info.get('host')}: required CLI switches absent: {missing}. Run 'ego hosts refresh' after updating the vendor CLI.",3)
 
 
 def list_host_capabilities(*, refresh: bool=False) -> dict:

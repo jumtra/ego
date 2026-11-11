@@ -10,7 +10,7 @@ from ego.cli import main
 from ego.config import Config, load_config
 from ego.install import OWNERSHIP, apply_install
 from ego.projects import list_projects, project_info, registry_path, scan, sync_all, unregister
-from ego.util import SEHError, read_json, write_json
+from ego.util import EgoError, read_json, write_json
 
 
 def _apply(root: Path, **settings) -> Path:
@@ -118,7 +118,7 @@ def test_git_checkout_updates_by_fast_forward_only(tmp_path: Path, monkeypatch):
     assert check["mode"] == "git" and check["latest"] == "1.1.0" and check["commits_behind"] == 1 and check["update_available"]
     assert "1.0.0" in (clone / "src/ego/__init__.py").read_text()  # a check changes nothing
     monkeypatch.setattr(selfupdate.sys.stdin, "isatty", lambda: False, raising=False)
-    with pytest.raises(SEHError, match="--yes"):
+    with pytest.raises(EgoError, match="--yes"):
         selfupdate.git_update(clone, "1.0.0", apply=True)
     done = selfupdate.git_update(clone, "1.0.0", apply=True, yes=True)
     assert done["status"] == "INSTALLED" and done["version"] == "1.1.0" and done["commits_applied"] == 1
@@ -126,7 +126,7 @@ def test_git_checkout_updates_by_fast_forward_only(tmp_path: Path, monkeypatch):
     # Local commits are never merged or discarded.
     _release(clone, "1.1.1-local")
     _release(origin, "1.2.0")
-    with pytest.raises(SEHError, match="local commit"):
+    with pytest.raises(EgoError, match="local commit"):
         selfupdate.git_update(clone, "1.1.0", apply=True, yes=True)
     assert "1.1.1-local" in (clone / "src/ego/__init__.py").read_text()
 

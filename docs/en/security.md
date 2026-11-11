@@ -32,7 +32,7 @@
 ## External tools
 
 - AI CLIs, CodeGraph, Graphify and Engram are never installed by ego. `ego code index --execute` runs the provider's documented indexing command and may write a local index.
-- Engram is started from `SEH_ENGRAM_MCP_COMMAND`, a command you configure and trust. Its compatibility is not assumed until a real server responds.
+- Engram is started from `EGO_ENGRAM_MCP_COMMAND`, a command you configure and trust. Its compatibility is not assumed until a real server responds.
 - CLI flag support is detected by running only the vendor's `--version` / `--help`, cached per executable. A required flag that is missing fails closed.
 
 ## Recommendations

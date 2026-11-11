@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 from ego.cli import _project_target
-from ego.util import SEHError
+from ego.util import EgoError
 import pytest
 
 ENTRY = Path(__file__).resolve().parents[1] / "run_ego.py"
@@ -74,6 +74,6 @@ def test_apply_protects_home_and_root(tmp_path: Path):
 
     class DummyArgs:
         root = str(Path.home())
-    with pytest.raises(SEHError) as exc:
+    with pytest.raises(EgoError) as exc:
         _project_target(DummyArgs())
     assert exc.value.code == "INVALID_PROJECT_ROOT"

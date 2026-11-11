@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import re
 import shutil
-from .util import SEHError, safe_path
+from .util import EgoError, safe_path
 
 BLOCK_PATTERNS = [
     r"(?<!\w)(?:sudo\s+)?rm\s+-[a-zA-Z]*[rR][a-zA-Z]*[fF][a-zA-Z]*\s+(?:/|~|\$HOME)(?:\s|$)",
@@ -16,24 +16,24 @@ PROTECTED = (
 )
 
 def check_command(argv: list[str], allow: list[str], policy_mode: str = "strict") -> None:
-    if not argv or not all(isinstance(x, str) for x in argv): raise SEHError("INVALID_ARGV", "Commands must be argv arrays")
+    if not argv or not all(isinstance(x, str) for x in argv): raise EgoError("INVALID_ARGV", "Commands must be argv arrays")
     exe = Path(argv[0]).name
-    if exe not in allow: raise SEHError("COMMAND_DENIED", f"Not an approved command: {exe}")
-    if exe in {"sh", "bash", "zsh"}: raise SEHError("COMMAND_DENIED", "Shell execution is not allowed")
+    if exe not in allow: raise EgoError("COMMAND_DENIED", f"Not an approved command: {exe}")
+    if exe in {"sh", "bash", "zsh"}: raise EgoError("COMMAND_DENIED", "Shell execution is not allowed")
     joined = " ".join(argv)
-    if any(re.search(p, joined, flags=re.I) for p in BLOCK_PATTERNS): raise SEHError("DANGEROUS_COMMAND", joined)
+    if any(re.search(p, joined, flags=re.I) for p in BLOCK_PATTERNS): raise EgoError("DANGEROUS_COMMAND", joined)
     if policy_mode != "relaxed" and exe == "git" and any(x in argv for x in ("push", "reset", "clean", "rebase")):
-        raise SEHError("COMMAND_DENIED", "Mutating remote or destructive Git commands need a separate manual process")
+        raise EgoError("COMMAND_DENIED", "Mutating remote or destructive Git commands need a separate manual process")
     if exe in {"python", "python3"} and "-c" in argv:
-        raise SEHError("COMMAND_DENIED", "Inline Python code is forbidden in check commands")
+        raise EgoError("COMMAND_DENIED", "Inline Python code is forbidden in check commands")
 
 
 def check_write(root: Path, rel: str, allow: list[str] | None = None) -> Path:
     import fnmatch
     p = safe_path(root, rel)
-    if rel.startswith(PROTECTED): raise SEHError("PROTECTED_PATH", rel)
+    if rel.startswith(PROTECTED): raise EgoError("PROTECTED_PATH", rel)
     if allow is not None and not any(fnmatch.fnmatch(rel, pattern) for pattern in allow):
-        raise SEHError("OUT_OF_SCOPE", rel)
+        raise EgoError("OUT_OF_SCOPE", rel)
     return p
 
 

@@ -5,7 +5,7 @@ import sys
 import subprocess
 import tomllib
 import pytest
-from ego.util import SEHError,read_json,filehash
+from ego.util import EgoError,read_json,filehash
 from ego.config import load_config,save_config,OptConfig,save_opt
 from ego.install import apply_install,legacy_plan,remove_legacy,restore_legacy
 from ego.codeintel import impact,affected_tests,search,health
@@ -54,10 +54,10 @@ def test_codegraph_commands_are_real_when_installed(project,monkeypatch,tmp_path
 def test_prompt_contracts(project):
     assert extract_reply("hello <reply>OK</reply> trailer","reply")["reply"]=="OK"
     assert extract_reply('{"ok":true}',"json")["reply"]["ok"] is True
-    with pytest.raises(SEHError):extract_reply("missing tag","reply")
+    with pytest.raises(EgoError):extract_reply("missing tag","reply")
     p=register_prompt(project,"task-prompt","Do X",role="reviewer")
     assert get_prompt(project,"task-prompt",p["id"])["body"]=="Do X"
-    with pytest.raises(SEHError):register_prompt(project,"task-prompt","Do X")
+    with pytest.raises(EgoError):register_prompt(project,"task-prompt","Do X")
 
 def test_work_plan_and_events(project):
     plan=plan_work(project,"Fix token expiration",host="mock",scope=["src/**"])
@@ -73,11 +73,11 @@ def test_legacy_restore(project):
     assert not p.exists()
     restored=restore_legacy(project,Path(result["backup"]).name)
     assert p.read_text()=="legacy"
-    with pytest.raises(SEHError):restore_legacy(project,Path(result["backup"]).name)
+    with pytest.raises(EgoError):restore_legacy(project,Path(result["backup"]).name)
 
 def test_author_gate_requires_real_evidence(project):
     c=new_candidate(project,"work","skill.description","Use for software editing tasks","Hypothesis")
-    with pytest.raises(SEHError):promote(project,c,approval_ref="human:ticket",gate={"status":"PASS","evidence":"invented","host":"claude"})
+    with pytest.raises(EgoError):promote(project,c,approval_ref="human:ticket",gate={"status":"PASS","evidence":"invented","host":"claude"})
 
 def test_full_opt_in_budget(project):
     save_opt(project,OptConfig(mode="shadow",profile="full",max_candidates=3,max_probe_runs=6,max_rounds=1))

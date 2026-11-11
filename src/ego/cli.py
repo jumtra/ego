@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sys
 from . import __version__
-from .util import SEHError, read_json, write_json, now
+from .util import EgoError, read_json, write_json, now
 
 def _print(data):print(json.dumps(data,indent=2,ensure_ascii=False,default=str))
 def _root(args):return Path(getattr(args,"root", ".")).resolve()
@@ -14,7 +14,7 @@ def _root(args):return Path(getattr(args,"root", ".")).resolve()
 def _project_target(args) -> Path:
     target = Path(getattr(args, "root", None) or Path.cwd()).resolve()
     if target in (Path.home(), Path("/")):
-        raise SEHError("INVALID_PROJECT_ROOT", f"Cannot apply harness directly to {target}", 2)
+        raise EgoError("INVALID_PROJECT_ROOT", f"Cannot apply harness directly to {target}", 2)
     return target
 
 def _cmd_apply(args):
@@ -36,7 +36,7 @@ def _cmd_apply(args):
             if not isinstance(parsed, dict): raise ValueError("must be JSON object")
             cfg.models = parsed
         except Exception as exc:
-            raise SEHError("INVALID_MODEL", f"models must be a valid JSON object: {exc}", 2)
+            raise EgoError("INVALID_MODEL", f"models must be a valid JSON object: {exc}", 2)
     # No extra import or stdin inspection on scripted apply/check/dry-run.
     from .apply_wizard import should_prompt, select_options, confirm_apply, WizardCancelled
     interactive = should_prompt(args)
@@ -123,7 +123,7 @@ def _cmd_rollback(args):
                 if snaps:
                     snapshot = snaps[-1]
         if not snapshot:
-            raise SEHError("NO_SNAPSHOTS", "No snapshots available to rollback", 3)
+            raise EgoError("NO_SNAPSHOTS", "No snapshots available to rollback", 3)
     result = rollback(root, snapshot)
     _print(result)
     return 0
@@ -187,7 +187,7 @@ def _cmd_projects(args):
         path=Path(raw).resolve()
         if args.action=="add":
             info=project_info(path)
-            if info["status"] in ("MISSING","NOT_APPLIED"):raise SEHError("PROJECT_NOT_INITIALIZED",f"{path}: no ego installation (.ego/ownership.json)",3)
+            if info["status"] in ("MISSING","NOT_APPLIED"):raise EgoError("PROJECT_NOT_INITIALIZED",f"{path}: no ego installation (.ego/ownership.json)",3)
             register(path);results.append(info)
         else:results.append({"root":str(path),"removed":unregister(path)})
     _print(results);return 0
@@ -219,10 +219,10 @@ def _cmd_migrate(args):
     if args.action=="plan":_print({"legacy":legacy_plan(root)});return 0
     if args.action=="rollback":_print(rollback(root,args.snapshot));return 0
     if args.action=="restore-legacy":
-        if not args.approve:raise SEHError("APPROVAL_REQUIRED","Explicit --approve required")
+        if not args.approve:raise EgoError("APPROVAL_REQUIRED","Explicit --approve required")
         _print(restore_legacy(root,args.snapshot));return 0
     if args.action=="remove-legacy":
-        if not args.approve:raise SEHError("APPROVAL_REQUIRED","Explicit --approve required")
+        if not args.approve:raise EgoError("APPROVAL_REQUIRED","Explicit --approve required")
         _print(remove_legacy(root,read_json(Path(args.hashes))));return 0
 
 def _cmd_work(args):
@@ -247,9 +247,9 @@ def _cmd_work(args):
         checks=[]
         for raw in args.done_check:
             try:argv=json.loads(raw) if raw.lstrip().startswith("[") else __import__("shlex").split(raw)
-            except ValueError as exc:raise SEHError("INVALID_DONE_CHECK",str(exc),2) from exc
+            except ValueError as exc:raise EgoError("INVALID_DONE_CHECK",str(exc),2) from exc
             if not isinstance(argv,list) or not argv or not all(isinstance(x,str) for x in argv):
-                raise SEHError("INVALID_DONE_CHECK","Each --done-check is a command or a JSON argv array",2)
+                raise EgoError("INVALID_DONE_CHECK","Each --done-check is a command or a JSON argv array",2)
             checks.append(argv)
         result=run_loop(root,args.goal,done_checks=checks,host=args.host,
                         scope=args.scope.split(",") if args.scope else None,max_iterations=args.max_iterations,
@@ -270,7 +270,7 @@ def _cmd_work(args):
         _print({"mode":"native","status":"USE_HOST_DIRECTLY","additional_llm_calls":0,
                 "instructions":"Use /work in the host, or ego work run for bounded graph execution"});return 0
     task=read_json(Path(args.task))
-    if not task:raise SEHError("TASK_MISSING",str(args.task),3)
+    if not task:raise EgoError("TASK_MISSING",str(args.task),3)
     # Planning cost is reporting data, not part of the task specification (resume compares specs).
     planner_usage=task.pop("planner_usage",None)
     if any(getattr(args,attr,None) for attr in ("hosts","strategy","model","models")):
@@ -281,7 +281,7 @@ def _cmd_work(args):
         if args.model:defaults["model"]=args.model
         if args.models:
             try:defaults["models"]=json.loads(args.models)
-            except json.JSONDecodeError as exc:raise SEHError("INVALID_MODEL",str(exc),2) from exc
+            except json.JSONDecodeError as exc:raise EgoError("INVALID_MODEL",str(exc),2) from exc
         task["defaults"]=defaults
     result=execute(root,task,host=args.host,apply=args.apply,approve=args.approve,trust_cli=args.trust_cli,
                    run_id=args.run_id if args.action=="resume" else None,resume=args.action=="resume",
@@ -319,7 +319,7 @@ def _cmd_author(args):
         if args.out:write_json(Path(args.out),res)
         _print({k:v for k,v in res.items() if k!="report"});return 0 if res["status"]=="PASS" else 5
     if args.action=="promote":
-        if not args.approve:raise SEHError("APPROVAL_REQUIRED","Explicit --approve required")
+        if not args.approve:raise EgoError("APPROVAL_REQUIRED","Explicit --approve required")
         _print(promote(root,read_json(Path(args.candidate)),approval_ref=args.approval_ref,gate=read_json(Path(args.gate)),allow_mock=args.allow_mock_test))
         return 0
     if args.action=="rollback":_print(rollback_promotion(root,args.promotion_id));return 0
@@ -362,7 +362,7 @@ def _cmd_optimize(args):
     if args.action=="run":_print(opt.run(root,args.experiment,execute=args.execute,spending_ref=args.spend_approval,trust_local=args.trusted_local));return 0
     if args.action=="report":_print(opt.report(root,args.experiment));return 0
     if args.action=="promote":
-        if not args.approve:raise SEHError("APPROVAL_REQUIRED","--approve required")
+        if not args.approve:raise EgoError("APPROVAL_REQUIRED","--approve required")
         _print(opt.promote_experiment(root,args.experiment,approval_ref=args.approval_ref,author_suite=Path(args.suite),host=args.host));return 0
     if args.action=="full":
         _print(opt.full(root,Path(args.fixture),args.host,args.skill,args.field,args.rounds,execute=args.execute,
@@ -375,10 +375,10 @@ def _cmd_memory(args):
     if args.action=="add":_print(p.add(args.text,tags=args.tags or [],evidence=args.evidence or []));return 0
     if args.action=="search":_print(p.search(args.query));return 0
     if args.action=="list":
-        if not hasattr(p,"list"):raise SEHError("UNSUPPORTED","Memory provider does not support list")
+        if not hasattr(p,"list"):raise EgoError("UNSUPPORTED","Memory provider does not support list")
         _print(p.list());return 0
     if args.action=="delete":
-        if not hasattr(p,"delete"):raise SEHError("UNSUPPORTED","Memory provider does not support delete")
+        if not hasattr(p,"delete"):raise EgoError("UNSUPPORTED","Memory provider does not support delete")
         _print({"deleted":p.delete(args.id)});return 0
 
 def _cmd_session(args):
@@ -399,15 +399,15 @@ def _cmd_session(args):
         result = list_checkpoints(root, include_completed=args.all)
     elif args.action == "status":
         result = load_checkpoint(root, args.task_id)
-        if result is None: raise SEHError("HANDOFF_MISSING", args.task_id, 3)
+        if result is None: raise EgoError("HANDOFF_MISSING", args.task_id, 3)
     elif args.action == "handoff":
         result = handoff(root, args.task_id, args.to, args.from_host)
         if args.launch:
             # Replaces this process with the target CLI: only meaningful from a real terminal.
             if not result["host_available"]:
-                raise SEHError("HOST_UNAVAILABLE", result["instructions"], 3)
+                raise EgoError("HOST_UNAVAILABLE", result["instructions"], 3)
             if not (sys.stdin.isatty() and sys.stdout.isatty()):
-                raise SEHError("LAUNCH_NEEDS_TTY", "--launch opens an interactive CLI and needs a terminal; "
+                raise EgoError("LAUNCH_NEEDS_TTY", "--launch opens an interactive CLI and needs a terminal; "
                                "run launch_command yourself: " + result["launch_command"], 3)
             os.chdir(root)
             os.execvp(result["launch_argv"][0], result["launch_argv"])
@@ -452,14 +452,14 @@ def _cmd_hook(args):
         try:
             from .ptyrun import STATE_ENV,record_context
             print(record_context(json.loads(raw),Path(os.environ[STATE_ENV])))
-        except (ValueError,OSError,SEHError,KeyError,TypeError):print("")
+        except (ValueError,OSError,EgoError,KeyError,TypeError):print("")
         return 0
     if args.event=="statusline":
         # Prints the status line itself (plain text); any problem means an empty line.
         try:
             from .session import record_usage
             print(record_usage(json.loads(raw),root))
-        except (ValueError,OSError,SEHError,KeyError,TypeError):print("")
+        except (ValueError,OSError,EgoError,KeyError,TypeError):print("")
         return 0
     if args.event in ("stop","session-start"):
         # Advisory hooks never fail the host turn: any problem means "say nothing".
@@ -482,7 +482,7 @@ def _cmd_hook(args):
                 out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts,host=host,limits=limits) or ({} if wrapped else clear_advice(root,obj,cfg.clear_suggest_tokens,host=host,info=info))
             else:out={} if os.environ.get("EGO_RUN") else clear_resume(root,obj)
             out=adapt_output(host,args.event,out,once=bool(info.get("once")))
-        except (ValueError,OSError,SEHError,KeyError,TypeError):out={}
+        except (ValueError,OSError,EgoError,KeyError,TypeError):out={}
         print(json.dumps(out,ensure_ascii=False));return 0
     cfg=load_config(root)
     try:obj=json.loads(raw)
@@ -519,7 +519,7 @@ def _cmd_bench(args):
     for _ in range(args.trials):
         start=time.perf_counter()
         p=subprocess.run([sys.executable,"-m","ego","work","native","--root",str(root)],capture_output=True,text=True)
-        if p.returncode:raise SEHError("BENCH_FAILED",p.stderr,5)
+        if p.returncode:raise EgoError("BENCH_FAILED",p.stderr,5)
         samples.append((time.perf_counter()-start)*1000)
     results=sorted(samples)
     _print({"metric":"ego work native no-agent dispatch","count":len(results),"p50_ms":round(statistics.median(results),3),
@@ -550,14 +550,14 @@ def _cmd_update(args):
     from .selfupdate import self_update, update_from_local_wheel, self_argv
     project=_root(args)
     if args.sync and not (project/".ego"/"config.toml").exists():
-        raise SEHError("PROJECT_NOT_INITIALIZED","--sync requires existing .ego/config.toml",3)
+        raise EgoError("PROJECT_NOT_INITIALIZED","--sync requires existing .ego/config.toml",3)
     if args.wheel:
         if not args.sha256:
-            raise SEHError("DIGEST_REQUIRED","--wheel requires --sha256",2)
+            raise EgoError("DIGEST_REQUIRED","--wheel requires --sha256",2)
         result=update_from_local_wheel(Path(args.wheel),args.sha256,__version__,yes=args.yes)
     else:
         if args.sha256:
-            raise SEHError("INVALID_UPDATE","--sha256 requires --wheel",2)
+            raise EgoError("INVALID_UPDATE","--sha256 requires --wheel",2)
         result=self_update(__version__,apply=not args.check,yes=args.yes)
     if (args.sync or args.sync_all) and not args.check:
         import subprocess
@@ -568,7 +568,7 @@ def _cmd_update(args):
         try:synced=json.loads(p.stdout)
         except ValueError:synced=None
         if synced is None or (p.returncode and not args.sync_all):
-            raise SEHError("PROJECT_SYNC_FAILED",p.stderr[-1600:] or p.stdout[-1600:],3)
+            raise EgoError("PROJECT_SYNC_FAILED",p.stderr[-1600:] or p.stdout[-1600:],3)
         if args.sync_all:result["projects_sync"]=synced
         else:
             synced.pop("wanted",None);result["project_sync"]=synced
@@ -792,7 +792,7 @@ def main(argv:list[str]|None=None)->int:
         if not hasattr(args,"args"):parser.error(f"unrecognized arguments: -- {' '.join(passthrough)}")
         args.args=passthrough
     try:return args.func(args)
-    except SEHError as exc:
+    except EgoError as exc:
         print(json.dumps({"status":"ERROR","reason_code":exc.code,"message":str(exc)},ensure_ascii=False),file=sys.stderr)
         return exc.exit_code
     except (OSError,KeyError,ValueError,TypeError,json.JSONDecodeError) as exc:

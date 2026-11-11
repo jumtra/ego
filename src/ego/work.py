@@ -12,7 +12,7 @@ from typing import Any
 from .config import load_config
 from .policy import check_write
 from .runner import run_agent, run_checked_command
-from .util import (SEHError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
+from .util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
                    filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove)
 from .task_routing import validate_task_context, resolve_routes, build_task_prompt
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
@@ -23,27 +23,27 @@ KINDS={"worker","agent","code","gate","splitter"}
 
 def validate_task(spec: dict) -> list[dict]:
     if not isinstance(spec,dict) or not isinstance(spec.get("nodes"),list) or not spec["nodes"]:
-        raise SEHError("INVALID_TASK", "Task must contain non-empty nodes array", 2)
+        raise EgoError("INVALID_TASK", "Task must contain non-empty nodes array", 2)
     nodes=spec["nodes"]
     ids=[n.get("id") for n in nodes if isinstance(n,dict)]
     if len(ids)!=len(nodes) or any(not isinstance(x,str) or not x.replace("-","").replace("_","").isalnum() for x in ids) or len(set(ids))!=len(ids):
-        raise SEHError("INVALID_TASK", "Invalid/duplicate node ids", 2)
+        raise EgoError("INVALID_TASK", "Invalid/duplicate node ids", 2)
     amap={n["id"]:n for n in nodes}
     for n in nodes:
-        if n.get("kind","agent") not in KINDS: raise SEHError("INVALID_TASK", "Unknown kind", 2)
+        if n.get("kind","agent") not in KINDS: raise EgoError("INVALID_TASK", "Unknown kind", 2)
         if not isinstance(n.get("depends_on",[]),list) or any(d not in amap for d in n.get("depends_on",[])):
-            raise SEHError("INVALID_TASK", "Missing dependency", 2)
+            raise EgoError("INVALID_TASK", "Missing dependency", 2)
         if n.get("kind","agent") in ("code","gate") and not (n.get("argv") or n.get("checks")):
-            raise SEHError("INVALID_TASK", "Code/gate nodes need argv or checks", 2)
+            raise EgoError("INVALID_TASK", "Code/gate nodes need argv or checks", 2)
         if n.get("kind","agent") not in ("code","gate") and not isinstance(n.get("prompt"),str):
-            raise SEHError("INVALID_TASK", "Agent nodes need prompt", 2)
-        if not isinstance(n.get("write_allowlist",[]),list):raise SEHError("INVALID_TASK", "Invalid allowlist", 2)
+            raise EgoError("INVALID_TASK", "Agent nodes need prompt", 2)
+        if not isinstance(n.get("write_allowlist",[]),list):raise EgoError("INVALID_TASK", "Invalid allowlist", 2)
         if n.get("kind","agent") not in ("gate",) and not n.get("write_allowlist"):
             # Explicitly require scope declarations to avoid broad accidental merges.
-            raise SEHError("INVALID_TASK", f"write_allowlist required for {n['id']}",2)
+            raise EgoError("INVALID_TASK", f"write_allowlist required for {n['id']}",2)
     temp=set();done=set()
     def visit(nid):
-        if nid in temp:raise SEHError("TASK_CYCLE",nid,2)
+        if nid in temp:raise EgoError("TASK_CYCLE",nid,2)
         if nid in done:return
         temp.add(nid)
         for d in amap[nid].get("depends_on",[]):visit(d)
@@ -75,7 +75,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     outputs=[]
     def attempt_one(chosen_host:str, chosen_model:str|None, chosen_effort:str|None, iteration:int) -> dict:
         nonlocal feedback
-        with tempfile.TemporaryDirectory(prefix="seh-node-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="ego-node-") as tmp:
             work=Path(tmp)/"src"
             simple_copy_tree(staging,work)
             before=snapshot(work)
@@ -85,14 +85,14 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 if r.status!="PASS":feedback=clip_output((r.output+"\n"+r.stderr).strip() or f"exit {r.exit_code}",4000)
             else:
                 if chosen_host!="mock" and not trust_cli:
-                    raise SEHError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
+                    raise EgoError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
                 prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff)
                 try:
                     r=run_agent(chosen_host,prompt,work,timeout,model=chosen_model,effort=chosen_effort,
                                 read_only=kind=="splitter",autonomy=autonomy,isolated=isolated,
                                 max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
                                 lean=cfg.worker_context=="lean",max_budget_usd=budget_usd)
-                except SEHError as exc:
+                except EgoError as exc:
                     if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
                         raise
                     from .runner import RunResult
@@ -107,8 +107,8 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             changed=_changed(before,snapshot(work))
             try:
                 for rel in changed:check_write(work,rel,node.get("write_allowlist",[]))
-                if kind=="gate" and changed:raise SEHError("GATE_WRITE","A gate may not modify source")
-            except SEHError as exc:
+                if kind=="gate" and changed:raise EgoError("GATE_WRITE","A gate may not modify source")
+            except EgoError as exc:
                 ok=False;feedback=str(exc)
             record={"attempt":iteration,"host":chosen_host,"model":chosen_model or "native-default",
                     "effort":chosen_effort or "auto",
@@ -226,28 +226,28 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
     if seed_from:
         # Continue from the verified staging of an earlier run: only edits of
         # PASSED nodes were ever merged there, so failed attempts are not inherited.
-        if not all(c.isalnum() or c in "-_" for c in seed_from):raise SEHError("INVALID_ID",seed_from,2)
+        if not all(c.isalnum() or c in "-_" for c in seed_from):raise EgoError("INVALID_ID",seed_from,2)
         seed_dir=root/".ego"/"state"/"runs"/seed_from/"staging"
         seed_record=read_json(seed_dir.parent/"record.json")
-        if not seed_dir.is_dir() or not seed_record:raise SEHError("SEED_MISSING",f"No staging for run {seed_from}",3)
+        if not seed_dir.is_dir() or not seed_record:raise EgoError("SEED_MISSING",f"No staging for run {seed_from}",3)
         use_worktree=False
     should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
     nodes=validate_task(spec)
-    if apply and not approve:raise SEHError("APPROVAL_REQUIRED", "--apply requires --approve")
+    if apply and not approve:raise EgoError("APPROVAL_REQUIRED", "--apply requires --approve")
     if autonomy=="bypass" and not isolated:
-        raise SEHError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)
+        raise EgoError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)
     if any(resolve_routes(n,spec,host,default_models=cfg.models)[0]=="compare" for n in nodes if n.get("kind","agent") not in ("gate","code")) and apply:
-        raise SEHError("COMPARE_NO_APPLY","Compare never applies unreviewed changes",3)
+        raise EgoError("COMPARE_NO_APPLY","Compare never applies unreviewed changes",3)
     run_id=run_id or ident("run")
-    if not all(c.isalnum() or c in "-_" for c in run_id):raise SEHError("INVALID_ID",run_id,2)
+    if not all(c.isalnum() or c in "-_" for c in run_id):raise EgoError("INVALID_ID",run_id,2)
     runroot=root/".ego"/"state"/"runs"/run_id
     staging=runroot/"staging"
     record_path=runroot/"record.json"
     with exclusive_lock(root/".ego"/"locks"/(run_id+".lock")):
         if resume:
             record=read_json(record_path)
-            if not record:raise SEHError("RUN_NOT_FOUND",run_id,3)
-            if record["spec"]!=spec:raise SEHError("RESUME_MISMATCH","Task specification changed")
+            if not record:raise EgoError("RUN_NOT_FOUND",run_id,3)
+            if record["spec"]!=spec:raise EgoError("RESUME_MISMATCH","Task specification changed")
             # An explicit resume supersedes an earlier cancel request; otherwise the run could never continue.
             (runroot/"cancel.flag").unlink(missing_ok=True)
             # A verified, unapplied run may be approved and applied on resume
@@ -256,7 +256,7 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                 return {**{k:v for k,v in record.items() if k!="spec"}, "message":completion_message(record),
                         "checkpoint_path":handoff_relpath(run_id)}
         else:
-            if record_path.exists():raise SEHError("RUN_EXISTS",run_id)
+            if record_path.exists():raise EgoError("RUN_EXISTS",run_id)
             is_git = git_is_repo(root)
             worktree_created = False
             if use_worktree and is_git:
@@ -310,7 +310,7 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                     if rel in edit_owners:
                         # Do not leave the record RUNNING forever: nothing of this wave was merged.
                         record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
-                        raise SEHError("MERGE_CONFLICT",f"{rel} edited by {result['id']} and {edit_owners[rel]}")
+                        raise EgoError("MERGE_CONFLICT",f"{rel} edited by {result['id']} and {edit_owners[rel]}")
                     edit_owners[rel]=result["id"]
             for result in results:
                 identifier=result["id"]
@@ -344,7 +344,7 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
             for rel in record["changed_files"]:
                 check_write(root,rel,list(allowed))
                 if filehash(safe_path(root,rel))!=record["base_snapshot"].get(rel):
-                    raise SEHError("STALE_BASE",f"Target changed while run executed: {rel}")
+                    raise EgoError("STALE_BASE",f"Target changed while run executed: {rel}")
             backups={}
             from .util import atomic_bytes
             try:
@@ -378,18 +378,18 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
 
 
 def status(root:Path,run_id:str)->dict:
-    if not run_id.replace("-","").replace("_","").isalnum():raise SEHError("INVALID_ID",run_id,2)
+    if not run_id.replace("-","").replace("_","").isalnum():raise EgoError("INVALID_ID",run_id,2)
     data=read_json(root/".ego"/"state"/"runs"/run_id/"record.json")
-    if not data:raise SEHError("RUN_NOT_FOUND",run_id,3)
+    if not data:raise EgoError("RUN_NOT_FOUND",run_id,3)
     return {**{k:v for k,v in data.items() if k!="spec"},
             "message":completion_message(data), "checkpoint_path":handoff_relpath(run_id),
             "usage":usage_summary(data)}
 
 
 def cancel(root:Path,run_id:str)->dict:
-    if not run_id.replace("-","").replace("_","").isalnum():raise SEHError("INVALID_ID",run_id,2)
+    if not run_id.replace("-","").replace("_","").isalnum():raise EgoError("INVALID_ID",run_id,2)
     runroot=root/".ego"/"state"/"runs"/run_id
-    if not (runroot/"record.json").exists():raise SEHError("RUN_NOT_FOUND",run_id,3)
+    if not (runroot/"record.json").exists():raise EgoError("RUN_NOT_FOUND",run_id,3)
     (runroot/"cancel.flag").touch()
     return {"status":"CANCELLATION_REQUESTED","run_id":run_id,
             "warning":"Stops at next workflow boundary; an active tool subprocess may run until its timeout"}

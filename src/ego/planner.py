@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
-from .util import SEHError, ident, write_json
+from .util import EgoError, ident, write_json
 from .runner import run_agent
 from .work import validate_task
 from .codeintel import search
@@ -15,13 +15,13 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
     """history is a bounded account of earlier iterations; workdir is the tree to plan against."""
     workdir=workdir or root
     usage=None
-    if not goal.strip() or len(goal)>6000:raise SEHError("INVALID_GOAL","Missing/oversized goal",2)
+    if not goal.strip() or len(goal)>6000:raise EgoError("INVALID_GOAL","Missing/oversized goal",2)
     scope=scope or ["src/**","tests/**"]
     # Model output is treated as a structured proposal, never executed without separate approval.
     if host=="mock":
         obj={"goal":goal,"nodes":[{"id":"implement","kind":"agent","intent":"Deliver the goal in one stage","prompt":goal,"write_allowlist":scope,"max_attempts":2}]}
     else:
-        if not execute:raise SEHError("EXPLICIT_EXECUTION_REQUIRED","Planning via model requires --execute")
+        if not execute:raise EgoError("EXPLICIT_EXECUTION_REQUIRED","Planning via model requires --execute")
         cfg=load_config(root)
         ctx=search(workdir,goal,cfg.code_intelligence,limit=8)
         prompt=("Return ONLY a valid JSON object with 'goal' and 'nodes'. "
@@ -59,18 +59,18 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
         usage={"cost_usd":response.cost_usd,**(response.usage or {})}
     try:
         if host!="mock":
-            if response.status!="PASS":raise SEHError("PLAN_FAILED",response.stderr,5)
+            if response.status!="PASS":raise EgoError("PLAN_FAILED",response.stderr,5)
             try: obj=json.loads(response.output)
-            except ValueError as exc:raise SEHError("PLAN_INVALID_JSON",response.output[:300],5) from exc
-            if not isinstance(obj,dict):raise SEHError("PLAN_INVALID_JSON",response.output[:300],5)
+            except ValueError as exc:raise EgoError("PLAN_INVALID_JSON",response.output[:300],5) from exc
+            if not isinstance(obj,dict):raise EgoError("PLAN_INVALID_JSON",response.output[:300],5)
         cfg = load_config(root)
-        if not isinstance(obj.get("defaults", {}), dict):raise SEHError("INVALID_TASK","defaults must be an object",2)
+        if not isinstance(obj.get("defaults", {}), dict):raise EgoError("INVALID_TASK","defaults must be an object",2)
         if cfg.models and "models" not in obj.get("defaults", {}):
             defaults = dict(obj.get("defaults", {}))
             defaults["models"] = dict(cfg.models)
             obj["defaults"] = defaults
         validate_task(obj)
-    except SEHError as exc:
+    except EgoError as exc:
         # A rejected plan still cost a model call: the caller (goal loop) must be able to account for it.
         if usage is not None:exc.planner_usage=usage
         raise
