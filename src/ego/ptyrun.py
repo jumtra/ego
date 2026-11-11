@@ -43,6 +43,9 @@ QUIET_KEYS = 5.0                 # the user has typed nothing for this long
 SAVE_TIMEOUT = 300.0             # no checkpoint this long after asking: give up until the context grows again
 AFTER_CLEAR = 3.0                # let the host reset before the resume prompt is typed
 TAIL_BYTES = 512 * 1024
+# Each CLI's own switch for "approve every tool call without asking"; all it means is that CLI's meaning.
+YOLO_FLAGS = {"claude": "--dangerously-skip-permissions", "codex": "--dangerously-bypass-approvals-and-sandbox",
+              "opencode": "--auto", "agy": "--dangerously-skip-permissions"}
 
 
 @dataclass(frozen=True)
@@ -266,6 +269,7 @@ class Rotator:
         self.trigger = threshold
         self.saving_since: float | None = None
         self.cleared: str | None = None  # the session just rotated away from: its record still reads as full
+        self.resumed = False             # a rotation was typed and the new session's size is not yet known
         self.rotations = 0
 
     def step(self, reading: Reading | None, calm: bool, at: float) -> Keys:
@@ -275,6 +279,13 @@ class Rotator:
         if self.saving_since is None:
             if tokens is None:
                 return []
+            if self.resumed:
+                # What the session costs once resumed is the floor a clear can reach. At or above the limit,
+                # clearing again frees nothing and would repeat forever with nobody typing: wait for real growth.
+                if not reading.idle:
+                    return []
+                self.resumed = False
+                self.trigger = max(self.threshold, int(tokens * RESUGGEST_GROWTH))
             if tokens < self.threshold:
                 self.trigger = self.threshold  # compacted: enforce again at the next crossing
                 return []
@@ -291,6 +302,7 @@ class Rotator:
         if not (reading.idle and calm):
             return []
         self.saving_since, self.trigger, self.cleared = None, self.threshold, reading.key
+        self.resumed = True
         self.rotations += 1
         return [(0.0, HOST_CLEAR[self.host].encode()), (0.5, b"\r"),
                 (AFTER_CLEAR, _paste(resume_prompt(checkpoint))), (0.4, b"\r")]
@@ -400,8 +412,16 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
     return (128 - code if code < 0 else code), rotator.rotations
 
 
-def run_host(host: str, args: list[str], root: Path, threshold: int) -> int:
+def with_yolo(host: str, args: list[str]) -> list[str]:
+    """`args` with the host's skip-permissions switch, unless the caller already passed it."""
+    flag = YOLO_FLAGS[host]
+    return args if flag in args or "--yolo" in args else [flag, *args]
+
+
+def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool = False) -> int:
     """`ego run`: the host CLI, interactive as usual, rotated automatically at `threshold` context tokens."""
+    if yolo:
+        args = with_yolo(host, args)
     if threshold <= 0:
         raise SEHError("CLEAR_THRESHOLD_UNSET", "Set clear_suggest_tokens in .ego/config.toml or pass --clear-tokens N", 2)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):

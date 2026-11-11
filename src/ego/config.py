@@ -29,6 +29,7 @@ class Config:
     worker_context: str = "lean"  # "lean" (no inherited MCP servers) or "inherit"
     clear_suggest_tokens: int = 0  # Claude Code: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
     usage_switch_percent: int = 0  # Claude Code: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
+    run_yolo: bool = False  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
     models: dict[str, Any] = field(default_factory=dict)
     isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool = True  # whether to remove the worktree after run
@@ -56,6 +57,8 @@ class Config:
             raise SEHError("INVALID_CONFIG", "clear_suggest_tokens must be 0 (off) or between 20000 and 2000000", 2)
         if not isinstance(self.usage_switch_percent, int) or not (self.usage_switch_percent == 0 or 50 <= self.usage_switch_percent <= 99):
             raise SEHError("INVALID_CONFIG", "usage_switch_percent must be 0 (off) or between 50 and 99", 2)
+        if not isinstance(self.run_yolo, bool):
+            raise SEHError("INVALID_CONFIG", "run_yolo must be a boolean", 2)
         if self.worker_context not in ("lean", "inherit"):
             raise SEHError("INVALID_CONFIG", "worker_context must be 'lean' or 'inherit'", 2)
         if not isinstance(self.models, dict):
@@ -120,6 +123,9 @@ def dump_config(cfg: Config) -> str:
         "#\n"
         "# 使用量上限が近いときの自動保存と切り替え提案 (usage_switch_percent, Claude Code のみ):\n"
         "#   usage_switch_percent = 85  # 5時間/7日枠の使用率がこの%以上でチェックポイント保存と別CLIへの切り替えを提案。0 で無効\n"
+        "#\n"
+        "# ego run の権限確認スキップ (run_yolo):\n"
+        "#   run_yolo = true  # ego run が各CLIを権限確認なしで起動 (claude/agy: --dangerously-skip-permissions, codex: --dangerously-bypass-approvals-and-sandbox, opencode: --auto)。--yolo / --no-yolo で起動ごとに上書き\n"
     )
     return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in vars(cfg).items()) + "\n"
 

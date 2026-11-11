@@ -6,7 +6,7 @@
 
 Bring planning, task routing, tests, and memory to Claude Code, Codex, OpenCode, and Antigravity.
 
-![Version](https://img.shields.io/badge/version-0.0.7-2563eb)
+![Version](https://img.shields.io/badge/version-0.0.8-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
@@ -107,6 +107,8 @@ When you run `ego apply`, configuration is stored in **`.ego/config.toml`** at t
 ```toml
 schema_version = 1
 profile = "balanced"            # "minimal" / "balanced" (recommended) / "full"
+clear_suggest_tokens = 0       # Claude Code / `ego run`: context tokens at which to checkpoint and clear (0 = off)
+run_yolo = false               # `ego run`: start the CLI with its skip-permissions switch (`--yolo` / `--no-yolo` per run)
 
 [hosts]
 enabled = [                     # Target AI agents to generate skills & rules for
@@ -158,6 +160,7 @@ The final report includes a token usage line printed by `ego` (for example `plan
 | Command | Description |
 |---|---|
 | `ego doctor` | Diagnose health of installed host CLIs and providers |
+| `ego run <claude\|codex\|opencode\|agy>` | Run the CLI in a terminal ego owns; at `clear_suggest_tokens` it checkpoints, clears and resumes by itself. `--yolo` skips permission prompts |
 | `ego status` | Inspect drift between `.ego/config.toml` and generated files |
 | `ego projects list` | Show every applied project with the ego version that rendered it and its drift (`ego projects scan <dir>` registers existing ones) |
 | `ego update --yes --sync-all` | Update ego (git checkout: fast-forward; otherwise release wheel), then re-render all registered projects with their own settings |

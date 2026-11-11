@@ -423,8 +423,9 @@ def _cmd_run(args):
     from .config import load_config
     from .ptyrun import run_host
     root=_root(args)
-    threshold=args.clear_tokens if args.clear_tokens is not None else load_config(root).clear_suggest_tokens
-    return run_host(args.host,args.args,root,threshold)
+    cfg=load_config(root)
+    threshold=args.clear_tokens if args.clear_tokens is not None else cfg.clear_suggest_tokens
+    return run_host(args.host,args.args,root,threshold,yolo=cfg.run_yolo if args.yolo is None else args.yolo)
 
 
 def _cmd_code(args):
@@ -727,6 +728,7 @@ def build_parser()->argparse.ArgumentParser:
     sp=sub.add_parser("run",help="Start an interactive CLI that ego checkpoints, clears and resumes by itself at the context limit");common(sp)
     sp.add_argument("host",choices=["claude","codex","opencode","agy"])
     sp.add_argument("--clear-tokens",type=int,metavar="N",help="Context tokens at which to rotate (default: clear_suggest_tokens)")
+    sp.add_argument("--yolo",action=argparse.BooleanOptionalAction,default=None,help="Start the CLI with its skip-permissions switch (default: run_yolo in .ego/config.toml)")
     sp.add_argument("args",nargs="*",help="Arguments for the CLI itself, after --")
     sp.set_defaults(func=_cmd_run)
     sp=sub.add_parser("context",help="Measure always-on and on-demand context against budgets");common(sp)

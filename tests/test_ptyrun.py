@@ -125,6 +125,19 @@ def test_rotation_saves_first_and_clears_only_after_a_new_checkpoint(tmp_path: P
     assert rot.step(Reading("s2", 3000, True), True, time.time()) == []
 
 
+def test_a_resumed_session_already_over_the_limit_is_not_rotated_again(tmp_path: Path):
+    rot = Rotator(tmp_path, "claude", 1000)  # below what a fresh session costs: clearing cannot get under it
+    assert rot.step(Reading("s1", 70000, True), True, time.time())
+    save_checkpoint(tmp_path, "feat", goal="ship it")
+    assert rot.step(Reading("s1", 72000, True), True, time.time()) and rot.rotations == 1
+    assert rot.step(Reading("s2", None, False), True, time.time()) == []    # the resume turn is running
+    for _ in range(3):                                                      # resumed, idle, nobody typing
+        assert rot.step(Reading("s2", 50000, True), True, time.time()) == []
+    assert rot.step(Reading("s2", 60000, True), True, time.time()) == []    # ordinary growth
+    assert rot.step(Reading("s2", 63000, True), True, time.time())          # a quarter larger: clearing frees context again
+    assert rot.rotations == 1
+
+
 def test_without_a_checkpoint_nothing_is_cleared(tmp_path: Path):
     rot = Rotator(tmp_path, "claude", 100000)
     assert rot.step(Reading("s1", 120000, True), True, 1000)
@@ -194,3 +207,23 @@ def test_run_refuses_without_a_threshold_or_a_terminal(project: Path, capsys):
     assert "CLEAR_THRESHOLD_UNSET" in capsys.readouterr().err
     assert main(["run", "claude", "--clear-tokens", "50000", "--root", str(project), "--", "--root", "x"]) == 3
     assert "RUN_NEEDS_TTY" in capsys.readouterr().err
+
+
+def test_yolo_adds_each_clis_own_flag_once():
+    assert ptyrun.with_yolo("claude", ["--model", "x"]) == ["--dangerously-skip-permissions", "--model", "x"]
+    assert ptyrun.with_yolo("codex", []) == ["--dangerously-bypass-approvals-and-sandbox"]
+    assert ptyrun.with_yolo("opencode", []) == ["--auto"]
+    assert ptyrun.with_yolo("agy", ["--dangerously-skip-permissions"]) == ["--dangerously-skip-permissions"]
+    assert ptyrun.with_yolo("codex", ["--yolo"]) == ["--yolo"]  # the CLI's own alias was already given
+
+
+def test_yolo_comes_from_the_flag_or_the_config(project: Path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(ptyrun, "run_host", lambda host, args, root, threshold, yolo=False: seen.append((host, args, yolo)) or 0)
+    assert main(["run", "claude", "--root", str(project), "--clear-tokens", "100000"]) == 0
+    assert main(["run", "codex", "--yolo", "--root", str(project), "--clear-tokens", "100000", "--", "--model", "x"]) == 0
+    config = project / ".ego/config.toml"
+    config.write_text(config.read_text().replace("run_yolo = false", "run_yolo = true"))
+    assert main(["run", "agy", "--root", str(project), "--clear-tokens", "100000"]) == 0
+    assert main(["run", "agy", "--no-yolo", "--root", str(project), "--clear-tokens", "100000"]) == 0
+    assert seen == [("claude", [], False), ("codex", ["--model", "x"], True), ("agy", [], True), ("agy", [], False)]
