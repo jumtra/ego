@@ -10,8 +10,8 @@ Long conversations get expensive and less reliable. ego keeps the essential stat
 | Clear the conversation and continue | [`ego session resume`](#clear-and-resume) |
 | Continue in another CLI | [`ego session resume --from` / `ego session handoff`](#continue-in-another-cli) |
 | Have clearing and resuming done for you, in any CLI | [`ego run`](#ego-run-automatic-rotation) |
-| Be reminded to clear in plain Claude Code | [`clear_suggest_tokens` hooks](#claude-code-hooks) |
-| Switch CLI when a Claude usage limit is near | [`usage_switch_percent`](#usage-limit-switch-claude-code) |
+| Be reminded to clear in plain Claude Code, Codex, OpenCode or AGY | [`clear_suggest_tokens` hooks](#claude-code-hooks) |
+| Switch CLI when a Claude or Codex usage limit is near | [`usage_switch_percent`](#usage-limit-switch-claude-code-and-codex) |
 
 In everyday use the AI runs these commands itself: ask it to "save a checkpoint" or to "continue from codex".
 
@@ -129,7 +129,7 @@ Guarantees and limits:
 - **`--yolo`** maps to each CLI's own switch: Claude Code and AGY `--dangerously-skip-permissions`, Codex `--dangerously-bypass-approvals-and-sandbox`, OpenCode `--auto`. A switch you already passed after `--` is not duplicated. This removes the CLI's permission prompts; see [Security](security.md).
 - **AGY:** ego replaces the status line for that run to measure context (your settings file is not modified). If you pass your own `--settings`, automatic rotation is off.
 - **Several instances:** with the same CLI open more than once in one project, ego reads the most recently updated record. It still never clears without a matching checkpoint.
-- Inside `ego run`, the Claude Code clear hooks below stand down; the usage-limit hook keeps working.
+- Inside `ego run`, the clear hooks below stand down; the usage-limit hook keeps working.
 
 ## Claude Code hooks
 
@@ -147,9 +147,21 @@ This adds `Stop` and `SessionStart` hooks to `.claude/settings.json`. With the d
 - **Auto-resume:** after `/clear`, the resume context of a checkpoint saved in the last 30 minutes (or armed with `ego session resume`) is injected once. No turn starts by itself: send a short message such as "continue".
 - **Never:** the hooks do not clear the chat, call a model, block the same turn twice, or fail a turn when they error.
 
-Hooks cannot run slash commands, which is why you type `/clear` here. Codex, OpenCode and AGY have no equivalent hooks: use `ego run` for those.
+Hooks cannot run slash commands, which is why you type `/clear` here.
 
-## Usage-limit switch (Claude Code)
+## Codex, OpenCode and AGY hooks
+
+The same `clear_suggest_tokens` setting also generates hooks for the other CLIs listed in `hosts`. They call `ego hook stop|session-start --host <cli>` and behave like the Claude Code hooks above: forced checkpoint at the limit and at each 25% growth, one-time injection of the resume context after a clear, never a model call.
+
+| CLI | Generated file | Context is measured from | Notes |
+|---|---|---|---|
+| Codex | `.codex/hooks.json` (`Stop`, `SessionStart` on `clear`) | the `token_count` event in the session record (`transcript_path`) | Codex asks you to review and trust project hooks once (`/hooks`) before they run |
+| AGY | `.agents/hooks.json` (`Stop`, `SessionStart`) | the latest planner response in the conversation transcript | AGY has no clear marker: a pending checkpoint is injected when the next session starts |
+| OpenCode | `.opencode/plugins/ego.ts` (plugin) | the latest assistant message of the session, read by the plugin | The plugin sends the follow-up prompt itself; the resume context is added without a reply |
+
+Inside `ego run` these hooks stand down, as the Claude Code ones do. The Codex, AGY and OpenCode hooks are written against each CLI's documented hook interface; the AGY and OpenCode ones were run against the installed CLIs, the Codex Stop payload was not exercised end to end.
+
+## Usage-limit switch (Claude Code and Codex)
 
 ```toml
 usage_switch_percent = 85    # then: ego sync --apply
@@ -162,6 +174,10 @@ This adds a `Stop` hook and a status line (`ego hook statusline`) to `.claude/se
 - **Propose:** it then shows the `ego session handoff` launch command for each other CLI that is configured in `hosts` and installed.
 - **Never:** no CLI is started, nothing is cleared, no usage is estimated, no credentials or usage API are accessed. If the limit is hit in the middle of one long turn, nothing can be saved.
 - A project `statusLine` overrides your user-level one. To keep your own, pass its input JSON on to `ego hook statusline` as well.
+
+**Codex:** the same setting adds a `Stop` hook to `.codex/hooks.json`. Codex writes both usage windows into its session record, so no status line is needed; the hook reads them from there and behaves as above (it proposes the other configured CLIs).
+
+**OpenCode and AGY** report no usage limit to hooks or plugins, so `usage_switch_percent` has nothing to act on there: no hook is generated for it, and ego never estimates usage.
 
 ## Good practice
 

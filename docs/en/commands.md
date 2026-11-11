@@ -113,6 +113,6 @@ These change the generated skills and prompts, always behind evaluation and expl
 | `ego tool list` / `call <name> '<json args>' [--approve-external]` | Deterministic tools, and tools declared by modules |
 | `ego prompt register <name> <file> [--role worker]` / `show <name> [--version V]` / `extract <file> [--contract json\|reply]` | Versioned prompts and output-contract parsing |
 | `ego pr create --title <t> --body <b> [--base main] --approve` / `reviews <number>` | Pull requests through the `gh` CLI |
-| `ego hook <pre-tool\|stop\|session-start\|statusline\|context-probe>` | Entry points for generated host hooks; they read the hook payload on stdin. Not meant to be run by hand |
+| `ego hook <pre-tool\|stop\|session-start\|statusline\|context-probe>` | Entry points for generated host hooks; they read the hook payload on stdin. `--host claude|codex|opencode|agy` (default `claude`) selects the payload and output format. Not meant to be run by hand |
 | `ego bench [--trials N]` | Measures ego's own CLI dispatch time |
 | `ego --version` | Version |

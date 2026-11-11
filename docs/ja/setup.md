@@ -121,6 +121,9 @@ ego apply --interactive --dry-run  # 書き込まずに選択を試す
 | `CLAUDE.md` | 管理対象の指示ブロック | ホスト `claude` |
 | `.claude/skills/`、`.claude/agents/`、`.claude/rules/` | `/work` と `/harness-init` の skill、agent 4 種、rule 2 種 | ホスト `claude` |
 | `.claude/settings.json` | フック / ステータスライン | ホスト `claude` かつ、Profile `full`、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
+| `.codex/hooks.json` | フック | ホスト `codex` かつ、`clear_suggest_tokens > 0` または `usage_switch_percent > 0` |
+| `.agents/hooks.json` | フック | ホスト `agy` かつ `clear_suggest_tokens > 0` |
+| `.opencode/plugins/ego.ts` | プラグイン（フック） | ホスト `opencode` かつ `clear_suggest_tokens > 0` |
 | `AGENTS.md` | 管理対象の指示ブロック | ホスト `codex`、`opencode`、`agy` |
 | `.agents/skills/` | skill | ホスト `codex`、`opencode`、`agy` |
 | `.codex/agents/*.toml` | agent 4 種 | ホスト `codex` |

@@ -112,6 +112,64 @@ RULES = {
     "testing": "Select relevant unit tests first, then broaden as needed. Report executed commands and exit statuses. FAIL/UNKNOWN must not be called PASS.\n"
 }
 
+OPENCODE_PLUGIN = """// Managed by ego (do not edit; change .ego/config.toml and run `ego sync`).
+// Runs `ego hook` when a session goes idle (context limit) and when a session starts (resume after a clear).
+// It never calls a model itself: the follow-up prompt is the one `ego hook` asks for.
+import { spawnSync } from "node:child_process"
+
+export default {
+  id: "ego",
+  server: async ({ client, directory }: any) => {
+    const continuing = new Set<string>()
+    const hook = (event: string, payload: object): any => {
+      const run = spawnSync("ego", ["hook", event, "--host", "opencode", "--root", directory], {
+        input: JSON.stringify(payload), encoding: "utf8", timeout: 20000,
+      })
+      try { return JSON.parse(run.stdout || "{}") } catch { return {} }
+    }
+    const notify = async (message?: string) => {
+      if (!message) return
+      try { await client.tui.showToast({ body: { message, variant: "info" } }) } catch {}
+    }
+    return {
+      event: async ({ event }: any) => {
+        try {
+          if (event.type === "session.idle") {
+            const id: string = event.properties.sessionID
+            const session = (await client.session.get({ path: { id } })).data
+            if (session?.parentID) return
+            const messages = (await client.session.messages({ path: { id } })).data ?? []
+            let tokens = 0
+            for (const { info } of [...messages].reverse()) {
+              if (info.role !== "assistant") continue
+              tokens = (info.tokens?.input ?? 0) + (info.tokens?.cache?.read ?? 0) + (info.tokens?.cache?.write ?? 0)
+              if (tokens > 0) break
+            }
+            const active = continuing.delete(id)
+            const out = hook("stop", { session_id: id, context_tokens: tokens, stop_hook_active: active })
+            if (out.decision === "block" && !active) {
+              continuing.add(id)
+              await client.session.promptAsync({ path: { id }, body: { parts: [{ type: "text", text: out.reason }] } })
+            } else {
+              await notify(out.systemMessage)
+            }
+          } else if (event.type === "session.created") {
+            const info = event.properties.info
+            if (info?.parentID) return
+            const out = hook("session-start", { session_id: info?.id, source: "clear" })
+            const context = out.hookSpecificOutput?.additionalContext
+            if (context) {
+              await client.session.promptAsync({ path: { id: info.id }, body: { noReply: true, parts: [{ type: "text", text: context }] } })
+              await notify(out.systemMessage)
+            }
+          }
+        } catch {}
+      },
+    }
+  },
+}
+"""
+
 def skill_md(name: str) -> str:
     desc, body = SKILLS[name]
     return f'---\nname: {name}\ndescription: "{desc}"\n---\n\n<!-- SEH:PROMPT:BEGIN -->\n{body}<!-- SEH:PROMPT:END -->\n'
@@ -155,6 +213,20 @@ def generated_files(cfg: Config) -> dict[str, str]:
             settings["statusLine"] = {"type": "command", "command": "ego hook statusline"}
         if settings:
             files[".claude/settings.json"] = json.dumps(settings, indent=2) + "\n"
+    # Context-limit and usage-limit hooks for the other CLIs. Each calls `ego hook` (no model call).
+    session_hooks = cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0
+    if "codex" in cfg.hosts and session_hooks:
+        handlers = lambda event: [{"type": "command", "command": f"ego hook {event} --host codex --root .", "timeout": 30}]
+        codex_hooks: dict[str, list] = {"Stop": [{"hooks": handlers("stop")}]}
+        if cfg.clear_suggest_tokens > 0:
+            codex_hooks["SessionStart"] = [{"matcher": "clear", "hooks": handlers("session-start")}]
+        files[".codex/hooks.json"] = json.dumps({"hooks": codex_hooks}, indent=2) + "\n"
+    if "agy" in cfg.hosts and cfg.clear_suggest_tokens > 0:
+        # AGY reports no usage limit, so only the context-limit hooks apply to it.
+        handler = lambda event: [{"type": "command", "command": f"ego hook {event} --host agy --root .", "timeout": 30}]
+        files[".agents/hooks.json"] = json.dumps({"ego": {"Stop": handler("stop"), "SessionStart": handler("session-start")}}, indent=2) + "\n"
+    if "opencode" in cfg.hosts and cfg.clear_suggest_tokens > 0:
+        files[".opencode/plugins/ego.ts"] = OPENCODE_PLUGIN
     if any(h in cfg.hosts for h in ("codex", "opencode", "agy")):
         for name in SKILLS:
             files[f".agents/skills/{name}/SKILL.md"] = skill_md(name)

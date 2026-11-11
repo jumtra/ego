@@ -463,16 +463,25 @@ def _cmd_hook(args):
         return 0
     if args.event in ("stop","session-start"):
         # Advisory hooks never fail the host turn: any problem means "say nothing".
+        host=args.host
         try:
-            from .session import clear_advice,clear_resume,usage_advice
-            obj=json.loads(raw)
+            from .session import adapt_output,clear_advice,clear_resume,codex_limits,normalize_payload,project_root,usage_advice
+            obj=normalize_payload(host,json.loads(raw))
+            root=project_root(root,obj.get("cwd"))
+            info={}
             if args.event=="stop":
                 cfg=load_config(root)
                 # A nearly spent usage limit outranks a large context: there may be no later turn to save in.
                 # Under `ego run` the wrapper saves, clears and resumes: the hooks must not ask for the same again.
                 wrapped=bool(os.environ.get("EGO_RUN"))
-                out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts) or ({} if wrapped else clear_advice(root,obj,cfg.clear_suggest_tokens))
+                # Codex reports its usage limits in the session record; Claude's come from the status line.
+                # OpenCode and AGY report none, so there usage_switch_percent has nothing to act on.
+                limits=None
+                if host=="codex":limits=codex_limits(Path(obj["transcript_path"]).expanduser()) if isinstance(obj.get("transcript_path"),str) else {}
+                elif host in ("opencode","agy"):limits={}
+                out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts,host=host,limits=limits) or ({} if wrapped else clear_advice(root,obj,cfg.clear_suggest_tokens,host=host,info=info))
             else:out={} if os.environ.get("EGO_RUN") else clear_resume(root,obj)
+            out=adapt_output(host,args.event,out,once=bool(info.get("once")))
         except (ValueError,OSError,SEHError,KeyError,TypeError):out={}
         print(json.dumps(out,ensure_ascii=False));return 0
     cfg=load_config(root)
@@ -586,7 +595,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--runtime",choices=["native","managed"],help="Default runtime; per-task runtime remains configurable")
     sp.add_argument("--policy",choices=["strict","relaxed"],help="Policy mode (strict: safe default; relaxed: loose mode allowing git push and edits)")
     sp.add_argument("--models",help="Default models JSON mapping, e.g. '{\"claude\":\"sonnet\"}'")
-    sp.add_argument("--clear-suggest-tokens",type=int,metavar="N",help="Claude Code: at N context tokens the Stop hook has the session checkpoint and suggests /clear (0 = off)")
+    sp.add_argument("--clear-suggest-tokens",type=int,metavar="N",help="At N context tokens the Stop hook (Claude Code, Codex, AGY, OpenCode plugin) has the session checkpoint and suggests /clear (0 = off)")
     mode = sp.add_mutually_exclusive_group()
     mode.add_argument("--interactive",action="store_true",help="Always ask for choices, even when stdin is redirected")
     mode.add_argument("--non-interactive",action="store_true",help="Never prompt (for scripts and CI)")
@@ -744,7 +753,7 @@ def build_parser()->argparse.ArgumentParser:
     sp=sub.add_parser("tool");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("list");r=s.add_parser("call");r.add_argument("name");r.add_argument("arguments");r.add_argument("--approve-external",action="store_true")
     sp.set_defaults(func=_cmd_tool)
-    sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool","stop","session-start","statusline","context-probe"]);sp.set_defaults(func=_cmd_hook)
+    sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool","stop","session-start","statusline","context-probe"]);sp.add_argument("--host",choices=["claude","codex","opencode","agy"],default="claude",help="Host CLI whose hook payload arrives on stdin");sp.set_defaults(func=_cmd_hook)
     sp=sub.add_parser("prompt");common(sp);s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("register");r.add_argument("name");r.add_argument("file");r.add_argument("--role",default="worker")
     r=s.add_parser("show");r.add_argument("name");r.add_argument("--version")

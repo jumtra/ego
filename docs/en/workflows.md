@@ -173,7 +173,7 @@ ego work cancel <loop_id>                    # stops before the next iteration
 | `--done-check` | Command that exits 0 when the goal holds (required, repeatable). A command line or a JSON argv array |
 | `--host` | `mock` (default), `claude`, `codex` or `opencode` |
 | `--scope` | Comma-separated glob patterns the loop may change (default `src/**,tests/**`) |
-| `--max-iterations` | Default 3 |
+| `--max-iterations` | Default 3; 1–10 |
 | `--max-budget-usd`, `--max-wall-seconds` | Optional limits |
 | `--execute` | Allow planner model calls |
 | `--plan-first` | Call the planner before the first iteration |
