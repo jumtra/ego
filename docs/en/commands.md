@@ -50,7 +50,7 @@ ego sync --all [--apply]           # preview / re-render all registered projects
 ego apply --clear-suggest-tokens 120000
 ```
 
-`ego update` detects how ego is installed. From a git checkout (`make install`, `pip install -e .`) it runs `git fetch` and a fast-forward-only merge of the checkout's upstream branch: local commits or conflicting edits stop the update, and nothing is merged, rebased, stashed or discarded. Otherwise it installs the latest GitHub Release wheel after SHA256 verification (virtual environment or pipx only). Both need `--yes` or an interactive confirmation.
+`ego update` detects how ego is installed. From a git checkout (`make install`, `pip install -e .`) it runs `git fetch` and a fast-forward-only merge of the checkout's upstream branch: local commits or conflicting edits stop the update, and nothing is merged, rebased, stashed or discarded. Otherwise it installs the latest GitHub Release wheel after SHA256 verification (virtual environment, pipx or `uv tool` only; environments without pip are updated through `uv`). Both need `--yes` or an interactive confirmation.
 
 `ego apply` and `ego sync --apply` record the project in a user-level registry (`~/.config/ego/projects.json`, or `$EGO_HOME/projects.json`; paths only). `ego projects list` and `ego status` show the version that rendered each project (`installed_version`) next to the running CLI (`harness_version`). `ego sync --all --apply` and `ego update --sync-all` re-render every registered project from its own `.ego/config.toml`, so each keeps its settings; a project with user-modified owned files is reported `BLOCKED` and left untouched (exit code 5), the others are still applied.
 

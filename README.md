@@ -6,7 +6,7 @@
 
 Bring planning, task routing, tests, and memory to Claude Code, Codex, OpenCode, and Antigravity.
 
-![Version](https://img.shields.io/badge/version-0.0.6-2563eb)
+![Version](https://img.shields.io/badge/version-0.0.7-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
@@ -40,14 +40,15 @@ Bring planning, task routing, tests, and memory to Claude Code, Codex, OpenCode,
 Requires Python **3.11+** on macOS / Linux:
 
 ```bash
-# Option 1: Quick symlink installation
-make install
-
-# Option 2: Standard pip editable install
-pip install -e .
+# Recommended: global CLI, no clone needed (either one)
+uv tool install git+https://github.com/jumtra/ego
+pipx install git+https://github.com/jumtra/ego
 
 ego --version
+ego update --yes   # later: installs the latest verified release wheel
 ```
+
+Developing ego itself? Clone the repository and run `make install` (symlink) or `pip install -e .`. `ego update --yes` then fast-forwards that checkout instead, so the CLI follows whatever branch is checked out there.
 
 Add `~/.local/bin` to your `PATH` to access `ego` from anywhere.
 
