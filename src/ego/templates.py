@@ -5,10 +5,11 @@ import shutil
 from pathlib import Path
 from .config import Config
 
-# Refresh only exact, unmodified earlier defaults (v0.0.4, v0.0.5); preserve authored skills.
+# Refresh only exact, unmodified earlier defaults (v0.0.4 to v0.0.12); preserve authored skills.
 LEGACY_WORK_HASHES = {"b9369f340f37af0f731e8eb03f0c8e1e6529be80ce1b63941bada4b6ea52ee88",
                       "f14c28b7aa27cb52873960a1efda8b6618e6e9c1f006ce3c246c4ce8dcad3844",
-                      "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a"}
+                      "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a",
+                      "645c9862f86b9ea4e7db50885ceee9bd10fd98de3225a96f822878b212cd5039"}
 
 SKILLS = {
 "harness-init": (
@@ -36,6 +37,8 @@ Choose the **smallest useful workflow** and keep context small: read only the fi
 
 Prefer direct user instructions over ceremonial workflow. Write formal documents only when requested or needed for a decision.
 
+**Planning:** when you show a plan, use the node-graph format of the `work-plan` skill: 5W1H per node, and How steps that can be implemented exactly as written (file, function or section, exact change), so the implementer cannot drift in a different direction. Do not invoke external brainstorming or planning skills.
+
 **Intent first, questions only when needed:** at any size, before editing you can state in one line each why the user wants this and what will show it is done. When the request, the code and memory answer both, proceed without asking. Ask when an open point would change what you build and a wrong guess would be costly to undo: one question at a time, each with your recommended answer. Stop asking once the remaining points have safe defaults, and state those assumptions in the report. In a managed run, put the answers in task-level `instructions`.
 
 **Always:**
@@ -49,7 +52,50 @@ Prefer direct user instructions over ceremonial workflow. Write formal documents
 **Boundaries:** after a verified subtask, before changing feature area or host, or when context is crowded, checkpoint and start fresh. Read `references/checkpoint.md`.
 
 **Report:** write **完了** only after successful validation and application, with changed files and the **tests actually run**. If tests fail or edits were not applied, write **未完了** or **検証済み・未適用**; never claim completion without evidence.
-""")
+"""),
+"work-plan": (
+    "Like work, but interviews the user and gets a node-graph plan approved before editing. "
+    "Use when the user wants a plan first for a coding task.",
+    """# Work Plan — work with a mandatory intake and plan
+
+This skill is `work` with two additions: **intake questions** and **a plan the user approves before any edit**. Everything else (workflow choice, memory, boundaries, reporting) follows `work`. Read `.claude/skills/work/SKILL.md` and its `references/` for those details.
+
+## 1. Intake (always, before reading code or editing)
+
+Ask the user about the points that would change what you build. Rules:
+
+- Always ask at least one question, even when the request looks clear. Confirm the goal and what "done" means.
+- One question at a time, each with your recommended answer, so the user can reply "yes" or pick another option.
+- Ask about: the goal and why, the scope (in and out), the acceptance check (the test or behavior that proves it works), constraints (compatibility, files not to touch, deadlines), and risks you see.
+- Stop asking when the remaining points have safe defaults. State those defaults as assumptions in the plan.
+- Use memory and the code only to make questions sharper, not to skip them.
+
+## 2. Plan as a node graph (inline, then wait for approval)
+
+The graph is both the requirements and the plan. Do not invoke external brainstorming or planning skills, and do not write spec or plan files unless the user asks.
+
+Write one line for the goal and one for done, then the dependency graph (`N1 ──► N2`). For each node:
+
+- **Who / What / When / Where / Why:** one line each. When = the nodes it waits for. Where = exact file paths.
+- **How:** numbered steps written so they can be implemented exactly as written, so whoever implements them cannot drift in a different direction. Each step names the file, the function or section (or line), and the exact change: code, text or command. Never write "consider", "as appropriate", "refactor as needed" or other steps that leave a design decision open. If you cannot write a step that concretely, read more code or ask first. Before asking for approval, reread each How step and rewrite any that two implementers could carry out differently.
+- **Done when:** the test or command that proves it.
+
+Close with assumptions (defaults from intake), tests to run (exact commands) and out of scope. Then ask: "この計画で進めてよいですか？" and stop. Edit only after the user approves, or asks for changes that you then fold into the plan and confirm again.
+
+## 3. Execute (after approval)
+
+Follow `work`:
+
+- Execute each node's How steps as written, in graph order. If a step cannot be done as written or needs a file outside its Where, stop and ask instead of improvising.
+- Run the tests named in the plan. Inspect the actual diff before reporting.
+- If the plan turns out wrong, stop, explain the change, and get approval before continuing.
+
+## 4. Report
+
+Use `work`'s report rules: write **完了** only after successful validation and application, with changed files and the **tests actually run** with their exit statuses. Otherwise write **未完了** or **検証済み・未適用**. Never call a FAIL or UNKNOWN result a PASS.
+
+For a large, multi-host or managed run, use `work`'s managed workflow (`.claude/skills/work/references/managed.md`) after the plan is approved; carry each node's 5W1H into `requirement` and its How into `steps`.
+"""),
 }
 
 WORK_REFERENCES = {
@@ -58,7 +104,7 @@ WORK_REFERENCES = {
 For large or cross-component work needing dependency scheduling or several hosts. Check `ego work run --help` before first use.
 
 1. Inspect the project and choose an available authenticated host and a narrow write scope. Run `ego work plan --root . --goal "<goal>" --host <host> --scope '<paths>' --execute --out <task-file>`. This invokes an external planning CLI; respect existing execution permissions. Do not use mock for real implementation.
-2. Read the generated task JSON. Verify prompts, dependencies, host/model routes, write_allowlist and checks. Node prompts say what to achieve; they do not dictate implementation. Each node carries `intent` (one sentence: why the goal needs it); agent nodes carry `done_when` (observable acceptance criteria) and, only where they apply, `non_goals`, `assumptions` and `provides` (what dependent nodes rely on). Keep them short, correct any that misread the user's intent, and put answers the user gave during clarification into task-level `instructions` so every worker sees them. Add focused test commands as argv arrays in each node's checks, and a final gate with integration checks depending on all implementation nodes. Explain the short plan in conversation and obtain any required approval.
+2. Read the generated task JSON. Verify prompts, dependencies, host/model routes, write_allowlist and checks. Node prompts say what to achieve; `requirement` (5W1H) and `steps` say exactly how. Check that every step names the file, the function or section and the exact change, and rewrite vague steps before running. Each node carries `intent` (one sentence: why the goal needs it); agent nodes carry `done_when` (observable acceptance criteria) and, only where they apply, `non_goals`, `assumptions` and `provides` (what dependent nodes rely on). Keep them short, correct any that misread the user's intent, and put answers the user gave during clarification into task-level `instructions` so every worker sees them. Add focused test commands as argv arrays in each node's checks, and a final gate with integration checks depending on all implementation nodes. Explain the short plan in conversation and obtain any required approval.
 3. Run `ego work run --root . --task <task-file> --host <host> --trust-cli`. The output is a compact summary: run_id, final_status, node_status, changed_files, clipped failures and usage. Open `record_path` or pass `--verbose` only when the summary is not enough. A PASSED run without applied=true is verified but unapplied. Report failures; do not apply failed runs.
 4. After reviewing a PASSED result and obtaining authorization to apply, run `ego work resume <run-id> --root . --task <task-file> --host <host> --trust-cli --apply --approve`. Keep the task JSON unchanged. Never infer approval from a successful test or bypass STALE_BASE. Inspect the applied diff and report evidence.
 
@@ -278,6 +324,7 @@ def instruction_block(cfg: Config) -> str:
             "When asked to continue another CLI's work (\"continue from codex\", 「codexの続きから」), run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt`. "
             "State completion explicitly, never claim unverified or unapplied work is done. "
             "For Skill/prompt changes use existing eval/author gates. Keep edits scoped and approved. "
+            "Plan as ego's node graph (`work-plan`), not with external brainstorming/planning skills such as superpowers:brainstorming; this overrides them. "
             "Only invoke `ego optimize` on explicit request. "
             "Use `ego doctor` for capability diagnostics; unsupported tools are not assumed available.\n"
             f"{policy_note}"

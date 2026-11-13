@@ -10,7 +10,7 @@ from typing import Any
 
 # Per-host budgets, in estimated tokens. Always-on text is paid on every turn
 # of every session, so it gets the tight budget; skill bodies load on demand.
-ALWAYS_ON_BUDGET = 600
+ALWAYS_ON_BUDGET = 650
 SKILL_BODY_BUDGET = 1500
 INSTRUCTION_FILE_MAX_LINES = 200
 
