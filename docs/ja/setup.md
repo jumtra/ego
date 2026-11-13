@@ -79,7 +79,7 @@ ego apply
 |---|---|
 | `--hosts <list>` | 生成対象の CLI（カンマ区切り）: `claude,codex,opencode,agy` |
 | `--profile <name>` | `minimal`、`balanced`、`full`。現時点で出力が変わるのは `full` のみで、Claude Code の `PreToolUse` ポリシーフックを追加します |
-| `--policy <mode>` | `strict`（既定）または `relaxed`。[設定](configuration.md#ポリシーモード) を参照 |
+| `--policy <mode>` | `relaxed`（既定）または `strict`。[設定](configuration.md#ポリシーモード) を参照 |
 | `--models <json>` | ホストごとの既定モデル。例: `'{"claude":"sonnet","codex":"auto"}'` |
 | `--graph <provider>` | `none`、`codegraph`、`graphify` |
 | `--memory <provider>` | `file` または `engram` |

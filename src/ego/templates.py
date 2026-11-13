@@ -1,6 +1,7 @@
 """Short, host-specific renderers. Source of truth lives in .ego/spec/."""
 from __future__ import annotations
 import json
+import shutil
 from pathlib import Path
 from .config import Config
 
@@ -92,7 +93,7 @@ Status is IN_PROGRESS while work remains, BLOCKED on a blocker, VERIFIED for ver
 
 Then run `ego session resume <id> --host <host> --root .`. In an idle interactive Claude Code or Codex session use `/clear`, in OpenCode `/new`, then send `resume_prompt`. If a safe clear is unavailable, instruct the user to start a new session; never claim the context was cleared when it wasn't. During an indivisible step, prefer `/compact` over clearing. Only request manual user actions when the host cannot safely perform them.
 
-When `ego session resume` returns `auto_resume_after_clear: true` (Claude Code with `clear_suggest_tokens` set in `.ego/config.toml`), the user only needs to run `/clear`: the resume prompt is injected automatically, and the host itself suggests the clear once the measured context passes the threshold.
+When `ego session resume` returns `auto_resume_after_clear: true` (Claude Code with `auto_resume = true` in `.ego/config.toml`, the default), the user only needs to run `/clear`: the resume prompt is injected automatically, and the host itself suggests the clear once the measured context passes the threshold.
 
 Checkpoints are shared by every CLI in the project (Claude Code, Codex, OpenCode, AGY) and record which one saved them. To pick up another CLI's work in this session, run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt` (no clear needed); `ego session list --root .` shows all open checkpoints. To send work the other way, checkpoint, then give the user the `launch_command` from `ego session handoff <id> --to <cli> --root .`; you cannot open the other CLI yourself.
 
@@ -115,16 +116,23 @@ RULES = {
 OPENCODE_PLUGIN = """// Managed by ego (do not edit; change .ego/config.toml and run `ego sync`).
 // Runs `ego hook` when a session goes idle (context limit) and when a session starts (resume after a clear).
 // It never calls a model itself: the follow-up prompt is the one `ego hook` asks for.
+// The ego executable is pinned at `ego apply` time: OpenCode may start with a PATH that lacks ~/.local/bin.
 import { spawnSync } from "node:child_process"
+
+const EGO_BIN = __EGO_BIN__
 
 export default {
   id: "ego",
   server: async ({ client, directory }: any) => {
     const continuing = new Set<string>()
     const hook = (event: string, payload: object): any => {
-      const run = spawnSync("ego", ["hook", event, "--host", "opencode", "--root", directory], {
+      const run = spawnSync(EGO_BIN, ["hook", event, "--host", "opencode", "--root", directory], {
         input: JSON.stringify(payload), encoding: "utf8", timeout: 20000,
       })
+      if (run.error || run.status !== 0) {
+        // Never fail silently: a missing ego means no checkpoint is ever forced.
+        return { systemMessage: `ego hook failed (${run.error?.message ?? `exit ${run.status}`}): check that ${EGO_BIN} runs, then run ego apply` }
+      }
       try { return JSON.parse(run.stdout || "{}") } catch { return {} }
     }
     const notify = async (message?: string) => {
@@ -182,6 +190,11 @@ def _work_references(base: str) -> dict[str, str]:
     """Procedure the work skill links to and a host reads only when that path is taken."""
     return {f"{base}/work/references/{name}.md": body for name, body in WORK_REFERENCES.items()}
 
+def _ego_binary() -> str:
+    """Absolute path of the ego executable that is installing these files (fallback: the bare name)."""
+    return shutil.which("ego") or "ego"
+
+
 def generated_files(cfg: Config) -> dict[str, str]:
     files: dict[str,str] = {}
     for name in SKILLS:
@@ -204,7 +217,7 @@ def generated_files(cfg: Config) -> dict[str, str]:
             hooks["PreToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "ego hook pre-tool --root ."}]}]
         if cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0:
             hooks["Stop"] = [{"hooks": [{"type": "command", "command": 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'}]}]
-        if cfg.clear_suggest_tokens > 0:
+        if cfg.auto_resume:  # core: injects the saved checkpoint after /clear
             hooks["SessionStart"] = [{"matcher": "clear", "hooks": [{"type": "command", "command": 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'}]}]
         settings: dict = {"hooks": hooks} if hooks else {}
         if cfg.usage_switch_percent > 0:
@@ -215,18 +228,21 @@ def generated_files(cfg: Config) -> dict[str, str]:
             files[".claude/settings.json"] = json.dumps(settings, indent=2) + "\n"
     # Context-limit and usage-limit hooks for the other CLIs. Each calls `ego hook` (no model call).
     session_hooks = cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0
-    if "codex" in cfg.hosts and session_hooks:
+    if "codex" in cfg.hosts and (session_hooks or cfg.auto_resume):
         handlers = lambda event: [{"type": "command", "command": f"ego hook {event} --host codex --root .", "timeout": 30}]
-        codex_hooks: dict[str, list] = {"Stop": [{"hooks": handlers("stop")}]}
-        if cfg.clear_suggest_tokens > 0:
+        codex_hooks: dict[str, list] = {"Stop": [{"hooks": handlers("stop")}]} if session_hooks else {}
+        if cfg.auto_resume:
             codex_hooks["SessionStart"] = [{"matcher": "clear", "hooks": handlers("session-start")}]
         files[".codex/hooks.json"] = json.dumps({"hooks": codex_hooks}, indent=2) + "\n"
-    if "agy" in cfg.hosts and cfg.clear_suggest_tokens > 0:
-        # AGY reports no usage limit, so only the context-limit hooks apply to it.
+    if "agy" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume):
+        # AGY reports no usage limit, so only the context-limit and resume hooks apply to it.
         handler = lambda event: [{"type": "command", "command": f"ego hook {event} --host agy --root .", "timeout": 30}]
-        files[".agents/hooks.json"] = json.dumps({"ego": {"Stop": handler("stop"), "SessionStart": handler("session-start")}}, indent=2) + "\n"
-    if "opencode" in cfg.hosts and cfg.clear_suggest_tokens > 0:
-        files[".opencode/plugins/ego.ts"] = OPENCODE_PLUGIN
+        agy_hooks: dict[str, list] = {"Stop": handler("stop")} if cfg.clear_suggest_tokens > 0 else {}
+        if cfg.auto_resume:
+            agy_hooks["SessionStart"] = handler("session-start")
+        files[".agents/hooks.json"] = json.dumps({"ego": agy_hooks}, indent=2) + "\n"
+    if "opencode" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume):
+        files[".opencode/plugins/ego.ts"] = OPENCODE_PLUGIN.replace("__EGO_BIN__", json.dumps(_ego_binary()))
     if any(h in cfg.hosts for h in ("codex", "opencode", "agy")):
         for name in SKILLS:
             files[f".agents/skills/{name}/SKILL.md"] = skill_md(name)

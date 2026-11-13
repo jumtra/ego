@@ -12,5 +12,5 @@ def _isolated_ego_home(tmp_path_factory, monkeypatch):
 def project(tmp_path):
     root=tmp_path/"project"
     root.mkdir()
-    apply_install(root,Config())
+    apply_install(root,Config(clear_suggest_tokens=0,auto_resume=False))  # no hooks unless a test asks for them
     return root

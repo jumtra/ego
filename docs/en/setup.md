@@ -77,7 +77,7 @@ The wizard does not ask for the policy mode, default models or session threshold
 |---|---|
 | `--hosts <list>` | Comma-separated CLIs to generate files for: `claude,codex,opencode,agy` |
 | `--profile <name>` | `minimal`, `balanced` or `full`. Today only `full` changes the output: it adds a Claude Code `PreToolUse` policy hook |
-| `--policy <mode>` | `strict` (default) or `relaxed`. See [Configuration](configuration.md#policy-mode) |
+| `--policy <mode>` | `relaxed` (default) or `strict`. See [Configuration](configuration.md#policy-mode) |
 | `--models <json>` | Default model per host, e.g. `'{"claude":"sonnet","codex":"auto"}'` |
 | `--graph <provider>` | `none`, `codegraph` or `graphify` |
 | `--memory <provider>` | `file` or `engram` |
