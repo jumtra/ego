@@ -38,6 +38,28 @@ def test_standard_work_skill_upgrade_refreshes_all_host_copies(tmp_path: Path):
     assert (tmp_path / '.agents/skills/work/SKILL.md').read_text() == skill_md('work')
 
 
+def test_work_plan_skill_is_graph_format(tmp_path: Path):
+    plan = skill_md('work-plan')
+    assert 'node graph' in plan and 'この計画で進めてよいですか' in plan
+    for name in ('work', 'work-plan'):
+        body = skill_md(name)
+        assert 'implemented exactly as written' in body and 'drift in a different direction' in body
+    apply_install(tmp_path, Config())
+    assert (tmp_path / '.claude/skills/work-plan/SKILL.md').read_text() == plan
+
+
+def test_instruction_block_overrides_external_planning():
+    from ego.templates import instruction_block
+    block = instruction_block(Config())
+    assert 'superpowers:brainstorming' in block and 'overrides them' in block
+
+
+def test_v0012_work_skill_refreshes():
+    from ego.templates import LEGACY_WORK_HASHES
+    assert '645c9862f86b9ea4e7db50885ceee9bd10fd98de3225a96f822878b212cd5039' in LEGACY_WORK_HASHES
+    assert sha256(skill_md('work')) not in LEGACY_WORK_HASHES
+
+
 def test_owned_custom_work_skill_is_preserved(tmp_path: Path):
     cfg = Config()
     apply_install(tmp_path, cfg)

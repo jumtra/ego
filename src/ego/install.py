@@ -37,7 +37,7 @@ def installation_plan(root: Path, cfg: Config) -> dict:
     }
     wanted = generated_files(cfg)
     # The canonical skill files are authoritative after first installation.
-    for skill in ("harness-init", "work"):
+    for skill in ("harness-init", "work", "work-plan"):
         rel = f".ego/spec/skills/{skill}/SKILL.md"
         canon = safe_path(root, rel)
         if (canon.exists() and rel in prev and filehash(canon) == prev[rel]

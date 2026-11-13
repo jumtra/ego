@@ -21,6 +21,8 @@ MAX_CONTEXT_FILES = 24
 NOTE_LISTS = ("done_when", "non_goals", "assumptions", "provides")
 MAX_NOTE_CHARS = 400
 MAX_NOTE_ITEMS = 6
+REQUIREMENT_KEYS = ("who", "what", "when", "where", "why", "how")
+MAX_STEP_ITEMS = 10
 
 @dataclass(frozen=True)
 class Route:
@@ -125,6 +127,16 @@ def validate_node_notes(node: dict) -> None:
         if not isinstance(items, list) or len(items) > MAX_NOTE_ITEMS or not all(_note(i) for i in items):
             raise EgoError("INVALID_TASK", f"{key} of {node['id']} must be a list of at most {MAX_NOTE_ITEMS} "
                            f"nonempty strings <= {MAX_NOTE_CHARS} chars", 2)
+    if "requirement" in node:
+        req = node["requirement"]
+        if not isinstance(req, dict) or not req or set(req) - set(REQUIREMENT_KEYS) or not all(_note(v) for v in req.values()):
+            raise EgoError("INVALID_TASK", f"requirement of {node['id']} must be an object mapping some of {', '.join(REQUIREMENT_KEYS)} "
+                           f"to nonempty strings <= {MAX_NOTE_CHARS} chars", 2)
+    if "steps" in node:
+        steps = node["steps"]
+        if not isinstance(steps, list) or not steps or len(steps) > MAX_STEP_ITEMS or not all(_note(s) for s in steps):
+            raise EgoError("INVALID_TASK", f"steps of {node['id']} must be a list of 1-{MAX_STEP_ITEMS} "
+                           f"nonempty strings <= {MAX_NOTE_CHARS} chars", 2)
 
 
 def _bullets(items: list[str]) -> str:
@@ -176,6 +188,12 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
     if node.get("role"): parts.append("## Assigned role\n" + str(node["role"]))
     if node.get("intent"): parts.append("## Why this stage exists\n" + node["intent"].strip())
     parts.append("## This node's instructions (user instruction)\n" + node["prompt"])
+    req = node.get("requirement") or {}
+    if req:
+        parts.append("## Requirement (5W1H)\n" + "\n".join(f"- {k.title()}: {req[k].strip()}" for k in REQUIREMENT_KEYS if k in req))
+    if node.get("steps"):
+        parts.append("## Implementation steps (follow in order, exactly as written; if a step cannot be done as written, "
+                     "stop and report instead of improvising)\n" + "\n".join(f"{i}. {s.strip()}" for i, s in enumerate(node["steps"], 1)))
     if node.get("done_when"): parts.append("## Done when\n" + _bullets(node["done_when"]))
     if node.get("non_goals"): parts.append("## Out of scope\n" + _bullets(node["non_goals"]))
     if node.get("assumptions"):
@@ -202,6 +220,7 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
         for dep in node["depends_on"]:
             prior = by_id.get(dep, {})
             detail = "; ".join(x for x in (str(prior.get("intent", "")).strip(),
+                                           "what: " + prior["requirement"]["what"].strip() if isinstance(prior.get("requirement"), dict) and prior["requirement"].get("what") else "",
                                            "provides: " + ", ".join(prior["provides"]) if prior.get("provides") else "") if x)
             if detail: notes.append(f"- {dep}: {detail}")
         parts.append("## Prior stages\n" + ", ".join(node["depends_on"]) + ("\n" + "\n".join(notes) if notes else "") +

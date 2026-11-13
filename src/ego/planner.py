@@ -19,7 +19,9 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
     scope=scope or ["src/**","tests/**"]
     # Model output is treated as a structured proposal, never executed without separate approval.
     if host=="mock":
-        obj={"goal":goal,"nodes":[{"id":"implement","kind":"agent","intent":"Deliver the goal in one stage","prompt":goal,"write_allowlist":scope,"max_attempts":2}]}
+        obj={"goal":goal,"nodes":[{"id":"implement","kind":"agent","intent":"Deliver the goal in one stage","prompt":goal,
+                              "requirement":{"what":"Deliver the goal","where":", ".join(scope)[:400]},
+                              "steps":["Implement the goal within the allowed write scope"],"write_allowlist":scope,"max_attempts":2}]}
     else:
         if not execute:raise EgoError("EXPLICIT_EXECUTION_REQUIRED","Planning via model requires --execute")
         cfg=load_config(root)
@@ -36,7 +38,12 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
                 "in a final gate depending on all required implementations. "
                 "Return raw JSON without Markdown fences. "
                 "Use the fewest nodes and only real dependencies. No unapproved commands. "
-                "State in each prompt what to achieve; leave implementation detail to the worker. "
+                "State in each prompt what to achieve. "
+                "Agent nodes have requirement: an object with who, what, when, where, why and how, one short sentence each. "
+                "Agent nodes have steps: 1-10 ordered implementation steps concrete enough to follow without making design decisions; "
+                "each step names the file, the function or section, and the exact change (code, text or command). "
+                "Steps must be implementable exactly as written so the worker cannot drift in a different direction. "
+                "Never write 'consider', 'as appropriate' or 'refactor as needed'; inspect the candidate files until you can be that specific. "
                 "Every node also has intent: one sentence on why the goal needs this node. "
                 "Agent nodes have done_when: 1-4 observable acceptance criteria. "
                 "Add only when they apply: non_goals (tempting work this node must not do), "

@@ -103,6 +103,8 @@ Complete example: [`examples/multihost/task.json`](../../examples/multihost/task
       "intent": "The endpoint is what monitoring will call.",
       "prompt": "Add GET /health returning 200 and a test for it.",
       "done_when": ["tests/test_health.py passes"],
+      "requirement": {"what": "GET /health returns 200", "where": "src/app.py, tests/test_health.py", "how": "Add a route and a pytest"},
+      "steps": ["Add a GET /health route in src/app.py returning 200", "Add tests/test_health.py asserting the 200"],
       "write_allowlist": ["src/**", "tests/**"],
       "checks": [["pytest", "-q", "tests/test_health.py"]]
     },
@@ -133,6 +135,7 @@ Node fields:
 | `argv` | code, gate | The command to run (`argv` or `checks` is required) |
 | `role` | agent | Role label included in the prompt |
 | `intent`, `done_when`, `non_goals`, `assumptions`, `provides` | agent | Why the stage exists, acceptance criteria, what not to do, facts relied on, what later stages depend on. Short strings (`intent`) or lists of up to 6 strings of up to 400 characters |
+| `requirement`, `steps` | agent | 5W1H (`who` `what` `when` `where` `why` `how`, strings up to 400 characters) and 1-10 ordered steps the worker follows exactly as written |
 | `host` / `hosts`, `strategy`, `model` / `models`, `fallback_on` | agent | Routing, see below |
 | `instructions_file`, `context_files` | agent | Extra instructions; up to 24 reference files |
 | `max_attempts`, `max_turns`, `timeout_seconds` | all | Per-node limits, capped by the config |

@@ -103,6 +103,8 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
       "intent": "The endpoint is what monitoring will call.",
       "prompt": "Add GET /health returning 200 and a test for it.",
       "done_when": ["tests/test_health.py passes"],
+      "requirement": {"what": "GET /health returns 200", "where": "src/app.py, tests/test_health.py", "how": "Add a route and a pytest"},
+      "steps": ["Add a GET /health route in src/app.py returning 200", "Add tests/test_health.py asserting the 200"],
       "write_allowlist": ["src/**", "tests/**"],
       "checks": [["pytest", "-q", "tests/test_health.py"]]
     },
@@ -133,6 +135,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `argv` | code、gate | 実行するコマンド（`argv` か `checks` のどちらかが必要） |
 | `role` | agent | プロンプトに含まれる役割ラベル |
 | `intent`、`done_when`、`non_goals`、`assumptions`、`provides` | agent | そのステージの理由、受け入れ基準、やらないこと、依拠する事実、後続が必要とするもの。短い文字列（`intent`）か、各 400 文字以内の文字列を最大 6 件含むリスト |
+| `requirement`、`steps` | agent | 5W1H（`who` `what` `when` `where` `why` `how`、各 400 文字以内）と、ワーカーが書かれたとおりに実行する 1〜10 件の手順 |
 | `host` / `hosts`、`strategy`、`model` / `models`、`fallback_on` | agent | ルーティング。下記参照 |
 | `instructions_file`、`context_files` | agent | 追加の指示。参照ファイルは最大 24 件 |
 | `max_attempts`、`max_turns`、`timeout_seconds` | すべて | ノードごとの上限。設定値で頭打ちになる |

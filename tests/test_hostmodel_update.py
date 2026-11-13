@@ -386,8 +386,23 @@ def test_node_notes_reach_worker_and_successor_prompts(tmp_path):
 
 
 @pytest.mark.parametrize('notes',[{'intent':''},{'intent':['why']},{'intent':'x'*401},
-                                  {'done_when':'passes'},{'done_when':['']},{'provides':['a']*7}])
+                                  {'done_when':'passes'},{'done_when':['']},{'provides':['a']*7},
+                                  {'requirement':'x'},{'requirement':{}},{'requirement':{'whom':'x'}},
+                                  {'steps':[]},{'steps':['s']*11}])
 def test_node_notes_are_bounded(notes):
     task={'goal':'g','nodes':[{'id':'a','prompt':'p','write_allowlist':['src/*'],**notes}]}
     with pytest.raises(EgoError,match='INVALID_TASK|must be'):
         validate_task(task)
+
+
+def test_requirement_and_steps_reach_prompt(tmp_path):
+    task={'goal':'Add endpoint','nodes':[
+        {'id':'api','prompt':'Add /x','write_allowlist':['src/*'],
+         'requirement':{'who':'worker','what':'Add /x','where':'src/api.py','how':'Add a route'},
+         'steps':['Add def x() to src/api.py','Return 200']},
+        {'id':'docs','prompt':'Document /x','depends_on':['api'],'write_allowlist':['docs/*']}]}
+    validate_task(task)
+    prompt=build_task_prompt(task,task['nodes'][0],tmp_path)
+    assert '## Requirement (5W1H)\n- Who: worker' in prompt and '- Where: src/api.py' in prompt
+    assert '1. Add def x() to src/api.py\n2. Return 200' in prompt and 'exactly as written' in prompt
+    assert 'what: Add /x' in build_task_prompt(task,task['nodes'][1],tmp_path)

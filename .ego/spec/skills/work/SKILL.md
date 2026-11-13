@@ -17,6 +17,8 @@ Choose the **smallest useful workflow** and keep context small: read only the fi
 
 Prefer direct user instructions over ceremonial workflow. Write formal documents only when requested or needed for a decision.
 
+**Planning:** when you show a plan, use the node-graph format of the `work-plan` skill: 5W1H per node, and How steps that can be implemented exactly as written (file, function or section, exact change), so the implementer cannot drift in a different direction. Do not invoke external brainstorming or planning skills.
+
 **Intent first, questions only when needed:** at any size, before editing you can state in one line each why the user wants this and what will show it is done. When the request, the code and memory answer both, proceed without asking. Ask when an open point would change what you build and a wrong guess would be costly to undo: one question at a time, each with your recommended answer. Stop asking once the remaining points have safe defaults, and state those assumptions in the report. In a managed run, put the answers in task-level `instructions`.
 
 **Always:**
