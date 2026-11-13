@@ -9,7 +9,7 @@ Project settings live in **`.ego/config.toml`**, created by `ego apply`. It is a
 ```toml
 schema_version = 1
 profile = "balanced"
-policy_mode = "strict"
+policy_mode = "relaxed"
 hosts = ["claude", "codex", "opencode", "agy"]
 code_intelligence = "none"
 memory = "file"
@@ -19,7 +19,7 @@ max_attempts = 3
 timeout_seconds = 3600
 max_turns = 30
 worker_context = "lean"
-clear_suggest_tokens = 0
+clear_suggest_tokens = 200000
 usage_switch_percent = 0
 run_yolo = false
 models = {claude = {model = "sonnet", effort = "medium"}, codex = "auto"}
@@ -38,7 +38,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | Which CLIs you use | `hosts` | Only listed CLIs get skills, agents and instructions |
 | How much the AI may do unattended | `policy_mode` | `strict` for shared or important repositories; `relaxed` for personal projects where the AI may push and edit config on request |
 | Which model each CLI uses in managed runs | `models` | Leave empty to use each CLI's own default |
-| When to rotate long sessions | `clear_suggest_tokens` | e.g. `120000`; `0` leaves it off |
+| When to rotate long sessions | `clear_suggest_tokens` | default `200000`; `0` leaves it off |
 | Commands that checks may run | `allow_commands` | Add your project's test runner if it is not listed |
 
 ## All keys
@@ -50,7 +50,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `schema_version` | `1` | `1` | Config format version |
 | `profile` | `"balanced"` | `minimal`, `balanced`, `full` | `full` adds a Claude Code `PreToolUse` hook (`ego hook pre-tool`) that screens Bash commands. `minimal` and `balanced` currently generate the same files |
 | `hosts` | all four | `claude`, `codex`, `opencode`, `agy` | CLIs to generate files for. This is not a routing choice: the host that runs a task is chosen per task |
-| `policy_mode` | `"strict"` | `strict`, `relaxed` | See [Policy mode](#policy-mode) |
+| `policy_mode` | `"relaxed"` | `strict`, `relaxed` | See [Policy mode](#policy-mode) |
 | `code_intelligence` | `"none"` | `none`, `codegraph`, `graphify` | Provider behind `ego code ...`. External tools are never installed by ego; without one, a built-in text search is used |
 | `memory` | `"file"` | `file`, `engram` | Provider behind `ego memory ...`. See [Memory](#memory) |
 | `runtime_mode` | `"native"` | `native`, `managed` | Recorded default working style. It does not change command behavior: `/work` in the CLI is native, `ego work run` is always managed |
@@ -74,7 +74,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 
 | Key | Default | Range | Effect |
 |---|---|---|---|
-| `clear_suggest_tokens` | `0` (off) | `0` or 20000–2000000 | Context size at which a session is checkpointed and cleared. Used by the generated hooks of every CLI (see [Sessions](sessions.md)) and by `ego run` |
+| `clear_suggest_tokens` | `200000` | `0` or 20000–2000000 | Context size at which a session is checkpointed and cleared. Used by the generated hooks of every CLI (see [Sessions](sessions.md)) and by `ego run` |
 | `usage_switch_percent` | `0` (off) | `0` or 50–99 | Claude Code and Codex (the CLIs that report their usage limit): at this percentage of the 5-hour or 7-day usage limit, save a checkpoint and propose continuing in another CLI |
 | `run_yolo` | `false` | bool | `ego run` starts the CLI with its skip-permissions switch. `--yolo` / `--no-yolo` override per run |
 

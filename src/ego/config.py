@@ -17,7 +17,7 @@ VALID_EFFORTS = {"auto", "low", "medium", "high", "xhigh", "max"}
 class Config:
     schema_version: int = 1
     profile: str = "balanced"
-    policy_mode: str = "strict"
+    policy_mode: str = "relaxed"
     hosts: list[str] = field(default_factory=lambda: ["claude", "codex", "opencode", "agy"])
     code_intelligence: str = "none"
     memory: str = "file"
@@ -27,7 +27,8 @@ class Config:
     timeout_seconds: int = 3600
     max_turns: int = 30  # agentic turns per managed worker invocation
     worker_context: str = "lean"  # "lean" (no inherited MCP servers) or "inherit"
-    clear_suggest_tokens: int = 0  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
+    clear_suggest_tokens: int = 200000  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
+    auto_resume: bool = True  # Claude Code/Codex/AGY: SessionStart(clear) hook injects the saved checkpoint after /clear (core; independent of clear_suggest_tokens)
     usage_switch_percent: int = 0  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
     run_yolo: bool = False  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
     models: dict[str, Any] = field(default_factory=dict)
@@ -55,6 +56,8 @@ class Config:
             raise EgoError("INVALID_CONFIG", "max_turns must be between 1 and 200", 2)
         if not isinstance(self.clear_suggest_tokens, int) or not (self.clear_suggest_tokens == 0 or 20000 <= self.clear_suggest_tokens <= 2000000):
             raise EgoError("INVALID_CONFIG", "clear_suggest_tokens must be 0 (off) or between 20000 and 2000000", 2)
+        if not isinstance(self.auto_resume, bool):
+            raise EgoError("INVALID_CONFIG", "auto_resume must be a boolean", 2)
         if not isinstance(self.usage_switch_percent, int) or not (self.usage_switch_percent == 0 or 50 <= self.usage_switch_percent <= 99):
             raise EgoError("INVALID_CONFIG", "usage_switch_percent must be 0 (off) or between 50 and 99", 2)
         if not isinstance(self.run_yolo, bool):
@@ -118,8 +121,11 @@ def dump_config(cfg: Config) -> str:
         "#   max_turns = 30             # worker 1 回あたりの最大ターン数\n"
         "#   worker_context = \"lean\"   # \"lean\": ユーザーの MCP サーバーを継承しない / \"inherit\": 継承する\n"
         "#\n"
+        "# /clear 後の自動再開 (auto_resume, Claude Code / Codex / AGY / OpenCode。既定 true。SessionStart hook が保存済みチェックポイントを注入):\n"
+        "#   auto_resume = true\n"
+        "#\n"
         "# セッションクリアのしきい値 (clear_suggest_tokens, Claude Code / Codex / OpenCode / AGY。Stop hook が強制):\n"
-        "#   clear_suggest_tokens = 120000  # 実測コンテキストがこの値に達したらチェックポイントを自動保存させ /clear を提案。0 で無効\n"
+        "#   clear_suggest_tokens = 200000  # 実測コンテキストがこの値に達したらチェックポイントを自動保存させ /clear を提案。0 で無効\n"
         "#\n"
         "# 使用量上限が近いときの自動保存と切り替え提案 (usage_switch_percent, Claude Code / Codex。使用量を報告しない OpenCode / AGY は対象外):\n"
         "#   usage_switch_percent = 85  # 5時間/7日枠の使用率がこの%以上でチェックポイント保存と別CLIへの切り替えを提案。0 で無効\n"

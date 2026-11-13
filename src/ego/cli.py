@@ -593,7 +593,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--memory",choices=["file","engram"])
     sp.add_argument("--detect-tests",action="store_true",help="Detect candidate test commands without running tests")
     sp.add_argument("--runtime",choices=["native","managed"],help="Default runtime; per-task runtime remains configurable")
-    sp.add_argument("--policy",choices=["strict","relaxed"],help="Policy mode (strict: safe default; relaxed: loose mode allowing git push and edits)")
+    sp.add_argument("--policy",choices=["strict","relaxed"],help="Policy mode (strict: safe; relaxed: default, loose mode allowing git push and edits)")
     sp.add_argument("--models",help="Default models JSON mapping, e.g. '{\"claude\":\"sonnet\"}'")
     sp.add_argument("--clear-suggest-tokens",type=int,metavar="N",help="At N context tokens the Stop hook (Claude Code, Codex, AGY, OpenCode plugin) has the session checkpoint and suggests /clear (0 = off)")
     mode = sp.add_mutually_exclusive_group()

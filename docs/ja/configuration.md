@@ -9,7 +9,7 @@
 ```toml
 schema_version = 1
 profile = "balanced"
-policy_mode = "strict"
+policy_mode = "relaxed"
 hosts = ["claude", "codex", "opencode", "agy"]
 code_intelligence = "none"
 memory = "file"
@@ -19,7 +19,7 @@ max_attempts = 3
 timeout_seconds = 3600
 max_turns = 30
 worker_context = "lean"
-clear_suggest_tokens = 0
+clear_suggest_tokens = 200000
 usage_switch_percent = 0
 run_yolo = false
 models = {claude = {model = "sonnet", effort = "medium"}, codex = "auto"}
@@ -38,7 +38,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | 使用する CLI | `hosts` | 列挙した CLI にだけ skill、agent、指示が生成されます |
 | AI が無人でどこまでできるか | `policy_mode` | 共有リポジトリや重要なリポジトリでは `strict`。AI に依頼されたら push や設定編集をしてよい個人プロジェクトでは `relaxed` |
 | 管理実行で各 CLI が使うモデル | `models` | 空のままにすると各 CLI の既定モデルを使います |
-| 長いセッションをいつクリアするか | `clear_suggest_tokens` | 例: `120000`。`0` でオフ |
+| 長いセッションをいつクリアするか | `clear_suggest_tokens` | 既定: `200000`。`0` でオフ |
 | チェックで実行してよいコマンド | `allow_commands` | 使っているテストランナーが一覧にない場合は追加してください |
 
 ## 全キー
@@ -50,7 +50,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `schema_version` | `1` | `1` | 設定形式のバージョン |
 | `profile` | `"balanced"` | `minimal`、`balanced`、`full` | `full` は Claude Code の `PreToolUse` フック（`ego hook pre-tool`）を追加し、Bash コマンドを検査します。`minimal` と `balanced` は現時点で同じファイルを生成します |
 | `hosts` | 4 つすべて | `claude`、`codex`、`opencode`、`agy` | ファイルを生成する CLI。ルーティングの設定ではありません。タスクを実行するホストはタスクごとに選ばれます |
-| `policy_mode` | `"strict"` | `strict`、`relaxed` | [ポリシーモード](#ポリシーモード) を参照 |
+| `policy_mode` | `"relaxed"` | `strict`、`relaxed` | [ポリシーモード](#ポリシーモード) を参照 |
 | `code_intelligence` | `"none"` | `none`、`codegraph`、`graphify` | `ego code ...` の裏で動くプロバイダ。外部ツールを ego が導入することはありません。ない場合は組み込みのテキスト検索を使います |
 | `memory` | `"file"` | `file`、`engram` | `ego memory ...` の裏で動くプロバイダ。[メモリ](#メモリ) を参照 |
 | `runtime_mode` | `"native"` | `native`、`managed` | 記録される既定の作業方式。コマンドの動作は変えません。CLI 内の `/work` は native、`ego work run` は常に managed です |
@@ -74,7 +74,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 
 | キー | 既定値 | 範囲 | 効果 |
 |---|---|---|---|
-| `clear_suggest_tokens` | `0`（オフ） | `0` または 20000〜2000000 | このコンテキストサイズに達したらセッションをチェックポイント保存してクリアします。各 CLI の生成フック（[セッション](sessions.md) を参照）と `ego run` が使います |
+| `clear_suggest_tokens` | `200000` | `0` または 20000〜2000000 | このコンテキストサイズに達したらセッションをチェックポイント保存してクリアします。各 CLI の生成フック（[セッション](sessions.md) を参照）と `ego run` が使います |
 | `usage_switch_percent` | `0`（オフ） | `0` または 50〜99 | Claude Code と Codex（使用上限を報告する CLI）のみ。5 時間枠または 7 日枠の使用量がこの割合に達したら、チェックポイントを保存し、別の CLI への切り替えを提案します |
 | `run_yolo` | `false` | bool | `ego run` が CLI を権限確認スキップのスイッチ付きで起動します。`--yolo` / `--no-yolo` で run ごとに上書き |
 

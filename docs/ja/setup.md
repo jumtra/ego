@@ -79,7 +79,7 @@ ego apply
 |---|---|
 | `--hosts <list>` | 生成対象の CLI（カンマ区切り）: `claude,codex,opencode,agy` |
 | `--profile <name>` | `minimal`、`balanced`、`full`。現時点で出力が変わるのは `full` のみで、Claude Code の `PreToolUse` ポリシーフックを追加します |
-| `--policy <mode>` | `strict`（既定）または `relaxed`。[設定](configuration.md#ポリシーモード) を参照 |
+| `--policy <mode>` | `relaxed`（既定）または `strict`。[設定](configuration.md#ポリシーモード) を参照 |
 | `--models <json>` | ホストごとの既定モデル。例: `'{"claude":"sonnet","codex":"auto"}'` |
 | `--graph <provider>` | `none`、`codegraph`、`graphify` |
 | `--memory <provider>` | `file` または `engram` |
@@ -120,10 +120,10 @@ ego apply --interactive --dry-run  # 書き込まずに選択を試す
 | `.ego/spec/prompts/tool-guide.md`、`.ego/knowledge/domain.md` | ツールガイド、プロジェクト知識のひな形 | 常に |
 | `CLAUDE.md` | 管理対象の指示ブロック | ホスト `claude` |
 | `.claude/skills/`、`.claude/agents/`、`.claude/rules/` | `/work` と `/harness-init` の skill、agent 4 種、rule 2 種 | ホスト `claude` |
-| `.claude/settings.json` | フック / ステータスライン | ホスト `claude` かつ、Profile `full`、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
-| `.codex/hooks.json` | フック | ホスト `codex` かつ、`clear_suggest_tokens > 0` または `usage_switch_percent > 0` |
-| `.agents/hooks.json` | フック | ホスト `agy` かつ `clear_suggest_tokens > 0` |
-| `.opencode/plugins/ego.ts` | プラグイン（フック） | ホスト `opencode` かつ `clear_suggest_tokens > 0` |
+| `.claude/settings.json` | フック / ステータスライン | ホスト `claude` かつ、Profile `full`、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
+| `.codex/hooks.json` | フック | ホスト `codex` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
+| `.agents/hooks.json` | フック | ホスト `agy` かつ、`auto_resume`（既定で有効）または `clear_suggest_tokens > 0` |
+| `.opencode/plugins/ego.ts` | プラグイン（フック） | ホスト `opencode` かつ、`auto_resume`（既定で有効）または `clear_suggest_tokens > 0`。プラグインは `ego apply` 時の `ego` の絶対パスを固定します |
 | `AGENTS.md` | 管理対象の指示ブロック | ホスト `codex`、`opencode`、`agy` |
 | `.agents/skills/` | skill | ホスト `codex`、`opencode`、`agy` |
 | `.codex/agents/*.toml` | agent 4 種 | ホスト `codex` |

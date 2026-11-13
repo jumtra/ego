@@ -129,7 +129,7 @@ def test_session_resume_arms_auto_resume_only_when_the_hook_is_installed(tmp_pat
 
 
 def test_hooks_are_generated_only_on_request_and_call_the_installed_command(project: Path):
-    assert ".claude/settings.json" not in generated_files(Config())
+    assert ".claude/settings.json" not in generated_files(Config(clear_suggest_tokens=0, auto_resume=False))
     cfg = Config(); cfg.clear_suggest_tokens = 120000
     hooks = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
     assert set(hooks) == {"Stop", "SessionStart"} and hooks["SessionStart"][0]["matcher"] == "clear"
@@ -140,6 +140,15 @@ def test_hooks_are_generated_only_on_request_and_call_the_installed_command(proj
     (project / ".ego/config.toml").write_text("clear_suggest_tokens = 5\n")
     with pytest.raises(EgoError):
         load_config(project)
+
+
+def test_auto_resume_is_on_by_default_without_clear_threshold(project: Path):
+    assert Config().auto_resume is True
+    cfg = Config(clear_suggest_tokens=0)  # SessionStart(clear) must not depend on the context threshold
+    hooks = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
+    assert hooks["SessionStart"][0]["hooks"][0]["command"] == 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'
+    assert "session-start" in generated_files(cfg)[".codex/hooks.json"]
+    assert "session-start" in generated_files(cfg)[".agents/hooks.json"]
 
 
 def test_hook_cli_never_fails_the_host_turn(tmp_path: Path, monkeypatch, capsys):
@@ -278,9 +287,9 @@ def test_near_usage_limit_asks_for_a_checkpoint_and_proposes_installed_clis_once
 
 
 def test_usage_switch_hooks_and_statusline_cli(tmp_path: Path, monkeypatch, capsys):
-    cfg = Config(); cfg.usage_switch_percent = 85
+    cfg = Config(clear_suggest_tokens=0, auto_resume=False); cfg.usage_switch_percent = 85
     settings = json.loads(generated_files(cfg)[".claude/settings.json"])
-    assert set(settings["hooks"]) == {"Stop"}  # no SessionStart(clear) hook without clear_suggest_tokens
+    assert set(settings["hooks"]) == {"Stop"}  # no SessionStart(clear) hook when auto_resume is off
     assert settings["statusLine"] == {"type": "command", "command": "ego hook statusline"}
     cfg.usage_switch_percent = 30
     with pytest.raises(EgoError):
@@ -401,7 +410,7 @@ def test_session_start_injects_the_pending_checkpoint_in_each_hosts_format(tmp_p
 
 
 def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path: Path):
-    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(Config()))
+    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(Config(clear_suggest_tokens=0, auto_resume=False)))
     cfg = Config(); cfg.clear_suggest_tokens = 120000
     files = generated_files(cfg)
     codex = json.loads(files[".codex/hooks.json"])["hooks"]
@@ -410,9 +419,19 @@ def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path
     agy = json.loads(files[".agents/hooks.json"])["ego"]
     assert agy["Stop"][0]["command"] == "ego hook stop --host agy --root ." and agy["Stop"][0]["type"] == "command"
     assert "session.idle" in files[".opencode/plugins/ego.ts"] and "ego" in files[".opencode/plugins/ego.ts"]
-    usage_only = Config(); usage_only.usage_switch_percent = 85
+    usage_only = Config(clear_suggest_tokens=0, auto_resume=False); usage_only.usage_switch_percent = 85
     only = generated_files(usage_only)
     assert set(json.loads(only[".codex/hooks.json"])["hooks"]) == {"Stop"}  # Codex reports its limits
     assert ".agents/hooks.json" not in only and ".opencode/plugins/ego.ts" not in only  # AGY / OpenCode do not
     cfg.hosts = ["claude"]
     assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(cfg))
+
+
+def test_opencode_plugin_pins_the_ego_binary_and_reports_failures(monkeypatch):
+    import ego.templates as templates
+    monkeypatch.setattr(templates.shutil, "which", lambda name: "/opt/tools/bin/ego" if name == "ego" else None)
+    plugin = generated_files(Config(clear_suggest_tokens=200000))[".opencode/plugins/ego.ts"]
+    assert 'const EGO_BIN = "/opt/tools/bin/ego"' in plugin and "__EGO_BIN__" not in plugin
+    assert 'spawnSync(EGO_BIN, ["hook"' in plugin and "systemMessage" in plugin
+    monkeypatch.setattr(templates.shutil, "which", lambda name: None)
+    assert 'const EGO_BIN = "ego"' in generated_files(Config(clear_suggest_tokens=200000))[".opencode/plugins/ego.ts"]
