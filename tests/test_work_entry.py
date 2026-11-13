@@ -1,7 +1,10 @@
+import json
 from pathlib import Path
 
+from ego import planner
 from ego.config import Config
 from ego.install import apply_install
+from ego.runner import RunResult
 from ego.templates import skill_md
 from ego.util import sha256, write_json
 
@@ -89,3 +92,24 @@ def test_managed_python_checks_ignore_nested_bytecode_caches(tmp_path: Path):
     assert result['final_status'] == 'PASSED'
     assert result['changed_files'] == ['result.txt']
     assert (tmp_path / 'result.txt').read_text() == 'OK'
+
+
+def test_planner_prompt_requires_requirement_and_steps(tmp_path: Path, monkeypatch):
+    captured = {}
+    spec = {'goal': 'g', 'nodes': [{
+        'id': 'impl', 'kind': 'agent', 'intent': 'i', 'prompt': 'p',
+        'requirement': {'who': 'w', 'what': 'w', 'when': 'w', 'where': 'w', 'why': 'w', 'how': 'w'},
+        'steps': ['Edit src/ego/x.py function f: return 1'],
+        'done_when': ['tests pass'], 'write_allowlist': ['src/**'],
+    }]}
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        captured['prompt'] = prompt
+        return RunResult('PASS', json.dumps(spec), '', 0, 0.0, host)
+
+    monkeypatch.setattr(planner, 'run_agent', fake_agent)
+    result = planner.plan_work(tmp_path, 'g', host='claude', execute=True)
+    prompt = captured['prompt']
+    assert 'requirement' in prompt and 'steps' in prompt
+    assert "Never write 'consider'" in prompt
+    assert result['task']['nodes'][0]['steps'] == ['Edit src/ego/x.py function f: return 1']
