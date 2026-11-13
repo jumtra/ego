@@ -118,10 +118,10 @@ ego apply --interactive --dry-run  # try different choices without writing
 | `.ego/spec/prompts/tool-guide.md`, `.ego/knowledge/domain.md` | Tool guidance, project knowledge stub | always |
 | `CLAUDE.md` | Managed instruction block | host `claude` |
 | `.claude/skills/`, `.claude/agents/`, `.claude/rules/` | `/work` and `/harness-init` skills, 4 agents, 2 rules | host `claude` |
-| `.claude/settings.json` | Hooks / status line | host `claude`, and only with profile `full`, `clear_suggest_tokens > 0` or `usage_switch_percent > 0` |
-| `.codex/hooks.json` | Hooks | host `codex`, and `clear_suggest_tokens > 0` or `usage_switch_percent > 0` |
-| `.agents/hooks.json` | Hooks | host `agy`, and `clear_suggest_tokens > 0` |
-| `.opencode/plugins/ego.ts` | Plugin (hooks) | host `opencode`, and `clear_suggest_tokens > 0` |
+| `.claude/settings.json` | Hooks / status line | host `claude`, and any of: profile `full`, `auto_resume` (default on), `clear_suggest_tokens > 0`, `usage_switch_percent > 0` |
+| `.codex/hooks.json` | Hooks | host `codex`, and any of: `auto_resume` (default on), `clear_suggest_tokens > 0`, `usage_switch_percent > 0` |
+| `.agents/hooks.json` | Hooks | host `agy`, and `auto_resume` (default on) or `clear_suggest_tokens > 0` |
+| `.opencode/plugins/ego.ts` | Plugin (hooks) | host `opencode`, and `auto_resume` (default on) or `clear_suggest_tokens > 0`. The plugin pins the absolute `ego` path at `ego apply` time |
 | `AGENTS.md` | Managed instruction block | host `codex`, `opencode` or `agy` |
 | `.agents/skills/` | Skills | host `codex`, `opencode` or `agy` |
 | `.codex/agents/*.toml` | 4 agents | host `codex` |
