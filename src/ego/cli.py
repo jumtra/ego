@@ -302,7 +302,7 @@ def _cmd_work(args):
                    run_id=args.run_id,resume=args.action=="resume",progress_stderr=True,
                    autonomy=args.autonomy,isolated=args.attest_external_sandbox,
                    worktree=args.worktree,cleanup_worktree=args.cleanup_worktree,planner_usage=planner_usage,
-                   seed_from=getattr(args,"seed_from",None))
+                   seed_from=getattr(args,"seed_from",None),task_file=args.task)
     _print(shape(result));return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
 
 def _cmd_context(args):

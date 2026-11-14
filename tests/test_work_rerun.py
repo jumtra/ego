@@ -4,10 +4,13 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from ego import work
 from ego.cli import main
 from ego.runner import RunResult
-from ego.work import execute
+from ego.util import EgoError, exclusive_lock
+from ego.work import compact_result, execute, status, watch
 
 
 def _agent_driver(monkeypatch) -> list[tuple[str, str]]:
@@ -121,3 +124,67 @@ def test_failed_worktree_run_keeps_its_staging_for_a_rerun(tmp_path: Path, monke
     assert (root / ".ego/state/runs/w1/staging").is_dir()
     subprocess.run(["git", "worktree", "remove", "--force", str(root / ".ego/state/runs/w1/staging")],
                    cwd=root, capture_output=True)
+
+
+def _two_node_task() -> dict:
+    return {"goal": "g", "nodes": [_agent("a", "WRITE a.txt=A"), _agent("b", "WRITE b.txt=B", ["a"])]}
+
+
+def _crash(root: Path, run_id: str, node: str) -> None:
+    """A process that died mid-run: the record stays RUNNING with `node` in flight, no run_finished is logged,
+    and nothing holds the run lock (the lock file may remain; its flock is released)."""
+    runroot = root / ".ego/state/runs" / run_id
+    record = json.loads((runroot / "record.json").read_text())
+    record["final_status"] = "RUNNING"
+    record["node_status"][node] = "RUNNING"
+    record["results"].pop(node, None)
+    (runroot / "record.json").write_text(json.dumps(record))
+    lines = [line for line in (runroot / "progress.jsonl").read_text().splitlines() if '"run_finished"' not in line]
+    (runroot / "progress.jsonl").write_text("\n".join(lines) + "\n")
+
+
+def test_unlocked_running_record_reports_interrupted_with_next_action(tmp_path: Path, monkeypatch):
+    _agent_driver(monkeypatch)
+    execute(tmp_path, _two_node_task(), run_id="c1")
+    _crash(tmp_path, "c1", "b")
+    st = status(tmp_path, "c1")
+    assert st["final_status"] == "INTERRUPTED"
+    assert st["node_status"] == {"a": "PASSED", "b": "RUNNING"}
+    out = compact_result(st, task_file="plan.json")
+    assert out["final_status"] == "INTERRUPTED"
+    assert out["next_action"].startswith("ego work resume c1 --root . --task plan.json")
+    assert "--trust-cli" in out["next_action"] and "--apply" not in out["next_action"]
+
+
+def test_watch_stops_with_run_stopped_for_an_interrupted_run(tmp_path: Path, monkeypatch):
+    _agent_driver(monkeypatch)
+    execute(tmp_path, _two_node_task(), run_id="c2")
+    _crash(tmp_path, "c2", "b")
+    lines: list[str] = []
+    watch(tmp_path, "c2", write=lines.append, poll=0.01)
+    last = json.loads(lines[-1])
+    assert last["event"] == "run_stopped" and last["final_status"] == "INTERRUPTED"
+    assert all(json.loads(line)["event"] != "run_finished" for line in lines)
+
+
+def test_resume_skips_completed_nodes_and_reruns_the_interrupted_one(tmp_path: Path, monkeypatch):
+    ran = _agent_driver(monkeypatch)
+    execute(tmp_path, _two_node_task(), run_id="c3")
+    _crash(tmp_path, "c3", "b")
+    result = execute(tmp_path, _two_node_task(), run_id="c3", resume=True)
+    assert result["final_status"] == "PASSED"
+    assert [n for n, _ in ran] == ["a", "b", "b"]  # `a` had PASSED before the crash: not run again
+
+
+def test_held_run_lock_reports_running_and_refuses_a_concurrent_resume(tmp_path: Path, monkeypatch):
+    ran = _agent_driver(monkeypatch)
+    execute(tmp_path, _two_node_task(), run_id="c4")
+    _crash(tmp_path, "c4", "b")
+    with exclusive_lock(tmp_path / ".ego/locks/c4.lock", blocking=False):  # the live process
+        assert status(tmp_path, "c4")["final_status"] == "RUNNING"
+        before = len(ran)
+        with pytest.raises(EgoError) as refused:
+            execute(tmp_path, _two_node_task(), run_id="c4", resume=True)
+        assert refused.value.code == "RUN_ACTIVE"
+    assert len(ran) == before  # the refused resume executed no node
+    assert status(tmp_path, "c4")["final_status"] == "INTERRUPTED"  # once the lock is released

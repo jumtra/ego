@@ -55,7 +55,7 @@ Or run and apply in one step with `ego work run ... --apply --approve`.
 1. Copies the project to a staging directory under `.ego/state/runs/<run_id>/` (or a Git worktree with `--worktree` / `isolation = "worktree"`).
 2. Runs nodes in dependency order, up to `max_parallel` independent nodes at once.
 3. For each agent node: runs the CLI with the node prompt, checks every changed file against `write_allowlist`, runs the node's `checks`. On failure the node is repaired with the check output as feedback, up to `max_attempts`. A failed node stops only its dependents; independent nodes still finish.
-4. Saves a checkpoint after each wave under the run ID.
+4. Saves the staging files, `record.json` and a checkpoint under the run ID as each node finishes, also inside a parallel wave. A node that passed stays saved even if a sibling fails or the process dies.
 5. With `--apply --approve`, copies the changed files to the project, after confirming none of them changed since the run started (`STALE_BASE` otherwise).
 
 ### Flags of `ego work run` / `ego work resume`
@@ -89,6 +89,13 @@ Output is a compact JSON summary: `run_id`, `final_status`, `applied`, per-node 
 **Continuing a failed run.** Correct only the failed nodes in the task file and run `ego work run --task <file> --from <run_id>`: only the corrected nodes and their dependents run. `ego work resume <run_id>` with the unchanged task reruns failed nodes with their last failure as feedback (for a judge REJECT, the reviewed coder gets the findings). An unfinished run keeps its worktree so it can be continued.
 
 `ego work status <run_id>` shows a run again. The usage line (for example `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`) counts input + output + cache read + cache creation tokens. Costs are the host CLI's own estimates; `cost_known: false` means a host reported none.
+
+### Checkpoints, interruption and locks
+
+Each node is persisted the moment it finishes (`as_completed` in a parallel wave), not at the end of its wave. Its staged files, `record.json` and the checkpoint under the run ID (`ego session list` shows it) are written then, so a run whose process dies keeps every node that had already passed.
+
+- **Interrupted runs.** A run still marked `RUNNING` whose lock is free has lost its process. `ego work status <run_id>` reports `final_status: INTERRUPTED` with the `ego work resume` command as `next_action`, and `ego work watch` ends with a `run_stopped` event. Resume it with `ego work resume <run_id> --task <file> --host <host> --trust-cli`: nodes that PASSED are not run again, and nodes that were running run again.
+- **Run lock.** A process running a managed run holds an exclusive, non-blocking lock on `.ego/locks/<run_id>.lock`. A second start or resume of the same run fails with `RUN_ACTIVE` and leaves the run untouched. `ego session resume --from`, `ego session handoff` and the context-clear instructions refuse a managed checkpoint whose lock is held, and without a task ID they skip it.
 
 ### Progress
 

@@ -55,7 +55,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 1. プロジェクトを `.ego/state/runs/<run_id>/` 配下のステージング用ディレクトリにコピーします（`--worktree` または `isolation = "worktree"` の場合は Git worktree）。
 2. 依存関係の順にノードを実行します。独立したノードは最大 `max_parallel` 件まで同時に実行します。
 3. agent ノードごとに、CLI をノードのプロンプトで実行し、変更された全ファイルが `write_allowlist` に一致するか確認し、ノードの `checks` を実行します。失敗したら、チェックの出力をフィードバックとして修正し、`max_attempts` まで繰り返します。ノードが失敗しても止まるのはその下流だけで、独立したノードは最後まで実行します。
-4. 各 wave の後、run ID の下にチェックポイントを保存します。
+4. ノードが終わるたびに（並列 wave の中でも）、ステージング済みファイル、`record.json`、run ID の下のチェックポイントを保存します。失敗した兄弟ノードがあっても、または process が落ちても、成功したノードは保存されたまま残ります。
 5. `--apply --approve` を指定すると、run の開始後にプロジェクト側の対象ファイルが変更されていないことを確認したうえで、変更ファイルをプロジェクトにコピーします（変更されていれば `STALE_BASE`）。
 
 ### `ego work run` / `ego work resume` のフラグ
@@ -89,6 +89,13 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 **失敗した run の続け方。** 失敗したノードだけをタスクファイルで直し、`ego work run --task <file> --from <run_id>` で実行すると、直したノードとその下流だけが動きます。タスクを変えずに `ego work resume <run_id>` すると、失敗したノードが前回の失敗内容をフィードバックとして受け取って再実行されます（judge の REJECT なら対象の coder に指摘を渡します）。未完了の run の worktree は、続けられるように削除しません。
 
 `ego work status <run_id>` で run を再表示できます。使用量の行（例: `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`）は、入力 + 出力 + キャッシュ読み取り + キャッシュ作成のトークン数です。コストはホスト CLI 自身の見積もりです。`cost_known: false` はホストがコストを報告しなかったことを意味します。
+
+### チェックポイント・中断・ロック
+
+各ノードは終わった瞬間に保存されます（並列 wave では `as_completed` で処理）。wave の終わりまで待ちません。ステージング済みファイル、`record.json`、run ID の下のチェックポイント（`ego session list` に表示されます）がその時点で書かれるため、process が落ちた run でも、それまでに成功したノードは残ります。
+
+- **中断された run。** まだ `RUNNING` と記録されているのに、ロックが解放されている run は、process が途中で失われたものです。`ego work status <run_id>` は `final_status: INTERRUPTED` と、`next_action` に `ego work resume` のコマンドを返します。`ego work watch` は `run_stopped` イベントで終了します。再開するには `ego work resume <run_id> --task <file> --host <host> --trust-cli` を実行します。PASSED のノードは再実行されず、実行中だったノードは再実行されます。
+- **run ロック。** 管理実行を動かしている process は、`.ego/locks/<run_id>.lock` に排他的な非ブロッキングロックを保持します。同じ run を二重に開始・再開すると `RUN_ACTIVE` で失敗し、run には触れません。`ego session resume --from`、`ego session handoff`、コンテキストのクリア案内は、ロックが保持されている管理実行のチェックポイントを拒否します。タスク ID を指定しない場合は、そのチェックポイントを読み飛ばします。
 
 ### 途中経過
 

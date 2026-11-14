@@ -1,6 +1,6 @@
 """Bounded DAG execution: file-level isolation, verified repairs, checkpoint/resume and opt-in apply."""
 from __future__ import annotations
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import copy
 import json
@@ -18,7 +18,7 @@ from .runner import run_agent, run_checked_command
 from .worker import run_worker
 from .util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
                    filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove,
-                   sha256, json_text)
+                   sha256, json_text, is_locked, atomic_bytes)
 from .task_routing import validate_task_context, resolve_routes, build_task_prompt
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 from .context import clip_output
@@ -26,6 +26,8 @@ from .judge import parse_verdict, format_findings
 from .usage import TOKEN_KEYS, tokens_of, summary_line
 
 KINDS={"worker","agent","code","gate","splitter"}
+# Serializes copies out of and writes into a run's staging tree across parallel node threads.
+_STAGING_LOCK=threading.Lock()
 
 class Progress:
     """Append-only per-run event log (`progress.jsonl`), optionally echoed to stderr.
@@ -145,6 +147,13 @@ def _changed(before:dict[str,str],after:dict[str,str])->list[str]:
     return sorted({p for p in before.keys()|after.keys() if before.get(p)!=after.get(p)})
 
 
+def _effective_status(root:Path, record:dict)->str:
+    """A RUNNING record whose run lock is free belongs to a process that died: it was interrupted."""
+    if record.get("final_status")=="RUNNING" and not is_locked(root.resolve()/".ego"/"locks"/f"{record['run_id']}.lock"):
+        return "INTERRUPTED"
+    return str(record.get("final_status") or "UNKNOWN")
+
+
 def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
               autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
               budget_usd: float|None=None, progress:Progress|None=None)->dict:
@@ -168,7 +177,8 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
         nonlocal feedback
         with tempfile.TemporaryDirectory(prefix="ego-node-") as tmp:
             work=Path(tmp)/"src"
-            simple_copy_tree(staging,work)
+            with _STAGING_LOCK:
+                simple_copy_tree(staging,work)
             before=snapshot(work)
             if kind in ("code","gate"):
                 r=run_checked_command(node.get("argv") or node["checks"][0],work,timeout=timeout,allow=cfg.allow_commands)
@@ -299,8 +309,12 @@ def usage_summary(record:dict)->dict:
 
 
 def next_action(result:dict, task_file:str="<task-file>")->str|None:
-    if result.get("final_status")!="PASSED" or result.get("applied") or not result.get("run_id"):return None
-    return (f"ego work resume {result['run_id']} --root . --task {task_file} --host {result.get('host','<host>')} "
+    if not result.get("run_id"):return None
+    task_ref=(task_file if task_file!="<task-file>" else None) or result.get("task_file") or "<task-file>"
+    if result.get("final_status")=="INTERRUPTED":
+        return f"ego work resume {result['run_id']} --root . --task {task_ref} --host {result.get('host','<host>')} --trust-cli"
+    if result.get("final_status")!="PASSED" or result.get("applied"):return None
+    return (f"ego work resume {result['run_id']} --root . --task {task_ref} --host {result.get('host','<host>')} "
             "--trust-cli --apply --approve")
 
 
@@ -341,7 +355,8 @@ def compact_result(result:dict, *, max_files:int=40, task_file:str="<task-file>"
 def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:bool=False,approve:bool=False,
             trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False,
             worktree:bool|None=None,cleanup_worktree:bool|None=None,seed_from:str|None=None,
-            extra_allow:list[str]|None=None,budget_usd:float|None=None,planner_usage:dict|None=None)->dict:
+            extra_allow:list[str]|None=None,budget_usd:float|None=None,planner_usage:dict|None=None,
+            task_file:str|None=None)->dict:
     root=root.resolve();cfg=load_config(root)
     use_worktree = worktree if worktree is not None else (cfg.isolation == "worktree")
     seed_dir=None
@@ -365,7 +380,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
     runroot=root/".ego"/"state"/"runs"/run_id
     staging=runroot/"staging"
     record_path=runroot/"record.json"
-    with exclusive_lock(root/".ego"/"locks"/(run_id+".lock")):
+    with exclusive_lock(root/".ego"/"locks"/(run_id+".lock"),blocking=False,busy_code="RUN_ACTIVE"):
         if resume:
             record=read_json(record_path)
             if not record:raise EgoError("RUN_NOT_FOUND",run_id,3)
@@ -377,6 +392,12 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             if record.get("final_status")=="PASSED" and (not apply or record.get("applied")):
                 return {**{k:v for k,v in record.items() if k!="spec"}, "message":completion_message(record),
                         "checkpoint_path":handoff_relpath(run_id)}
+            if task_file:record["task_file"]=str(task_file)
+            # Nodes that were mid-flight when the process died are not done: they run again.
+            for nid in [k for k,v in record["node_status"].items() if v=="RUNNING"]:record["node_status"].pop(nid)
+            record["final_status"]="RUNNING"
+            write_json(record_path,record)
+            managed_checkpoint(root,record,state="IN_PROGRESS",task_file=record.get("task_file"))
         else:
             if record_path.exists():raise EgoError("RUN_EXISTS",run_id)
             is_git = git_is_repo(root)
@@ -409,7 +430,9 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                     record["node_status"][nid]="PASSED"
                     record["results"][nid]={"id":nid,"status":"PASSED","attempts":[],"carried_from":seed_from}
                 if carried:record["carried"]=carried
+            if task_file:record["task_file"]=str(task_file)
             write_json(record_path,record)
+            managed_checkpoint(root,record,state="IN_PROGRESS",task_file=record.get("task_file"))
         # A resume is a fresh host invocation; carry only the most recent
         # durable, bounded summary, not the previous session transcript.
         handoff = load_checkpoint(root, run_id) if resume else None
@@ -451,52 +474,55 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             if not ready:
                 record["final_status"]="FAILED" if failed else "BLOCKED_DEPENDENCY";break
             wave=ready[:cfg.max_parallel]
-            for n in wave:progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
-            with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-                results=list(pool.map(lambda n:_run_node(n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress),wave))
-            # Atomic wave merge: two nodes may not write the same relative path.
-            edit_owners={}
-            for result in results:
-                for rel in result["edits"]:
-                    if rel in edit_owners:
-                        # Do not leave the record RUNNING forever: nothing of this wave was merged.
-                        record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
-                        raise EgoError("MERGE_CONFLICT",f"{rel} edited by {result['id']} and {edit_owners[rel]}")
-                    edit_owners[rel]=result["id"]
-            for result in results:
-                identifier=result["id"]
-                record["node_status"][identifier]=result["status"]
-                # No bytes in persisted JSON, only references to changed paths
-                record["results"][identifier]={k:v for k,v in result.items() if k!="edits"}
-                extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"))} if result.get("verdict") else {}
-                progress.emit("node_finished",node=identifier,status=result["status"],attempts=len(result["attempts"]),
-                              changed=sorted(result["edits"])[:20],**extra)
-                if result["status"]!="PASSED":failed.append(identifier)
-                else:
-                    for rel,data in result["edits"].items():
-                        path=safe_path(staging,rel)
-                        if data is None:
-                            if path.exists():path.unlink()
-                        else:
-                            from .util import atomic_bytes
-                            atomic_bytes(path,data)
-                pending.pop(identifier)
-            # A rejection with evidence sends only the reviewed coder (and what the judge waits on) back.
-            for result in results:
-                jid=result["id"]
-                jnode=amap[jid]
-                if result.get("verdict")!="REJECT" or jid not in failed or retries.get(jid,0)>=jnode.get("max_retries",1):continue
-                failed.remove(jid)
-                retries[jid]=retries.get(jid,0)+1
-                progress.emit("judge_retry",judge=jid,reviews=jnode["reviews"],retry=retries[jid])
-                feedbacks[jnode["reviews"]]=format_findings(result["findings"])
-                for rid in _between(amap,jnode["reviews"],jid):
-                    record["node_status"].pop(rid,None)
-                    pending[rid]=amap[rid]
+            for n in wave:
+                record["node_status"][n["id"]]="RUNNING"
+                progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
             write_json(record_path,record)
-            # Exactly one tiny file overwrite per completed wave. No LLM or
-            # per-tool hook, and no transcript or tool logs in long-term memory.
-            managed_checkpoint(root,record,state="BLOCKED" if failed else "IN_PROGRESS")
+            edit_owners={}
+            with ThreadPoolExecutor(max_workers=len(wave)) as pool:
+                futures={pool.submit(_run_node,n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress):n["id"] for n in wave}
+                # Each node is persisted as soon as it finishes: a crash or cancel loses only the unfinished nodes.
+                for fut in as_completed(futures):
+                    result=fut.result()
+                    identifier=result["id"]
+                    # Two nodes may not write the same relative path.
+                    for rel in result["edits"]:
+                        if rel in edit_owners:
+                            record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
+                            managed_checkpoint(root,record,state="BLOCKED",task_file=record.get("task_file"))
+                            raise EgoError("MERGE_CONFLICT",f"{rel} edited by {identifier} and {edit_owners[rel]}")
+                        edit_owners[rel]=identifier
+                    record["node_status"][identifier]=result["status"]
+                    # No bytes in persisted JSON, only references to changed paths
+                    record["results"][identifier]={k:v for k,v in result.items() if k!="edits"}
+                    if result["status"]!="PASSED":failed.append(identifier)
+                    else:
+                        with _STAGING_LOCK:
+                            for rel,data in result["edits"].items():
+                                path=safe_path(staging,rel)
+                                if data is None:
+                                    if path.exists():path.unlink()
+                                else:atomic_bytes(path,data)
+                    pending.pop(identifier)
+                    # A rejection with evidence sends only the reviewed coder (and what the judge waits on) back.
+                    if result.get("verdict")=="REJECT" and identifier in failed and retries.get(identifier,0)<amap[identifier].get("max_retries",1):
+                        jnode=amap[identifier]
+                        failed.remove(identifier)
+                        retries[identifier]=retries.get(identifier,0)+1
+                        progress.emit("judge_retry",judge=identifier,reviews=jnode["reviews"],retry=retries[identifier])
+                        feedbacks[jnode["reviews"]]=format_findings(result["findings"])
+                        for rid in _between(amap,jnode["reviews"],identifier):
+                            record["node_status"].pop(rid,None)
+                            pending[rid]=amap[rid]
+                    # Persist this node now: staging, record.json and the handoff checkpoint.
+                    with _STAGING_LOCK:
+                        record["changed_files"]=_changed(record["base_snapshot"],snapshot(staging))
+                        record["usage"]=usage_summary(record)
+                        write_json(record_path,record)
+                        cp=managed_checkpoint(root,record,state="BLOCKED" if failed else "IN_PROGRESS",task_file=record.get("task_file"))
+                    extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"))} if result.get("verdict") else {}
+                    progress.emit("node_finished",node=identifier,status=result["status"],attempts=len(result["attempts"]),
+                                  changed=sorted(result["edits"])[:20],checkpoint_revision=cp["revision"],**extra)
             # A failure stops only its dependents: independent nodes still finish, so a
             # corrected rerun (`--from`) carries them instead of running them for the first time.
         if not pending and not failed:
@@ -514,7 +540,6 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                 if filehash(safe_path(root,rel))!=record["base_snapshot"].get(rel):
                     raise EgoError("STALE_BASE",f"Target changed while run executed: {rel}")
             backups={}
-            from .util import atomic_bytes
             try:
                 for rel in record["changed_files"]:
                     dst=safe_path(root,rel)
@@ -556,7 +581,8 @@ def execute(root:Path, spec:dict, *, run_id:str|None=None, progress_stderr:bool=
         result=_execute(root,spec,progress,run_id=run_id,**kwargs)
     except BaseException as exc:
         # Only a run that exists can be followed; a refused start (RUN_EXISTS, bad task) leaves no log.
-        if (runroot/"record.json").exists() and not (isinstance(exc,EgoError) and exc.code=="RUN_EXISTS"):
+        # A refused start (RUN_EXISTS, RUN_ACTIVE) must not write run_error into the log of the run that is live.
+        if (runroot/"record.json").exists() and not (isinstance(exc,EgoError) and exc.code in ("RUN_EXISTS","RUN_ACTIVE")):
             code=exc.code if isinstance(exc,EgoError) else type(exc).__name__
             progress.emit("run_error",run_id=run_id,code=code,message=clip_output(str(exc),400))
         raise
@@ -569,6 +595,7 @@ def status(root:Path,run_id:str)->dict:
     if not run_id.replace("-","").replace("_","").isalnum():raise EgoError("INVALID_ID",run_id,2)
     data=read_json(root/".ego"/"state"/"runs"/run_id/"record.json")
     if not data:raise EgoError("RUN_NOT_FOUND",run_id,3)
+    data={**data,"final_status":_effective_status(root,data)}
     return {**{k:v for k,v in data.items() if k!="spec"},
             "message":completion_message(data), "checkpoint_path":handoff_relpath(run_id),
             "usage":usage_summary(data),"progress":_progress_tail(root,run_id)}
@@ -601,10 +628,10 @@ def watch(root:Path,run_id:str,*,after:int=0,poll:float=1.0,write=lambda s:print
         record=read_json(runroot/"record.json") if (runroot/"record.json").exists() else None
         if record is None and not path.exists():
             if time.monotonic()-begun>start_wait:raise EgoError("RUN_NOT_FOUND",run_id,3)
-        elif record is not None and record.get("final_status")!="RUNNING":
+        elif record is not None and _effective_status(root,record)!="RUNNING":
             idle_ended+=1
             if idle_ended>=2:
-                write(json.dumps({"event":"run_stopped","final_status":record.get("final_status")},ensure_ascii=False))
+                write(json.dumps({"event":"run_stopped","final_status":_effective_status(root,record)},ensure_ascii=False))
                 return seen
         else:idle_ended=0
         time.sleep(poll)
