@@ -10,13 +10,14 @@ import tempfile
 import time
 from typing import Any
 from .config import load_config
-from .policy import check_write
+from .policy import check_write, check_role_write
 from .runner import run_agent, run_checked_command
 from .util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
                    filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove)
 from .task_routing import validate_task_context, resolve_routes, build_task_prompt
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 from .context import clip_output
+from .judge import parse_verdict, format_findings
 from .usage import TOKEN_KEYS, tokens_of, summary_line
 
 KINDS={"worker","agent","code","gate","splitter"}
@@ -38,7 +39,10 @@ def validate_task(spec: dict) -> list[dict]:
         if n.get("kind","agent") not in ("code","gate") and not isinstance(n.get("prompt"),str):
             raise EgoError("INVALID_TASK", "Agent nodes need prompt", 2)
         if not isinstance(n.get("write_allowlist",[]),list):raise EgoError("INVALID_TASK", "Invalid allowlist", 2)
-        if n.get("kind","agent") not in ("gate",) and not n.get("write_allowlist"):
+        if n.get("role")=="judge" and n.get("write_allowlist"):raise EgoError("INVALID_TASK", f"judge {n['id']} is read-only: no write_allowlist", 2)
+        if n.get("role")=="tester" and any(not str(p).startswith("tests/") for p in n.get("write_allowlist",[])):
+            raise EgoError("INVALID_TASK", f"tester {n['id']} may only write under tests/", 2)
+        if n.get("kind","agent") not in ("gate",) and n.get("role")!="judge" and not n.get("write_allowlist"):
             # Explicitly require scope declarations to avoid broad accidental merges.
             raise EgoError("INVALID_TASK", f"write_allowlist required for {n['id']}",2)
     temp=set();done=set()
@@ -50,7 +54,30 @@ def validate_task(spec: dict) -> list[dict]:
         temp.remove(nid);done.add(nid)
     for nid in ids:visit(nid)
     validate_task_context(spec, nodes)
+    for n in nodes:
+        if n.get("role")!="judge":continue
+        target=n.get("reviews")
+        if target not in _ancestors(amap,n["id"]) or amap[target].get("role")!="coder" or amap[target].get("kind","agent") in ("code","gate"):
+            raise EgoError("INVALID_TASK", f"judge {n['id']} needs reviews: a coder node it depends on", 2)
+        if not any(amap[d].get("kind","agent") in ("gate","code") for d in n.get("depends_on",[])):
+            raise EgoError("INVALID_TASK", f"judge {n['id']} must depend on a gate or code node", 2)
+        if not isinstance(n.get("max_retries",1),int) or not 0<=n.get("max_retries",1)<=2:
+            raise EgoError("INVALID_TASK", f"max_retries of {n['id']} must be 0-2", 2)
     return nodes
+
+
+def _ancestors(amap:dict, nid:str)->set:
+    out=set();stack=list(amap[nid].get("depends_on",[]))
+    while stack:
+        d=stack.pop()
+        if d not in out:out.add(d);stack.extend(amap[d].get("depends_on",[]))
+    return out
+
+
+def _between(amap:dict, target:str, judge:str)->set:
+    """Nodes to rerun after a rejection: the reviewed coder, everything downstream of it that the judge waits on, and the judge."""
+    above=_ancestors(amap,judge)
+    return {target,judge}|{x for x in above if target in _ancestors(amap,x)}
 
 
 def _changed(before:dict[str,str],after:dict[str,str])->list[str]:
@@ -69,9 +96,11 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     if kind in ("code","gate"):
         strategy,routes,fallback_on="single",[],frozenset()
     else:
-        strategy,routes,fallback_on=resolve_routes(node,spec,default_host,default_models=cfg.models)
+        strategy,routes,fallback_on=resolve_routes(node,spec,default_host,default_models=cfg.models,default_roles=cfg.roles)
     attempts=[]
     max_attempts=min(int(node.get("max_attempts",cfg.max_attempts)),cfg.max_attempts)
+    if node.get("role")=="judge":max_attempts=1  # one audit per run; the DAG decides about retries
+    verdict_info={}
     outputs=[]
     def attempt_one(chosen_host:str, chosen_model:str|None, chosen_effort:str|None, iteration:int) -> dict:
         nonlocal feedback
@@ -89,7 +118,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff)
                 try:
                     r=run_agent(chosen_host,prompt,work,timeout,model=chosen_model,effort=chosen_effort,
-                                read_only=kind=="splitter",autonomy=autonomy,isolated=isolated,
+                                read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
                                 max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
                                 lean=cfg.worker_context=="lean",max_budget_usd=budget_usd)
                 except EgoError as exc:
@@ -104,9 +133,15 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     checks.append(cr.as_dict())
                     if cr.status!="PASS":feedback=clip_output(cr.output+"\n"+cr.stderr,4000);break
             ok=(r.status=="PASS" and all(c["status"]=="PASS" for c in checks))
+            if ok and node.get("role")=="judge":
+                verdict_info.update(parse_verdict(r.output))
+                if verdict_info["verdict"]=="INVALID":ok=False;feedback="Judge output has no VERDICT line"
+                elif verdict_info["verdict"]=="REJECT":ok=False;feedback=format_findings(verdict_info["findings"])
             changed=_changed(before,snapshot(work))
             try:
-                for rel in changed:check_write(work,rel,node.get("write_allowlist",[]))
+                for rel in changed:
+                    check_role_write(node.get("role"),rel)
+                    check_write(work,rel,node.get("write_allowlist",[]))
                 if kind=="gate" and changed:raise EgoError("GATE_WRITE","A gate may not modify source")
             except EgoError as exc:
                 ok=False;feedback=str(exc)
@@ -155,8 +190,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
         if r["execution_status"] in ("UNAVAILABLE","TIMEOUT","RATE_LIMIT"):
             break
         feedback=r["record"].get("feedback") or r["record"]["execution"].get("stderr") or "Verification failed"
-    return {"id":node["id"],"status":"PASSED" if success else "FAILED", "attempts":attempts,
-            "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":clip_output(last_output,20000)}
+    out={"id":node["id"],"status":"PASSED" if success else "FAILED", "attempts":attempts,
+         "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":clip_output(last_output,20000)}
+    if verdict_info:out["verdict"]=verdict_info["verdict"];out["findings"]=verdict_info["findings"]
+    return out
 
 
 def usage_summary(record:dict)->dict:
@@ -236,7 +273,7 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
     if apply and not approve:raise EgoError("APPROVAL_REQUIRED", "--apply requires --approve")
     if autonomy=="bypass" and not isolated:
         raise EgoError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)
-    if any(resolve_routes(n,spec,host,default_models=cfg.models)[0]=="compare" for n in nodes if n.get("kind","agent") not in ("gate","code")) and apply:
+    if any(resolve_routes(n,spec,host,default_models=cfg.models,default_roles=cfg.roles)[0]=="compare" for n in nodes if n.get("kind","agent") not in ("gate","code")) and apply:
         raise EgoError("COMPARE_NO_APPLY","Compare never applies unreviewed changes",3)
     run_id=run_id or ident("run")
     if not all(c.isalnum() or c in "-_" for c in run_id):raise EgoError("INVALID_ID",run_id,2)
@@ -287,6 +324,9 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
         start=time.monotonic()
         pending={n["id"]:n for n in nodes if record["node_status"].get(n["id"])!="PASSED"}
         failed=[]
+        amap={n["id"]:n for n in nodes}
+        feedbacks:dict[str,str]={}
+        retries=record.setdefault("judge_retries",{})
         while pending:
             if (runroot/"cancel.flag").exists():
                 record["final_status"]="CANCELLED";break
@@ -302,7 +342,7 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                 record["final_status"]="BLOCKED_DEPENDENCY";break
             wave=ready[:cfg.max_parallel]
             with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-                results=list(pool.map(lambda n:_run_node(n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget),wave))
+                results=list(pool.map(lambda n:_run_node(n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget),wave))
             # Atomic wave merge: two nodes may not write the same relative path.
             edit_owners={}
             for result in results:
@@ -327,6 +367,17 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                             from .util import atomic_bytes
                             atomic_bytes(path,data)
                 pending.pop(identifier)
+            # A rejection with evidence sends only the reviewed coder (and what the judge waits on) back.
+            for result in results:
+                jid=result["id"]
+                jnode=amap[jid]
+                if result.get("verdict")!="REJECT" or jid not in failed or retries.get(jid,0)>=jnode.get("max_retries",1):continue
+                failed.remove(jid)
+                retries[jid]=retries.get(jid,0)+1
+                feedbacks[jnode["reviews"]]=format_findings(result["findings"])
+                for rid in _between(amap,jnode["reviews"],jid):
+                    record["node_status"].pop(rid,None)
+                    pending[rid]=amap[rid]
             write_json(record_path,record)
             # Exactly one tiny file overwrite per completed wave. No LLM or
             # per-tool hook, and no transcript or tool logs in long-term memory.

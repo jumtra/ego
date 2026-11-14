@@ -103,6 +103,16 @@ models = {claude = "sonnet", codex = "auto", opencode = "anthropic/claude-sonnet
 
 These are defaults for managed runs and the planner. A Task JSON or `--model` / `--models` flag overrides them; see [Workflows](workflows.md#choosing-host-and-model). They do not change the model of your interactive CLI session.
 
+### Per-role routing (`roles`)
+
+```toml
+roles = {judge = {host = "agy", model = "gemini-2.5-pro", effort = "high"}, coder = {host = "claude", model = "sonnet"}}
+```
+
+- Keys are `coder`, `tester`, `judge`; each table takes optional `host`, `model`, `effort` (same vocabulary as `hosts` / `models`).
+- Omitted fields fall back to `models` / `hosts`. An effort-only entry keeps the host and model and just sets effort.
+- Precedence: node > Task `defaults.roles` > `roles` > Task `defaults` > `models`. Set with `ego apply --roles '{"judge":{"host":"agy"}}'`.
+
 ## Memory
 
 | Provider | Storage | Notes |

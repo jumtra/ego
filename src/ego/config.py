@@ -11,6 +11,7 @@ HOSTS = ("claude", "codex", "opencode", "agy")
 PROVIDERS = ("codegraph", "graphify", "none")
 MEMORY = ("file", "engram")
 POLICIES = ("strict", "relaxed")
+ROLE_NAMES = ("coder", "tester", "judge")
 VALID_EFFORTS = {"auto", "low", "medium", "high", "xhigh", "max"}
 
 @dataclass
@@ -32,6 +33,7 @@ class Config:
     usage_switch_percent: int = 0  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
     run_yolo: bool = False  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
     models: dict[str, Any] = field(default_factory=dict)
+    roles: dict[str, Any] = field(default_factory=dict)  # role (coder/tester/judge) -> {host, model, effort}; same vocabulary as hosts/models
     isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool = True  # whether to remove the worktree after run
     tests: list[list[str]] = field(default_factory=list)
@@ -84,6 +86,19 @@ class Config:
                     raise EgoError("INVALID_CONFIG", f"Unknown keys in models.{h}: {sorted(extra_keys)}", 2)
             else:
                 raise EgoError("INVALID_CONFIG", f"Model config for host '{h}' must be a string or table", 2)
+        if not isinstance(self.roles, dict):
+            raise EgoError("INVALID_CONFIG", "roles must be a dictionary", 2)
+        for r, c in self.roles.items():
+            if r not in ROLE_NAMES:
+                raise EgoError("INVALID_CONFIG", f"Unsupported role '{r}' in roles (use {ROLE_NAMES})", 2)
+            if not isinstance(c, dict) or set(c) - {"host", "model", "effort"}:
+                raise EgoError("INVALID_CONFIG", f"roles.{r} must be a table with only host/model/effort", 2)
+            if "host" in c and c["host"] not in HOSTS:
+                raise EgoError("INVALID_CONFIG", f"roles.{r}.host must be one of {HOSTS}", 2)
+            if "model" in c and (not isinstance(c["model"], str) or not c["model"].strip() or len(c["model"]) > 128):
+                raise EgoError("INVALID_CONFIG", f"roles.{r}.model must be a non-empty string", 2)
+            if "effort" in c and c["effort"] not in VALID_EFFORTS:
+                raise EgoError("INVALID_CONFIG", f"roles.{r}.effort must be one of {sorted(VALID_EFFORTS)}", 2)
         if any(not isinstance(cmd, list) or not cmd or any(not isinstance(x, str) for x in cmd) for cmd in self.tests):
             raise EgoError("INVALID_CONFIG", "Tests must be argv arrays", 2)
 
@@ -111,6 +126,10 @@ def dump_config(cfg: Config) -> str:
         "#   codex:    \"auto\", \"gpt-5-codex\", etc.\n"
         "#   opencode: \"auto\", \"anthropic/claude-3-5-sonnet\", etc.\n"
         "#   agy:      \"auto\", \"gemini-2.5-pro\", etc.\n"
+        "#\n"
+        "# 役割別の host/model/effort (roles。models と同じ語彙。未指定の項目は models/hosts の設定に従う):\n"
+        "#   roles = {judge = {host = \"agy\", model = \"gemini-2.5-pro\", effort = \"high\"}, coder = {host = \"claude\", model = \"sonnet\"}}\n"
+        "#   優先順位: ノード > タスク defaults.roles > config roles > タスク defaults > config models\n"
         "#\n"
         "# 実行環境の隔離 (isolation, cleanup_worktree):\n"
         "#   isolation = \"copy\"      # ディレクトリコピーによるステージング\n"

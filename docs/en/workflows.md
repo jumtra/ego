@@ -119,7 +119,7 @@ Task-level fields:
 |---|---|
 | `goal`, `instructions` | Passed to every agent node as user instructions |
 | `instructions_file` | Project-relative file with further shared instructions |
-| `defaults` | `host` / `hosts`, `strategy`, `model`, `models`, `fallback_on` for nodes that do not set their own |
+| `defaults` | `host` / `hosts`, `strategy`, `model`, `models`, `fallback_on`, and `roles` (a per-role route, e.g. `{"judge": {"host": "codex"}}`; node beats role beats defaults) for nodes that do not set their own |
 | `nodes` | Non-empty list of nodes |
 
 Node fields:
@@ -133,7 +133,9 @@ Node fields:
 | `write_allowlist` | agent, code | Glob patterns of files the node may change. Required for agent and code nodes |
 | `checks` | all | Commands (argv arrays) that must exit 0 |
 | `argv` | code, gate | The command to run (`argv` or `checks` is required) |
-| `role` | agent | Role label included in the prompt |
+| `role` | agent | `coder`, `tester` or `judge`, enforced. A `tester` may only write under `tests/` (its `write_allowlist` must start with `tests/`). A `judge` is read-only and has no `write_allowlist` |
+| `inputs`, `outputs` | agent | The I/O contract: existing files to read (up to 6) and the files or `path::function` to change. Each output must match `write_allowlist`. Dependent nodes see the prior node's `outputs` |
+| `reviews`, `max_retries` | judge | `reviews` (required) is the `coder` node to send back on a rejection; `max_retries` is 0-2 (default 1) |
 | `intent`, `done_when`, `non_goals`, `assumptions`, `provides` | agent | Why the stage exists, acceptance criteria, what not to do, facts relied on, what later stages depend on. Short strings (`intent`) or lists of up to 6 strings of up to 400 characters |
 | `requirement`, `steps` | agent | 5W1H (`who` `what` `when` `where` `why` `how`, strings up to 400 characters) and 1-10 ordered steps the worker follows exactly as written |
 | `host` / `hosts`, `strategy`, `model` / `models`, `fallback_on` | agent | Routing, see below |
@@ -141,6 +143,10 @@ Node fields:
 | `max_attempts`, `max_turns`, `timeout_seconds` | all | Per-node limits, capped by the config |
 
 Commands are argv arrays, never shell strings, and must start with a name in `allow_commands`.
+
+### Judge gate
+
+A `judge` node must depend on at least one `gate` or `code` node, so it runs only after the deterministic checks pass. It ends with `VERDICT: APPROVE` or `VERDICT: REJECT`; each finding must be `- path:line: issue`, and a finding without that evidence is discarded (a rejection left with no evidence counts as approval). On a rejection with evidence, only the reviewed `coder` node and the nodes the judge waits on are rerun, with the findings as feedback, up to `max_retries` times. The rest of the plan is not replanned. After that the judge node fails.
 
 ### Choosing host and model
 

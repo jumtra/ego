@@ -28,6 +28,15 @@ def check_command(argv: list[str], allow: list[str], policy_mode: str = "strict"
         raise EgoError("COMMAND_DENIED", "Inline Python code is forbidden in check commands")
 
 
+ROLES = ("coder", "tester", "judge")
+
+
+def check_role_write(role, rel: str) -> None:
+    import fnmatch
+    if role == "judge": raise EgoError("ROLE_READ_ONLY", rel)
+    if role == "tester" and not fnmatch.fnmatch(rel, "tests/*"): raise EgoError("ROLE_OUT_OF_SCOPE", rel)
+
+
 def check_write(root: Path, rel: str, allow: list[str] | None = None) -> Path:
     import fnmatch
     p = safe_path(root, rel)

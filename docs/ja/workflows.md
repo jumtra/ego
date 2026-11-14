@@ -119,7 +119,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 |---|---|
 | `goal`、`instructions` | すべての agent ノードにユーザー指示として渡される |
 | `instructions_file` | プロジェクト相対のパス。共有指示を追加で記述したファイル |
-| `defaults` | `host` / `hosts`、`strategy`、`model`、`models`、`fallback_on`。ノードが独自に設定しない場合の既定値 |
+| `defaults` | `host` / `hosts`、`strategy`、`model`、`models`、`fallback_on`、`roles`（役割ごとの経路。例 `{"judge": {"host": "codex"}}`。優先順位は node、role、defaults）。ノードが独自に設定しない場合の既定値 |
 | `nodes` | 空でないノードのリスト |
 
 ノードのフィールド:
@@ -133,7 +133,9 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `write_allowlist` | agent、code | ノードが変更してよいファイルの glob パターン。agent と code では必須 |
 | `checks` | すべて | 終了コード 0 で成功すべきコマンド（argv 配列） |
 | `argv` | code、gate | 実行するコマンド（`argv` か `checks` のどちらかが必要） |
-| `role` | agent | プロンプトに含まれる役割ラベル |
+| `role` | agent | `coder` / `tester` / `judge`（権限を強制）。`tester` は `tests/` 配下のみ書き込める（`write_allowlist` は `tests/` で始まる必要がある）。`judge` は読み取り専用で `write_allowlist` を持たない |
+| `inputs`、`outputs` | agent | I/O 契約。読むべき既存ファイル（最大 6 件）と、変更するファイルまたは `path::関数名`。各 output は `write_allowlist` に一致する必要がある。依存先ノードには前段の `outputs` が渡る |
+| `reviews`、`max_retries` | judge | `reviews`（必須）は却下時に差し戻す `coder` ノード。`max_retries` は 0〜2（既定 1） |
 | `intent`、`done_when`、`non_goals`、`assumptions`、`provides` | agent | そのステージの理由、受け入れ基準、やらないこと、依拠する事実、後続が必要とするもの。短い文字列（`intent`）か、各 400 文字以内の文字列を最大 6 件含むリスト |
 | `requirement`、`steps` | agent | 5W1H（`who` `what` `when` `where` `why` `how`、各 400 文字以内）と、ワーカーが書かれたとおりに実行する 1〜10 件の手順 |
 | `host` / `hosts`、`strategy`、`model` / `models`、`fallback_on` | agent | ルーティング。下記参照 |
@@ -141,6 +143,10 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `max_attempts`、`max_turns`、`timeout_seconds` | すべて | ノードごとの上限。設定値で頭打ちになる |
 
 コマンドは argv 配列で指定します。シェル文字列は使えません。また、必ず `allow_commands` にある名前で始まる必要があります。
+
+### Judge ゲート
+
+`judge` ノードは `gate` または `code` ノードに最低 1 つ依存する必要があり、決定論的チェックが通った後にだけ実行されます。出力の最後は `VERDICT: APPROVE` か `VERDICT: REJECT` です。指摘は `- path:line: 内容` の形式で、証拠（パスと行）のない指摘は破棄されます（証拠が残らない REJECT は APPROVE 扱い）。証拠付きの REJECT では、対象の `coder` ノードと judge が待つノードだけを、指摘をフィードバックにして最大 `max_retries` 回やり直します。計画全体は再計画しません。上限を超えると judge ノードが失敗します。
 
 ### ホストとモデルの選び方
 
