@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .util import EgoError, exclusive_lock, now, read_json, redact, safe_path, write_json
+from .util import EgoError, exclusive_lock, is_locked, now, read_json, redact, safe_path, write_json
 
 SCHEMA = 1
 MAX_ITEM_CHARS = 350
@@ -60,6 +60,17 @@ def _notes(values: list[str] | tuple[str, ...] | None) -> list[str]:
 
 def handoff_relpath(task_id: str) -> str:
     return ".ego/memory/handoffs/" + _id(task_id) + ".json"
+
+
+def _run_lock_held(root: Path, task_id: str) -> bool:
+    """True while a live run process holds its OS flock (a RUNNING record without it is interrupted)."""
+    return is_locked(safe_path(root.resolve(), f".ego/locks/{_id(task_id)}.lock"))
+
+
+def _guard_run_active(root: Path, task_id: str) -> None:
+    record = load_checkpoint(root, task_id)
+    if record is not None and record.get("source") == "managed" and _run_lock_held(root, task_id):
+        raise EgoError("RUN_ACTIVE", f"Run {task_id} is currently active in another process", 3)
 
 
 def load_checkpoint(root: Path, task_id: str) -> dict[str, Any] | None:
@@ -583,9 +594,15 @@ def resolve_task(root: Path, task_id: str | None, from_host: str | None = None) 
     if from_host is not None and from_host not in HOST_CLEAR:
         raise EgoError("UNKNOWN_HOST", f"Unsupported interactive host: {from_host}", 2)
     if task_id:
+        _guard_run_active(root, _id(task_id))
         return _id(task_id)
-    for item in list_checkpoints(root):
+    items = list_checkpoints(root)
+    for item in items:
         if item["source"] == "interactive" and from_host in (None, item["host"]):
+            return item["task_id"]
+    for item in items:
+        if (item["source"] == "managed" and from_host in (None, item["host"])
+                and not _run_lock_held(root, item["task_id"])):
             return item["task_id"]
     if from_host:
         raise EgoError("HANDOFF_MISSING", f"No open checkpoint saved by {from_host}. It must be saved there first "
@@ -647,6 +664,7 @@ def handoff(root: Path, task_id: str | None, to_host: str, from_host: str | None
 def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dict[str, Any]:
     if host not in HOST_CLEAR:
         raise EgoError("UNKNOWN_HOST", f"Unsupported interactive host: {host}", 2)
+    _guard_run_active(root, task_id)
     record = load_checkpoint(root, task_id)
     if record is None:
         raise EgoError("HANDOFF_MISSING", "Save a checkpoint before clearing context", 3)
@@ -669,30 +687,39 @@ def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dic
     }
 
 
-def managed_checkpoint(root: Path, record: dict[str, Any], *, state: str) -> dict[str, Any]:
+def managed_checkpoint(root: Path, record: dict[str, Any], *, state: str, task_file: str | None = None) -> dict[str, Any]:
     """Persist one compact checkpoint at a DAG wave boundary or at termination."""
     spec = record.get("spec", {})
     nodes = spec.get("nodes", [])
     statuses = record.get("node_status", {})
     done = [f"{n['id']} ({statuses[n['id']]})" for n in nodes if statuses.get(n["id"]) == "PASSED"]
     remaining = [n["id"] for n in nodes if statuses.get(n["id"]) != "PASSED"]
-    blocks = [f"{nid}: {s}" for nid, s in statuses.items() if s != "PASSED"]
+    blocks = [f"{nid}: {s}" for nid, s in statuses.items() if s not in ("PASSED", "RUNNING")]
     paths: list[str] = []
     for data in record.get("results", {}).values():
         paths.extend(data.get("changed", []))
     paths = sorted(set(paths))[:MAX_NOTES]
-    if state == "COMPLETED":
-        remaining = []
+    host = record.get("host") if record.get("host") in HOST_CLEAR else None
+    next_steps = remaining
+    if state in ("COMPLETED", "VERIFIED"):
+        next_steps = []
+    elif state in ("IN_PROGRESS", "BLOCKED"):
+        task_ref = record.get("task_file") or task_file or "<task-file>"
+        host_ref = host or "<host>"
+        resume_cmd = f"ego work resume {record['run_id']} --root . --task {task_ref} --host {host_ref} --trust-cli"
+        next_steps = ([resume_cmd, *remaining] if record.get("run_id") else remaining)
     return save_checkpoint(
         root, record["run_id"], goal=spec.get("goal") or "Finish the declared DAG task",
-        completed=done[:MAX_NOTES], next_steps=remaining[:MAX_NOTES], blockers=blocks[:MAX_NOTES],
+        completed=done[:MAX_NOTES], next_steps=next_steps[:MAX_NOTES], blockers=blocks[:MAX_NOTES],
         evidence=[f"run: {record['run_id']}", *[f"file: {path}" for path in paths]][:MAX_NOTES],
-        status=state, source="managed",
+        status=state, source="managed", host=host,
     )
 
 
 def completion_message(record: dict[str, Any]) -> str:
     state = record.get("final_status")
+    if state == "INTERRUPTED":
+        return "中断（再開可能）：実行が途中で中断されました。ego work resume で完了済みノードを引き継いで再開できます。"
     if state == "PASSED" and record.get("applied"):
         return "完了：変更を適用し、指定された検証に合格しました。"
     if state == "PASSED":

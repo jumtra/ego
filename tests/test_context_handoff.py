@@ -12,7 +12,7 @@ from ego.session import (save_checkpoint, load_checkpoint, resume_prompt,
 from ego.task_routing import build_task_prompt
 from ego.templates import skill_md, instruction_block
 from ego.config import Config
-from ego.util import EgoError
+from ego.util import EgoError, exclusive_lock
 from ego.work import execute
 
 
@@ -350,3 +350,40 @@ def test_continue_another_clis_work_inside_the_open_cli(tmp_path: Path, monkeypa
     assert main(["session", "resume", "feat-7", "--root", root]) == 0
     assert json.loads(capsys.readouterr().out)["clear_command"] == "/clear"
     assert "session resume --from" in instruction_block(Config())
+
+
+def _managed(root: Path, run_id: str) -> None:
+    save_checkpoint(root, run_id, goal="Run the DAG", completed=["a (PASSED)"], next_steps=["b"],
+                    status="IN_PROGRESS", source="managed", host="claude")
+
+
+def test_locked_managed_checkpoint_is_skipped_by_default_and_refused_by_name(tmp_path: Path):
+    from ego.session import handoff, pickup, resolve_task
+    _managed(tmp_path, "free-run")
+    _managed(tmp_path, "locked-run")  # saved last, so it is the newest
+    with exclusive_lock(tmp_path / ".ego/locks/locked-run.lock", blocking=False):  # its live run process
+        assert resolve_task(tmp_path, None) == "free-run"
+        with pytest.raises(EgoError) as pick:
+            pickup(tmp_path, "locked-run", "claude")
+        assert pick.value.code == "RUN_ACTIVE"
+        with pytest.raises(EgoError) as hand:
+            handoff(tmp_path, "locked-run", "codex")
+        assert hand.value.code == "RUN_ACTIVE"
+    # Once the lock is free the same checkpoint is an unlocked, interrupted run that can be picked up.
+    assert pickup(tmp_path, "locked-run", "claude")["task_id"] == "locked-run"
+
+
+def test_unlocked_interrupted_managed_checkpoint_is_picked_when_newest(tmp_path: Path):
+    from ego.session import resolve_task
+    _managed(tmp_path, "older-run")
+    _managed(tmp_path, "interrupted-run")  # no live process holds its lock: interrupted
+    assert resolve_task(tmp_path, None) == "interrupted-run"
+
+
+def test_only_locked_managed_checkpoints_leave_nothing_to_resolve(tmp_path: Path):
+    from ego.session import resolve_task
+    _managed(tmp_path, "locked-run")
+    with exclusive_lock(tmp_path / ".ego/locks/locked-run.lock", blocking=False):
+        with pytest.raises(EgoError) as missing:
+            resolve_task(tmp_path, None)
+        assert missing.value.code == "HANDOFF_MISSING"

@@ -1,7 +1,14 @@
 """Progress journal, `ego work watch`, and the richer compact summary of a managed run."""
 import json
+import re
 import subprocess
 import sys
+import time
+from pathlib import Path
+
+from ego import work
+from ego.runner import RunResult
+from ego.session import load_checkpoint
 from ego.work import compact_result, execute, status, watch
 
 
@@ -63,3 +70,42 @@ def test_cli_run_with_run_id_echoes_events_to_stderr(project):
     assert (project / ".ego/state/runs/r5/record.json").exists()
     assert '"event": "run_started"' in p.stderr
     assert json.loads(p.stdout)["nodes"]["a"]["status"] == "PASSED"
+
+
+def test_parallel_wave_persists_a_passed_node_before_its_failing_sibling_ends(project, monkeypatch):
+    """Node a passes, node b fails in the same wave. b waits until a is on disk (staging, record.json and the
+    managed checkpoint); that proves a was saved as it finished, not at the end of the wave."""
+    seen = {}
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        nid = re.search(r"NODE (\S+)", prompt).group(1)
+        if nid == "a":
+            (Path(cwd) / "a.txt").write_text("A")
+        else:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                try:
+                    record = json.loads((project / ".ego/state/runs/w1/record.json").read_text())
+                except (OSError, ValueError):
+                    record = {}
+                handoff = load_checkpoint(project, "w1")
+                if record.get("node_status", {}).get("a") == "PASSED" and handoff and "a (PASSED)" in handoff["completed"]:
+                    seen["a_saved_during_wave"] = True
+                    break
+                time.sleep(0.01)
+        if nid == "a":
+            return RunResult("PASS", "ok", "", 0, 0.0, host, cost_usd=0.0)
+        return RunResult("FAIL", "boom", "", 1, 0.0, host, cost_usd=0.0)
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    spec = {"goal": "g", "nodes": [
+        {"id": "a", "prompt": "NODE a", "write_allowlist": ["*.txt"], "max_attempts": 1},
+        {"id": "b", "prompt": "NODE b", "write_allowlist": ["*.txt"], "max_attempts": 1}]}
+    result = execute(project, spec, run_id="w1")
+    assert result["final_status"] == "FAILED"
+    assert result["node_status"] == {"a": "PASSED", "b": "FAILED"}
+    assert seen.get("a_saved_during_wave") is True, "node a was not persisted before node b finished"
+    assert (project / ".ego/state/runs/w1/staging/a.txt").read_text() == "A"
+    record = json.loads((project / ".ego/state/runs/w1/record.json").read_text())
+    assert record["node_status"]["a"] == "PASSED"
+    assert "a (PASSED)" in load_checkpoint(project, "w1")["completed"]

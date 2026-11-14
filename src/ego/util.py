@@ -134,16 +134,45 @@ def git_dirty(root: Path) -> bool:
 
 
 @contextlib.contextmanager
-def exclusive_lock(path: Path):
-    """Simple process-exclusivity lock; locks are not silently stolen."""
+def exclusive_lock(path: Path, *, blocking: bool = True, busy_code: str = 'RUN_ACTIVE'):
+    """Simple process-exclusivity lock; locks are not silently stolen.
+
+    blocking=False fails fast with EgoError(busy_code) when another process holds the lock.
+    """
     import fcntl
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if blocking:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(fd)
+                fd = -1
+                raise EgoError(busy_code, f'Lock held by another process: {path.name}', 3)
         yield
     finally:
+        if fd >= 0:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+
+def is_locked(path: Path) -> bool:
+    """True when another open file description currently holds an exclusive flock on path."""
+    import fcntl
+    if not path.exists():
+        return False
+    fd = os.open(path, os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
         fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
         os.close(fd)
 
 
