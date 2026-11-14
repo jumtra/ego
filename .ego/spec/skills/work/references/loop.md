@@ -8,6 +8,8 @@ For a goal whose completion a command can prove (tests pass, a build succeeds, a
 
 `ego work loop --root . --goal "<what and why>" --done-check "<command>" --host <host> --scope '<paths>' --max-iterations 3 --max-budget-usd <n> --execute --trust-cli`
 
+With a plan the user approved, add `--task <task-file>` (the goal defaults to the task's): that plan runs as the first iteration, and the planner is called only after it fails. A replan departs from the approved plan, so get the user's agreement first, or use `ego work run --task` instead.
+
 The first iteration is one direct worker repaired against the done-checks; the planner is called only after that fails (`--plan-first` plans up front for goals that clearly need decomposition). Every iteration runs the done-checks in a staged copy. A failed iteration replans from a bounded record (failed node, clipped check output, changed paths), never from a transcript, and verified work carries into the next iteration. Repeat `--done-check` for several commands.
 
 Read `status` in the compact output:

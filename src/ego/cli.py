@@ -251,11 +251,17 @@ def _cmd_work(args):
             if not isinstance(argv,list) or not argv or not all(isinstance(x,str) for x in argv):
                 raise EgoError("INVALID_DONE_CHECK","Each --done-check is a command or a JSON argv array",2)
             checks.append(argv)
-        result=run_loop(root,args.goal,done_checks=checks,host=args.host,
+        task=None
+        if args.task:
+            task=read_json(Path(args.task))
+            if not task:raise EgoError("TASK_MISSING",str(args.task),3)
+        goal=args.goal or (task or {}).get("goal")
+        if not goal:raise EgoError("INVALID_GOAL","--goal is required unless --task carries a goal",2)
+        result=run_loop(root,goal,done_checks=checks,host=args.host,
                         scope=args.scope.split(",") if args.scope else None,max_iterations=args.max_iterations,
                         max_budget_usd=args.max_budget_usd,max_wall_seconds=args.max_wall_seconds,
                         trust_cli=args.trust_cli,execute_planner=args.execute,apply=args.apply,approve=args.approve,
-                        autonomy=args.autonomy,isolated=args.attest_external_sandbox,plan_first=args.plan_first)
+                        autonomy=args.autonomy,isolated=args.attest_external_sandbox,plan_first=args.plan_first,task=task)
         _print(result);return 0 if result["status"] in SUCCESS else 5
     if args.action=="plan":
         from .planner import plan_work
@@ -657,7 +663,8 @@ def build_parser()->argparse.ArgumentParser:
     s.add_parser("native");r=s.add_parser("status");r.add_argument("run_id");r.add_argument("--verbose",action="store_true",help="Print the full run record")
     r=s.add_parser("cancel");r.add_argument("run_id",help="Run ID or loop ID")
     r=s.add_parser("loop",help="Plan, execute, evaluate and replan until the done-checks pass or a limit is hit")
-    r.add_argument("--goal",required=True)
+    r.add_argument("--goal",help="Defaults to the goal of --task")
+    r.add_argument("--task",help="Approved task JSON run as the first iteration instead of a direct attempt or a new plan")
     r.add_argument("--done-check",action="append",required=True,help="Command that exits 0 when the goal holds; repeatable. A command line or a JSON argv array")
     r.add_argument("--host",choices=["mock","claude","codex","opencode"],default="mock");r.add_argument("--scope")
     r.add_argument("--max-iterations",type=int,default=3);r.add_argument("--max-budget-usd",type=float);r.add_argument("--max-wall-seconds",type=int)
