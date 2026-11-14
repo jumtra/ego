@@ -1,6 +1,7 @@
 """CLI-first entrypoint. Optimization modules are never imported on the normal path."""
 from __future__ import annotations
 import argparse
+import difflib
 import json
 import os
 from pathlib import Path
@@ -788,6 +789,22 @@ def build_parser()->argparse.ArgumentParser:
     sp=sub.add_parser("bench");common(sp);sp.add_argument("--trials",type=int,default=10);sp.set_defaults(func=_cmd_bench)
     return p
 
+def _correct_update_typo(args_list:list[str],parser:argparse.ArgumentParser)->None:
+    """Normalize close typos of 'update' (e.g. 'udpate') to 'update'."""
+    if not args_list or args_list[0].startswith("-"):
+        return
+    cmd=args_list[0]
+    choices:set[str]=set()
+    for action in parser._actions:
+        if isinstance(action,argparse._SubParsersAction):
+            choices.update(action.choices.keys())
+    if cmd in choices or "update" not in choices:
+        return
+    if difflib.get_close_matches(cmd,["update"],n=1,cutoff=0.75):
+        print(f"ego: assuming 'update' for typo '{cmd}'",file=sys.stderr)
+        args_list[0]="update"
+
+
 def main(argv:list[str]|None=None)->int:
     parser=build_parser()
     # Accept --root both directly after the command and after a nested action.
@@ -807,6 +824,7 @@ def main(argv:list[str]|None=None)->int:
         pair=args_list[idx:idx+2];del args_list[idx:idx+2]
         if args_list:args_list[1:1]=pair
         else:args_list.extend(pair)
+    _correct_update_typo(args_list,parser)
     args=parser.parse_args(args_list)
     if passthrough:
         if not hasattr(args,"args"):parser.error(f"unrecognized arguments: -- {' '.join(passthrough)}")

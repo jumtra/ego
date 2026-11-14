@@ -144,3 +144,17 @@ def test_update_from_a_checkout_then_syncs_registered_projects(tmp_path: Path, m
     assert main(["update", "--yes", "--sync", "--root", str(root)]) == 0
     assert json.loads(capsys.readouterr().out)["project_sync"]["status"] == "APPLIED"
     assert main(["update", "--sync", "--root", str(tmp_path)]) == 3
+
+
+def test_update_typo_is_accepted(tmp_path: Path, monkeypatch, capsys):
+    root = _apply(tmp_path / "a", clear_suggest_tokens=150000)
+    _age(root)
+    monkeypatch.setattr(selfupdate, "self_update", lambda *a, **k: {"mode": "git", "update_available": False})
+    assert main(["udpate", "--yes", "--sync-all"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["projects_sync"]["counts"] == {"APPLIED": 1}
+    assert "assuming 'update' for typo 'udpate'" in captured.err
+    assert main(["--root", str(root), "updae", "--yes", "--sync"]) == 0
+    assert json.loads(capsys.readouterr().out)["project_sync"]["status"] == "APPLIED"
+    with pytest.raises(SystemExit):
+        main(["totallyunknown"])
