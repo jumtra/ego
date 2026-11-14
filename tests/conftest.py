@@ -7,6 +7,9 @@ from ego.install import apply_install
 def _isolated_ego_home(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("EGO_HOME", str(tmp_path_factory.mktemp("ego-home")))
     monkeypatch.delenv("EGO_RUN", raising=False)  # never inherit an outer `ego run` (its hooks stand down)
+    monkeypatch.delenv("EGO_RUN_ID", raising=False)
+    monkeypatch.delenv("EGO_RUN_SESSION", raising=False)
+    monkeypatch.delenv("EGO_RUN_STATE", raising=False)
 
 @pytest.fixture
 def project(tmp_path):
