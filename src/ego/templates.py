@@ -10,9 +10,11 @@ LEGACY_WORK_HASHES = {"b9369f340f37af0f731e8eb03f0c8e1e6529be80ce1b63941bada4b6e
                       "f14c28b7aa27cb52873960a1efda8b6618e6e9c1f006ce3c246c4ce8dcad3844",
                       "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a",
                       "645c9862f86b9ea4e7db50885ceee9bd10fd98de3225a96f822878b212cd5039"}
-# work-plan v0.0.13 to v0.0.15, before execution was delegated to the managed engine.
+# work-plan v0.0.13 to v0.0.15, before execution was delegated to the managed engine;
+# v0.0.16 to v0.0.17, before a corrected plan continued a failed run with `--from`.
 LEGACY_WORK_PLAN_HASHES = {"c57d458fc57843784508be4b6d58b771cc178aa8fbf9d541be49886b141e2306",
-                           "d607c0c44245008254c0d4c5e1fe061fcc660946fd9a8db53121d81861cb6db0"}
+                           "d607c0c44245008254c0d4c5e1fe061fcc660946fd9a8db53121d81861cb6db0",
+                           "ed88f6a3ac5c1c1372527f1e47c64e1ce393060ce547b6f954fae57a6b2be949"}
 LEGACY_SKILL_HASHES = {"work": LEGACY_WORK_HASHES, "work-plan": LEGACY_WORK_PLAN_HASHES}
 
 SKILLS = {
@@ -98,6 +100,7 @@ Do not edit project files yourself. ego's engine runs every node in an isolated 
 5. After `run_finished`, read `ego work status run-<slug> --root .` once for `nodes`, `failures`, `changed_files` and `next_action`.
 6. A PASSED run is **検証済み・未適用**. Show the changed files and ask for approval to apply. After approval run the `next_action` command, then inspect `git diff`.
 7. If a node fails, a step cannot be done as written, needs a file outside its Where, or one of the node's assumptions turns out false, stop and ask instead of improvising: explain, and get approval before changing the plan or rerunning.
+8. After approval, correct only the failed nodes in the task file, keep the others unchanged, and rerun step 2's command with `--run-id run-<slug>-2 --from run-<slug>`: unchanged verified nodes are not run again.
 
 Use `ego work loop --task` (`.claude/skills/work/references/loop.md`) instead only when a command proves the whole goal and the user agreed that a failed iteration may be replanned.
 
@@ -114,8 +117,9 @@ For large or cross-component work needing dependency scheduling or several hosts
 
 1. Inspect the project and choose an available authenticated host and a narrow write scope. If the user approved a `work-plan` graph, write that plan as the task file (field mapping in the `work-plan` skill) and do not plan again. Otherwise run `ego work plan --root . --goal "<goal>" --host <host> --scope '<paths>' --execute --out <task-file>`. This invokes an external planning CLI; respect existing execution permissions. Do not use mock for real implementation.
 2. Read the generated task JSON. Verify prompts, dependencies, host/model routes, write_allowlist and checks. Node prompts say what to achieve; `requirement` (5W1H) and `steps` say exactly how. Check that every step names the file, the function or section and the exact change, and rewrite vague steps before running. Each node carries `intent` (one sentence: why the goal needs it); agent nodes carry `done_when` (observable acceptance criteria) and, only where they apply, `non_goals`, `assumptions` and `provides` (what dependent nodes rely on). Keep them short, correct any that misread the user's intent, and put answers the user gave during clarification into task-level `instructions` so every worker sees them. Add focused test commands as argv arrays in each node's checks, and a final gate with integration checks depending on all implementation nodes. Explain the short plan in conversation and obtain any required approval.
-3. Run `ego work run --root . --task <task-file> --host <host> --trust-cli` (add `--run-id <id>` so `ego work watch <id>` streams JSON-line events and `ego work status <id>` shows a `progress` tail while it runs). The output is a compact summary: run_id, final_status, node_status, changed_files, clipped failures and usage. Open `record_path` or pass `--verbose` only when the summary is not enough. A PASSED run without applied=true is verified but unapplied. Report failures; do not apply failed runs.
-4. After reviewing a PASSED result and obtaining authorization to apply, run `ego work resume <run-id> --root . --task <task-file> --host <host> --trust-cli --apply --approve`. Keep the task JSON unchanged. Never infer approval from a successful test or bypass STALE_BASE. Inspect the applied diff and report evidence.
+3. Run `ego work run --root . --task <task-file> --host <host> --trust-cli` (add `--run-id <id>` so `ego work watch <id>` streams JSON-line events and `ego work status <id>` shows a `progress` tail while it runs). The output is a compact summary: run_id, final_status, node_status, changed_files, clipped failures and usage. Open `record_path` or pass `--verbose` only when the summary is not enough. A PASSED run without applied=true is verified but unapplied. Report failures; do not apply failed runs. A failure stops only the nodes that depend on it; independent nodes still finish.
+4. To fix a failed run, correct only the failed nodes in the task file and run `ego work run ... --from <failed-run-id>`: verified agent nodes with an unchanged definition and upstream are carried, not run again. `ego work resume <run-id>` with the unchanged task retries failed nodes with their last failure as feedback.
+5. After reviewing a PASSED result and obtaining authorization to apply, run `ego work resume <run-id> --root . --task <task-file> --host <host> --trust-cli --apply --approve`. Keep the task JSON unchanged. Never infer approval from a successful test or bypass STALE_BASE. Inspect the applied diff and report evidence.
 
 Managed worker prompts describe only their assigned implementation and tests. Do not recursively invoke /work or start another managed run from a worker. Workers start in fresh sessions and, by default, without the user's MCP servers (`worker_context = "lean"` in `.ego/config.toml`).
 """,

@@ -102,6 +102,22 @@ def test_v0015_work_plan_skill_refreshes(tmp_path: Path):
     assert canonical.read_text() == skill_md('work-plan')
 
 
+def test_v0017_work_plan_skill_refreshes_to_rerun_only_corrected_nodes(tmp_path: Path):
+    from ego.templates import LEGACY_WORK_PLAN_HASHES, WORK_REFERENCES
+    cfg = Config()
+    apply_install(tmp_path, cfg)
+    canonical = tmp_path / '.ego/spec/skills/work-plan/SKILL.md'
+    old = (Path(__file__).parent / 'fixtures/work-plan-v0017.md').read_text()
+    assert sha256(old) in LEGACY_WORK_PLAN_HASHES and '--from' not in old
+    canonical.write_text(old)
+    ownership = json.loads((tmp_path / '.ego/ownership.json').read_text())
+    ownership['files']['.ego/spec/skills/work-plan/SKILL.md'] = sha256(old)
+    write_json(tmp_path / '.ego/ownership.json', ownership)
+    apply_install(tmp_path, cfg)
+    assert canonical.read_text() == skill_md('work-plan')
+    assert '--from run-<slug>' in skill_md('work-plan') and '--from <failed-run-id>' in WORK_REFERENCES['managed']
+
+
 def test_work_plan_executes_through_managed_with_progress():
     from ego.templates import WORK_REFERENCES
     plan = skill_md('work-plan')

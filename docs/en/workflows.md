@@ -54,7 +54,7 @@ Or run and apply in one step with `ego work run ... --apply --approve`.
 
 1. Copies the project to a staging directory under `.ego/state/runs/<run_id>/` (or a Git worktree with `--worktree` / `isolation = "worktree"`).
 2. Runs nodes in dependency order, up to `max_parallel` independent nodes at once.
-3. For each agent node: runs the CLI with the node prompt, checks every changed file against `write_allowlist`, runs the node's `checks`. On failure the node is repaired with the check output as feedback, up to `max_attempts`.
+3. For each agent node: runs the CLI with the node prompt, checks every changed file against `write_allowlist`, runs the node's `checks`. On failure the node is repaired with the check output as feedback, up to `max_attempts`. A failed node stops only its dependents; independent nodes still finish.
 4. Saves a checkpoint after each wave under the run ID.
 5. With `--apply --approve`, copies the changed files to the project, after confirming none of them changed since the run started (`STALE_BASE` otherwise).
 
@@ -71,6 +71,7 @@ Or run and apply in one step with `ego work run ... --apply --approve`.
 | `--autonomy <mode>` | `auto` (default), `safe` (plan/read-only modes), `bypass` (skip permissions; requires `--attest-external-sandbox`) |
 | `--worktree` / `--keep-worktree` | Use a Git worktree; keep it afterwards |
 | `--run-id <id>` | (`run` only) Fixed run ID, so `ego work watch <id>` can follow the run |
+| `--from <run_id>` | (`run` only) Continue a failed run with a corrected task: start from its verified changes and skip its verified agent nodes whose definition and upstream are unchanged |
 | `--verbose` | Print the full run record instead of the summary |
 
 ### Results
@@ -85,6 +86,8 @@ Output is a compact JSON summary: `run_id`, `final_status`, `applied`, per-node 
 | `BLOCKED_DEPENDENCY`, `MERGE_CONFLICT` | A dependency failed, or parallel nodes edited the same file incompatibly | 5 |
 | `TIMEOUT`, `BUDGET_EXHAUSTED`, `CANCELLED` | A limit was reached or `ego work cancel <run_id>` was used | 5 |
 
+**Continuing a failed run.** Correct only the failed nodes in the task file and run `ego work run --task <file> --from <run_id>`: only the corrected nodes and their dependents run. `ego work resume <run_id>` with the unchanged task reruns failed nodes with their last failure as feedback (for a judge REJECT, the reviewed coder gets the findings). An unfinished run keeps its worktree so it can be continued.
+
 `ego work status <run_id>` shows a run again. The usage line (for example `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`) counts input + output + cache read + cache creation tokens. Costs are the host CLI's own estimates; `cost_known: false` means a host reported none.
 
 ### Progress
@@ -94,6 +97,7 @@ While a run is going, ego appends one JSON line per event to `.ego/state/runs/<r
 | Event | Fields |
 |---|---|
 | `run_started` | `nodes`, `resume` |
+| `nodes_carried` | `nodes`, `from_run` (agent nodes verified by the previous run, not executed again) |
 | `node_started` | `node`, `kind`, `role` |
 | `attempt_finished` | `node`, `attempt`, `host`, `model`, `status`, `checks` (argv + status), clipped `feedback`, `changed`, `tokens`, `segments`, `rotations` |
 | `worker_segment` | `node`, `attempt`, `segment`, `tokens`, `action` (`continue` or `rotate`) |
@@ -216,6 +220,7 @@ How it works:
 - Every iteration plans and executes in new CLI sessions. State lives in `.ego/state/loops/<loop_id>/ledger.json`, not in a conversation.
 - Replanning receives a bounded record only: failed nodes, clipped check output and changed paths.
 - Verified changes carry over to the next iteration; edits of failed nodes do not.
+- Verified agent nodes are kept verbatim in the next task and are not executed again while their fingerprint (own definition, ancestors and shared task settings) is unchanged. A planned node with the same id replaces one and reruns it and its dependents. Gate and code nodes always run again as a cheap re-verification.
 
 | End state | Meaning |
 |---|---|

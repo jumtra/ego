@@ -301,7 +301,8 @@ def _cmd_work(args):
     result=execute(root,task,host=args.host,apply=args.apply,approve=args.approve,trust_cli=args.trust_cli,
                    run_id=args.run_id,resume=args.action=="resume",progress_stderr=True,
                    autonomy=args.autonomy,isolated=args.attest_external_sandbox,
-                   worktree=args.worktree,cleanup_worktree=args.cleanup_worktree,planner_usage=planner_usage)
+                   worktree=args.worktree,cleanup_worktree=args.cleanup_worktree,planner_usage=planner_usage,
+                   seed_from=getattr(args,"seed_from",None))
     _print(shape(result));return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
 
 def _cmd_context(args):
@@ -699,7 +700,10 @@ def build_parser()->argparse.ArgumentParser:
         r.add_argument("--keep-worktree",dest="cleanup_worktree",action="store_false",default=None,help="Keep the Git worktree after task completion")
         r.add_argument("--verbose",action="store_true",help="Print the full run record instead of the compact summary")
         if name=="resume":r.add_argument("run_id")
-        else:r.add_argument("--run-id",help="Fixed run ID, so `ego work watch <id>` can follow the run")
+        else:
+            r.add_argument("--run-id",help="Fixed run ID, so `ego work watch <id>` can follow the run")
+            r.add_argument("--from",dest="seed_from",metavar="RUN_ID",
+                           help="Continue a failed run with a corrected task: start from its verified changes and skip its verified, unchanged agent nodes")
     sp.set_defaults(func=_cmd_work)
     sp=sub.add_parser("eval");common(sp);s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("run");r.add_argument("--suite",required=True);r.add_argument("--host",default="mock");r.add_argument("--trials",type=int,default=1);r.add_argument("--model");r.add_argument("--split");r.add_argument("--timeout",type=int,default=120)
