@@ -129,7 +129,7 @@ def test_session_resume_arms_auto_resume_only_when_the_hook_is_installed(tmp_pat
 
 
 def test_hooks_are_generated_only_on_request_and_call_the_installed_command(project: Path):
-    assert ".claude/settings.json" not in generated_files(Config(clear_suggest_tokens=0, auto_resume=False))
+    assert ".claude/settings.json" not in generated_files(Config(clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     cfg = Config(); cfg.clear_suggest_tokens = 120000
     hooks = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
     assert set(hooks) == {"Stop", "SessionStart"} and hooks["SessionStart"][0]["matcher"] == "clear"
@@ -410,7 +410,7 @@ def test_session_start_injects_the_pending_checkpoint_in_each_hosts_format(tmp_p
 
 
 def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path: Path):
-    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(Config(clear_suggest_tokens=0, auto_resume=False)))
+    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(Config(clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0)))
     cfg = Config(); cfg.clear_suggest_tokens = 120000
     files = generated_files(cfg)
     codex = json.loads(files[".codex/hooks.json"])["hooks"]

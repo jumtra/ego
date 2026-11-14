@@ -79,3 +79,28 @@ def test_migration_requires_hash(project):
     applied=remove_legacy(project,{plan[0]["path"]:plan[0]["sha256"]})
     assert path.exists() is False
     assert Path(applied["backup"]).exists()
+
+
+def test_recommended_defaults_and_sync_fallback(tmp_path):
+    from ego.cli import main
+    root = tmp_path / "fresh"
+    root.mkdir()
+    apply_install(root, Config())
+    loaded = load_config(root)
+    assert loaded.usage_switch_percent == 85
+    assert loaded.run_yolo is True
+    assert set(loaded.models) == {"claude", "codex", "opencode", "agy"}
+    for role in ("coder", "tester", "judge"):
+        assert set(loaded.roles[role]) == {"claude", "codex", "agy", "opencode"}
+
+    # Existing config.toml without those keys inherits the recommended defaults on sync
+    partial = tmp_path / "partial"
+    partial.mkdir()
+    apply_install(partial, Config())
+    (partial / ".ego" / "config.toml").write_text('schema_version = 1\nprofile = "balanced"\n', encoding="utf-8")
+    assert main(["sync", "--root", str(partial), "--apply"]) == 0
+    synced = load_config(partial)
+    assert synced.usage_switch_percent == 85
+    assert synced.run_yolo is True
+    assert "agy" in synced.models
+    assert "agy" in synced.roles["coder"]

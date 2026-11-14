@@ -21,9 +21,9 @@ max_turns = 30
 worker_context = "lean"
 worker_segment_turns = 10
 clear_suggest_tokens = 200000
-usage_switch_percent = 0
-run_yolo = false
-models = {claude = {model = "sonnet", effort = "medium"}, codex = "auto"}
+usage_switch_percent = 85
+run_yolo = true
+models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}
 isolation = "copy"
 cleanup_worktree = true
 tests = []
@@ -38,7 +38,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 |---|---|---|
 | Which CLIs you use | `hosts` | Only listed CLIs get skills, agents and instructions |
 | How much the AI may do unattended | `policy_mode` | `strict` for shared or important repositories; `relaxed` for personal projects where the AI may push and edit config on request |
-| Which model each CLI uses in managed runs | `models` | Leave empty to use each CLI's own default |
+| Which model each CLI uses in managed runs | `models` | Defaults to `claude` (`sonnet`), `codex` (`auto`, `medium`), `opencode` (`auto`), `agy` (`auto`) |
 | When to rotate long sessions | `clear_suggest_tokens` | default `200000`; `0` leaves it off |
 | Commands that checks may run | `allow_commands` | Add your project's test runner if it is not listed |
 
@@ -61,7 +61,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 
 | Key | Default | Range | Effect |
 |---|---|---|---|
-| `models` | `{}` | host → model | Default model per host. See [Models](#models) |
+| `models` | `{claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}` | host → model | Default model per host. See [Models](#models) |
 | `max_parallel` | `2` | 1–8 | Independent nodes run at the same time |
 | `max_attempts` | `3` | 1–5 | Upper bound on attempts (first try + repairs) per node |
 | `timeout_seconds` | `3600` | 5–7200 | Upper bound per node; a whole run is limited to this × number of nodes |
@@ -77,8 +77,8 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | Key | Default | Range | Effect |
 |---|---|---|---|
 | `clear_suggest_tokens` | `200000` | `0` or 20000–2000000 | Context size at which a session is checkpointed and cleared. Used by the generated hooks of every CLI (see [Sessions](sessions.md)) and by `ego run` |
-| `usage_switch_percent` | `0` (off) | `0` or 50–99 | Claude Code and Codex (the CLIs that report their usage limit): at this percentage of the 5-hour or 7-day usage limit, save a checkpoint and propose continuing in another CLI |
-| `run_yolo` | `false` | bool | `ego run` starts the CLI with its skip-permissions switch. `--yolo` / `--no-yolo` override per run |
+| `usage_switch_percent` | `85` | `0` or 50–99 | Claude Code and Codex (the CLIs that report their usage limit): at this percentage of the 5-hour or 7-day usage limit, save a checkpoint and propose continuing in another CLI (`0` disables) |
+| `run_yolo` | `true` | bool | `ego run` starts the CLI with its skip-permissions switch. `--yolo` / `--no-yolo` override per run |
 
 Details of all three: [Sessions](sessions.md).
 

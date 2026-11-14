@@ -352,9 +352,9 @@ def test_yolo_comes_from_the_flag_or_the_config(project: Path, monkeypatch):
     seen = []
     monkeypatch.setattr(ptyrun, "run_host", lambda host, args, root, threshold, yolo=False: seen.append((host, args, yolo)) or 0)
     assert main(["run", "claude", "--root", str(project), "--clear-tokens", "100000"]) == 0
-    assert main(["run", "codex", "--yolo", "--root", str(project), "--clear-tokens", "100000", "--", "--model", "x"]) == 0
+    assert main(["run", "codex", "--no-yolo", "--root", str(project), "--clear-tokens", "100000", "--", "--model", "x"]) == 0
     config = project / ".ego/config.toml"
-    config.write_text(config.read_text().replace("run_yolo = false", "run_yolo = true"))
+    config.write_text(config.read_text().replace("run_yolo = true", "run_yolo = false"))
     assert main(["run", "agy", "--root", str(project), "--clear-tokens", "100000"]) == 0
-    assert main(["run", "agy", "--no-yolo", "--root", str(project), "--clear-tokens", "100000"]) == 0
-    assert seen == [("claude", [], False), ("codex", ["--model", "x"], True), ("agy", [], True), ("agy", [], False)]
+    assert main(["run", "agy", "--yolo", "--root", str(project), "--clear-tokens", "100000"]) == 0
+    assert seen == [("claude", [], True), ("codex", ["--model", "x"], False), ("agy", [], False), ("agy", [], True)]

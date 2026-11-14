@@ -17,10 +17,31 @@ VALID_EFFORTS = {"auto", "low", "medium", "high", "xhigh", "max"}
 EFFORT_ALIASES = {"middle": "medium"}
 MAX_ROLE_CANDIDATES = 8
 # Host-neutral starting point: no `host` key, so the run's host decides which entry applies.
+DEFAULT_MODELS: dict[str, Any] = {
+    "claude": {"model": "sonnet", "effort": "auto"},
+    "codex": {"model": "auto", "effort": "medium"},
+    "opencode": "auto",
+    "agy": {"model": "auto", "effort": "auto"},
+}
 DEFAULT_ROLES: dict[str, Any] = {
-    "coder": {"claude": [{"model": "haiku", "effort": ["low", "medium"]}, {"model": "sonnet"}], "codex": {"model": "auto", "effort": "medium"}},
-    "tester": {"claude": {"model": "haiku", "effort": "low"}, "codex": {"model": "auto", "effort": "low"}},
-    "judge": {"claude": {"model": "sonnet", "effort": "high"}, "codex": {"model": "auto", "effort": "high"}},
+    "coder": {
+        "claude": [{"model": "haiku", "effort": ["low", "medium"]}, {"model": "sonnet"}],
+        "codex": {"model": "auto", "effort": "medium"},
+        "agy": {"model": "auto", "effort": "medium"},
+        "opencode": {"model": "auto", "effort": "medium"},
+    },
+    "tester": {
+        "claude": {"model": "haiku", "effort": "low"},
+        "codex": {"model": "auto", "effort": "low"},
+        "agy": {"model": "auto", "effort": "low"},
+        "opencode": {"model": "auto", "effort": "low"},
+    },
+    "judge": {
+        "claude": {"model": "sonnet", "effort": "high"},
+        "codex": {"model": "auto", "effort": "high"},
+        "agy": {"model": "auto", "effort": "high"},
+        "opencode": {"model": "auto", "effort": "high"},
+    },
 }
 
 
@@ -78,9 +99,9 @@ class Config:
     worker_segment_turns: int = 10  # managed Claude worker: turns per segment; context is measured between segments
     clear_suggest_tokens: int = 200000  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
     auto_resume: bool = True  # Claude Code/Codex/AGY: SessionStart(clear) hook injects the saved checkpoint after /clear (core; independent of clear_suggest_tokens)
-    usage_switch_percent: int = 0  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
-    run_yolo: bool = False  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
-    models: dict[str, Any] = field(default_factory=dict)
+    usage_switch_percent: int = 85  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
+    run_yolo: bool = True  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
+    models: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_MODELS))
     roles: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_ROLES))  # role (coder/tester/judge) -> {host, model, effort}; same vocabulary as hosts/models
     isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool = True  # whether to remove the worktree after run

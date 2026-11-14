@@ -21,9 +21,9 @@ max_turns = 30
 worker_context = "lean"
 worker_segment_turns = 10
 clear_suggest_tokens = 200000
-usage_switch_percent = 0
-run_yolo = false
-models = {claude = {model = "sonnet", effort = "medium"}, codex = "auto"}
+usage_switch_percent = 85
+run_yolo = true
+models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}
 isolation = "copy"
 cleanup_worktree = true
 tests = []
@@ -38,7 +38,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 |---|---|---|
 | 使用する CLI | `hosts` | 列挙した CLI にだけ skill、agent、指示が生成されます |
 | AI が無人でどこまでできるか | `policy_mode` | 共有リポジトリや重要なリポジトリでは `strict`。AI に依頼されたら push や設定編集をしてよい個人プロジェクトでは `relaxed` |
-| 管理実行で各 CLI が使うモデル | `models` | 空のままにすると各 CLI の既定モデルを使います |
+| 管理実行で各 CLI が使うモデル | `models` | 既定では `claude` (`sonnet`)、`codex` (`auto`, `medium`)、`opencode` (`auto`)、`agy` (`auto`) を設定しています |
 | 長いセッションをいつクリアするか | `clear_suggest_tokens` | 既定: `200000`。`0` でオフ |
 | チェックで実行してよいコマンド | `allow_commands` | 使っているテストランナーが一覧にない場合は追加してください |
 
@@ -61,7 +61,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 
 | キー | 既定値 | 範囲 | 効果 |
 |---|---|---|---|
-| `models` | `{}` | ホスト → モデル | ホストごとの既定モデル。[モデル](#モデル) を参照 |
+| `models` | `{claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}` | ホスト → モデル | ホストごとの既定モデル。[モデル](#モデル) を参照 |
 | `max_parallel` | `2` | 1〜8 | 独立したノードを同時に実行する数 |
 | `max_attempts` | `3` | 1〜5 | ノードごとの試行回数の上限（初回 + 修正） |
 | `timeout_seconds` | `3600` | 5〜7200 | ノードごとの上限。run 全体の上限はこの値 × ノード数 |
@@ -77,8 +77,8 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | キー | 既定値 | 範囲 | 効果 |
 |---|---|---|---|
 | `clear_suggest_tokens` | `200000` | `0` または 20000〜2000000 | このコンテキストサイズに達したらセッションをチェックポイント保存してクリアします。各 CLI の生成フック（[セッション](sessions.md) を参照）と `ego run` が使います |
-| `usage_switch_percent` | `0`（オフ） | `0` または 50〜99 | Claude Code と Codex（使用上限を報告する CLI）のみ。5 時間枠または 7 日枠の使用量がこの割合に達したら、チェックポイントを保存し、別の CLI への切り替えを提案します |
-| `run_yolo` | `false` | bool | `ego run` が CLI を権限確認スキップのスイッチ付きで起動します。`--yolo` / `--no-yolo` で run ごとに上書き |
+| `usage_switch_percent` | `85` | `0` または 50〜99 | Claude Code と Codex（使用上限を報告する CLI）のみ。5 時間枠または 7 日枠の使用量がこの割合に達したら、チェックポイントを保存し、別の CLI への切り替えを提案します（`0` でオフ） |
+| `run_yolo` | `true` | bool | `ego run` が CLI を権限確認スキップのスイッチ付きで起動します。`--yolo` / `--no-yolo` で run ごとに上書き |
 
 3 つの詳細は [セッション](sessions.md) を参照してください。
 

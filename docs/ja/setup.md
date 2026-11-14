@@ -18,8 +18,8 @@ uv tool install git+https://github.com/jumtra/ego
 pipx install git+https://github.com/jumtra/ego
 
 # 公開済みリリース wheel から（バージョンは最新リリースに置き換えてください）
-pipx install https://github.com/jumtra/ego/releases/download/v0.0.15/ego-0.0.15-py3-none-any.whl
-pip install https://github.com/jumtra/ego/releases/download/v0.0.15/ego-0.0.15-py3-none-any.whl   # 仮想環境内で
+pipx install https://github.com/jumtra/ego/releases/download/v0.0.16/ego-0.0.16-py3-none-any.whl
+pip install https://github.com/jumtra/ego/releases/download/v0.0.16/ego-0.0.16-py3-none-any.whl   # 仮想環境内で
 
 ego --version
 ```
