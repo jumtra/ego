@@ -26,7 +26,8 @@ runtime_mode = "native"
 max_parallel = 2
 max_attempts = 3
 timeout_seconds = 3600
-models = {claude = {model = "sonnet", effort = "auto"}}
+models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "gemini-4-hydrogen-high", effort = "auto"}}
+roles = {coder = {host = "claude", model = "haiku", effort = "low"}, tester = {host = "claude", model = "haiku", effort = "low"}, judge = {host = "agy", model = "gemini-pro-orchestrator-g1-pro", effort = "auto"}}
 isolation = "copy"
 cleanup_worktree = true
 tests = []

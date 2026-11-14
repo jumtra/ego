@@ -103,6 +103,16 @@ models = {claude = "sonnet", codex = "auto", opencode = "anthropic/claude-sonnet
 
 これらは管理実行とプランナーの既定値です。タスク JSON や `--model` / `--models` フラグがあればそちらが優先されます（[ワークフロー](workflows.md#ホストとモデルの選び方) を参照）。対話中の CLI セッションのモデルは変わりません。
 
+### 役割別ルーティング（`roles`）
+
+```toml
+roles = {judge = {host = "agy", model = "gemini-2.5-pro", effort = "high"}, coder = {host = "claude", model = "sonnet"}}
+```
+
+- キーは `coder`、`tester`、`judge`。各テーブルは任意の `host`、`model`、`effort` を取ります（`hosts` / `models` と同じ語彙）。
+- 省略した項目は `models` / `hosts` に従います。effort だけの指定はホストとモデルを保ったまま effort のみ設定します。
+- 優先順位: ノード > タスク `defaults.roles` > `roles` > タスク `defaults` > `models`。`ego apply --roles '{"judge":{"host":"agy"}}'` で設定できます。
+
 ## メモリ
 
 | プロバイダ | 保存先 | 備考 |

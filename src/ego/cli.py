@@ -37,6 +37,13 @@ def _cmd_apply(args):
             cfg.models = parsed
         except Exception as exc:
             raise EgoError("INVALID_MODEL", f"models must be a valid JSON object: {exc}", 2)
+    if getattr(args, "roles", None) is not None:
+        try:
+            parsed = json.loads(args.roles)
+            if not isinstance(parsed, dict): raise ValueError("must be JSON object")
+            cfg.roles = parsed
+        except Exception as exc:
+            raise EgoError("INVALID_CONFIG", f"roles must be a valid JSON object: {exc}", 2)
     # No extra import or stdin inspection on scripted apply/check/dry-run.
     from .apply_wizard import should_prompt, select_options, confirm_apply, WizardCancelled
     interactive = should_prompt(args)
@@ -55,7 +62,7 @@ def _cmd_apply(args):
     changes = [c for c in plan["changes"] if c["action"] != "unchanged"]
     status = "BLOCKED" if plan["conflicts"] else "UP_TO_DATE" if not changes else "CHANGES_PENDING"
     summary = {"status": status, "root": str(root), "harness_version": __version__,
-               "profile": cfg.profile, "policy_mode": cfg.policy_mode, "hosts": cfg.hosts, "models": cfg.models,
+               "profile": cfg.profile, "policy_mode": cfg.policy_mode, "hosts": cfg.hosts, "models": cfg.models, "roles": cfg.roles,
                "code_intelligence": cfg.code_intelligence, "memory": cfg.memory,
                "runtime_mode": cfg.runtime_mode, "tests_detected": bool(detect_tests),
                "changes": changes, "conflicts": plan["conflicts"],
@@ -603,6 +610,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--runtime",choices=["native","managed"],help="Default runtime; per-task runtime remains configurable")
     sp.add_argument("--policy",choices=["strict","relaxed"],help="Policy mode (strict: safe; relaxed: default, loose mode allowing git push and edits)")
     sp.add_argument("--models",help="Default models JSON mapping, e.g. '{\"claude\":\"sonnet\"}'")
+    sp.add_argument("--roles",help="Per-role host/model/effort JSON, e.g. '{\"judge\":{\"host\":\"agy\",\"effort\":\"high\"}}'")
     sp.add_argument("--clear-suggest-tokens",type=int,metavar="N",help="At N context tokens the Stop hook (Claude Code, Codex, AGY, OpenCode plugin) has the session checkpoint and suggests /clear (0 = off)")
     mode = sp.add_mutually_exclusive_group()
     mode.add_argument("--interactive",action="store_true",help="Always ask for choices, even when stdin is redirected")

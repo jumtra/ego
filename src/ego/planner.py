@@ -46,6 +46,8 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
                 "Never write 'consider', 'as appropriate' or 'refactor as needed'; inspect the candidate files until you can be that specific. "
                 "Every node also has intent: one sentence on why the goal needs this node. "
                 "Agent nodes have done_when: 1-4 observable acceptance criteria. "
+                "Every agent node has inputs (existing files to read, at most 6) and outputs (files to change, as 'path' or 'path::function', inside write_allowlist). "
+                "Optional final node: role 'judge' with reviews (a coder node id) and depends_on including a gate; omit unless the change is risky. "
                 "Add only when they apply: non_goals (tempting work this node must not do), "
                 "assumptions (unverified facts the node relies on; the worker stops if one is false), "
                 "provides (files or interfaces that dependent nodes rely on). "
