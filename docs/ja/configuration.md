@@ -113,6 +113,15 @@ roles = {judge = {host = "agy", model = "gemini-2.5-pro", effort = "high"}, code
 - 省略した項目は `models` / `hosts` に従います。effort だけの指定はホストとモデルを保ったまま effort のみ設定します。
 - 優先順位: ノード > タスク `defaults.roles` > `roles` > タスク `defaults` > `models`。`ego apply --roles '{"judge":{"host":"agy"}}'` で設定できます。
 
+ホスト別・複数指定: role の中にホスト名をキーとして書けます。`host` で使うホストを選びます（未指定なら実行時の既定ホスト）。
+
+```toml
+roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", "middle"]}, {model = "sonnet"}], codex = {model = "gpt-5-codex", effort = "medium"}}}
+```
+
+- 指定は `{model, effort}` テーブル、またはそのリストです。`effort` はリスト（`["low", "middle"]`）にでき、各要素が候補になります。上の例は haiku/low, haiku/medium, sonnet/auto です。`middle` は `medium`、省略または `auto` はホスト既定です。
+- 候補が2つ以上ある場合は `fallback` として実行し、`UNAVAILABLE` / `TIMEOUT` / `RATE_LIMIT` で次の候補を試します（最大8件）。ノード自身が `model`/`models` を指定した場合はホスト別指定を無視します。
+
 ## メモリ
 
 | プロバイダ | 保存先 | 備考 |

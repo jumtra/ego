@@ -113,6 +113,15 @@ roles = {judge = {host = "agy", model = "gemini-2.5-pro", effort = "high"}, code
 - Omitted fields fall back to `models` / `hosts`. An effort-only entry keeps the host and model and just sets effort.
 - Precedence: node > Task `defaults.roles` > `roles` > Task `defaults` > `models`. Set with `ego apply --roles '{"judge":{"host":"agy"}}'`.
 
+Per-host and multiple specs: a host name may be a key inside a role. `host` picks the active one (otherwise the run's default host is used).
+
+```toml
+roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", "middle"]}, {model = "sonnet"}], codex = {model = "gpt-5-codex", effort = "medium"}}}
+```
+
+- A spec is a `{model, effort}` table or a list of them. `effort` may be a list (`["low", "middle"]`), each entry becoming a candidate: the example above is haiku/low, haiku/medium, sonnet/auto. `middle` means `medium`; omitted `effort` / `auto` means the host default.
+- With two or more candidates the node runs as `fallback`: the next candidate is tried on `UNAVAILABLE` / `TIMEOUT` / `RATE_LIMIT` (at most 8 candidates). A node that sets its own `model`/`models` ignores per-host specs.
+
 ## Memory
 
 | Provider | Storage | Notes |

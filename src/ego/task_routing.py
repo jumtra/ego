@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from .config import HOSTS, VALID_EFFORTS
+from .config import HOSTS, VALID_EFFORTS, parse_role_spec
 from .util import EgoError, safe_path
 from .policy import ROLES
 from .context import clip_output
@@ -75,12 +75,16 @@ def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_m
     if not isinstance(roles, dict) or any(k not in ROLES or not isinstance(v, dict) for k, v in roles.items()):
         raise EgoError("INVALID_TASK", f"defaults.roles must map {', '.join(ROLES)} to objects", 2)
     role = node.get("role")
+    node_pins_model = "model" in node or "models" in node
     # Persistent config.roles is the weakest role layer: {host, model, effort} -> routing keys.
     cfg_role = (default_roles or {}).get(role, {})
     role_cfg = {}
     if "host" in cfg_role: role_cfg["host"] = cfg_role["host"]
     if "model" in cfg_role: role_cfg["model"] = cfg_role["model"]
-    role_cfg.update(roles.get(role, {}))
+    role_cfg.update({k: v for k, v in roles.get(role, {}).items() if k not in HOSTS})
+    # Per-host specs ([{model, effort: [..]}, ...]): task defaults.roles beats config roles, per host.
+    host_specs = {h: v for h, v in {**cfg_role, **roles.get(role, {})}.items() if h in HOSTS}
+    if "model" in roles.get(role, {}): host_specs = {}  # an explicit flat model in a stronger layer wins
     role_effort = cfg_role.get("effort")
     if isinstance(role_cfg.get("effort"), str): role_effort = role_cfg.pop("effort")
     node = {**{k: v for k, v in role_cfg.items()
@@ -121,12 +125,17 @@ def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_m
         raw_entry = node_map[h] if h in node_map else node["model"] if "model" in node else default_map[h] if h in default_map else defaults.get("model", default_model)
         m, eff = _parse_model_entry(raw_entry)
         if role_effort and role_effort != "auto" and eff is None: eff = role_effort
-        routes.append(Route(h, m, effort=eff))
+        if h in host_specs and not node_pins_model:
+            routes.extend(Route(h, cm, effort=ce) for cm, ce in parse_role_spec(host_specs[h], f"roles.{role}.{h}"))
+        else:
+            routes.append(Route(h, m, effort=eff))
     on = node.get("fallback_on", defaults.get("fallback_on", ["UNAVAILABLE", "TIMEOUT", "RATE_LIMIT"]))
     if not isinstance(on, list) or any(v not in FALLBACK_CAUSES for v in on):
         raise EgoError("INVALID_FALLBACK", f"Supported fallback conditions: {sorted(FALLBACK_CAUSES)}", 2)
     if node.get("kind", "agent") in ("gate", "code") and ("host" in node or "hosts" in node or "model" in node or "models" in node):
         raise EgoError("INVALID_ROUTE", "code/gate nodes run deterministic commands, not AI models", 2)
+    if strategy == "single" and len(routes) > 1:
+        strategy = "fallback"  # several candidates for one host: try them in order on UNAVAILABLE/TIMEOUT/RATE_LIMIT
     return strategy, routes, frozenset(on)
 
 
