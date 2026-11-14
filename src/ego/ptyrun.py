@@ -22,6 +22,7 @@ import shlex
 import shutil
 import signal
 import sqlite3
+import struct
 import sys
 import termios
 import time
@@ -42,6 +43,7 @@ QUIET_OUTPUT = 2.0               # the host has drawn nothing for this long
 QUIET_KEYS = 5.0                 # the user has typed nothing for this long
 SAVE_TIMEOUT = 300.0             # no checkpoint this long after asking: give up until the context grows again
 AFTER_CLEAR = 3.0                # let the host reset before the resume prompt is typed
+BAR_QUIET = 0.5                  # the status row is redrawn only once the host has paused this long (no half-written escapes)
 TAIL_BYTES = 512 * 1024
 # Each CLI's own switch for "approve every tool call without asking"; all it means is that CLI's meaning.
 YOLO_FLAGS = {"claude": "--dangerously-skip-permissions", "codex": "--dangerously-bypass-approvals-and-sandbox",
@@ -189,6 +191,11 @@ def measure(host: str, root: Path, since: float, state: Path | None = None) -> R
     return _reported(state)
 
 
+def ctx_label(tokens: int | None) -> str:
+    """The context figure as ego shows it; a dash when the host's size cannot be measured."""
+    return f"ego · ctx {tokens // 1000}k" if tokens is not None and tokens > 0 else "ego · ctx —"
+
+
 def record_context(payload: dict[str, Any], state: Path) -> str:
     """Status line command for a host that reports its context there (AGY): keep it for the wrapper, return the line."""
     window = payload.get("context_window") if isinstance(payload.get("context_window"), dict) else {}
@@ -198,7 +205,7 @@ def record_context(payload: dict[str, Any], state: Path) -> str:
         tokens = round(float(window.get("used_percentage") or 0) * float(window.get("context_window_size") or 0) / 100)
     key = str(payload.get("conversation_id") or payload.get("session_id") or "")[:80]
     write_json(state, {"key": key, "tokens": int(tokens), "idle": payload.get("agent_state") == "idle", "at": time.time()})
-    return f"ego · ctx {tokens // 1000}k" if tokens > 0 else "ego"
+    return ctx_label(int(tokens))
 
 
 _CSI_U = re.compile(rb"\x1b\[(\d+)(?::\d*)*(?:;(\d+)(?::\d+)?)?(?:;[\d:]*)?u")
@@ -325,6 +332,37 @@ def _copy_size(source: int, target: int) -> None:
         pass
 
 
+def _terminal(fd: int) -> tuple[int, int] | None:
+    """(rows, cols) of a terminal tall enough to keep a status row, else None."""
+    if not os.isatty(fd):
+        return None
+    try:
+        rows, cols, _, _ = struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8))
+    except OSError:
+        return None
+    return (rows, cols) if rows >= 3 else None
+
+
+def _set_size(fd: int, rows: int, cols: int) -> None:
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    except OSError:
+        pass
+
+
+def _bar_region(rows: int, cols: int, text: str) -> bytes:
+    """Keep the last row for the status bar: the host scrolls above it and the bar is drawn; the cursor is restored."""
+    return f"\x1b7\x1b[1;{rows - 1}r\x1b[{rows};1H\x1b[2K\x1b[7m{text[:cols]}\x1b[0m\x1b8".encode("utf8")
+
+
+def _bar_text(rows: int, cols: int, text: str) -> bytes:
+    return f"\x1b7\x1b[{rows};1H\x1b[2K\x1b[7m{text[:cols]}\x1b[0m\x1b8".encode("utf8")
+
+
+def _bar_release(rows: int) -> bytes:
+    return f"\x1b[r\x1b[{rows};1H\x1b[2K".encode()
+
+
 def _terminated(signum, frame):
     raise SystemExit(128 + signum)
 
@@ -339,6 +377,9 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
     interactive = os.isatty(stdin_fd)
     if interactive:
         _copy_size(stdin_fd, slave)
+    screen = _terminal(stdout_fd)  # a terminal to draw the status row on; the host is then one row shorter
+    if screen:
+        _set_size(slave, screen[0] - 1, screen[1])
     pid = os.fork()
     if pid == 0:
         try:
@@ -352,9 +393,13 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
     saved = termios.tcgetattr(stdin_fd) if interactive else None
     handlers = {}
     try:
-        if interactive:
-            tty.setraw(stdin_fd)
-            handlers[signal.SIGWINCH] = signal.signal(signal.SIGWINCH, lambda *_: _copy_size(stdin_fd, master))
+        resized = {"flag": False, "label": ctx_label(None)}  # the handler only sets a flag; the loop does the writes
+        if interactive or screen:
+            if interactive:
+                tty.setraw(stdin_fd)
+            handlers[signal.SIGWINCH] = signal.signal(signal.SIGWINCH, lambda *_: resized.__setitem__("flag", True))
+        if screen:
+            _write_all(stdout_fd, _bar_region(screen[0], screen[1], resized["label"]))
         for signum in (signal.SIGTERM, signal.SIGHUP):  # leave through `finally`: the terminal must not stay raw
             handlers[signum] = signal.signal(signum, _terminated)
         rotator, keys = Rotator(root, host, threshold), InputState()
@@ -367,6 +412,14 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
             except InterruptedError:
                 continue
             at = time.time()
+            if resized["flag"]:
+                resized["flag"] = False
+                if screen:
+                    screen = _terminal(stdout_fd) or screen
+                    _set_size(master, screen[0] - 1, screen[1])
+                    _write_all(stdout_fd, _bar_region(screen[0], screen[1], resized["label"]))
+                elif interactive:
+                    _copy_size(stdin_fd, master)
             if master in ready:
                 try:
                     data = os.read(master, 65536)
@@ -390,20 +443,34 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
                     _write_all(master, queue.popleft()[1])
                     due = at + queue[0][0] if queue else 0.0
                 continue
-            calm = at - last_output >= quiet_output and at - keys.last_key >= quiet_keys and not keys.dirty
-            if not calm or at - last_poll < poll:
+            if at - last_poll < poll:
                 continue
             last_poll = at
             try:
-                typed = rotator.step(probe(host, root, started, state), calm, at)
+                reading = probe(host, root, started, state)
             except (OSError, EgoError, ValueError, KeyError, TypeError):
-                typed = []  # a record we cannot read means "do nothing", never "stop the session"
+                reading = None  # a record we cannot read means "do nothing", never "stop the session"
+            resized["label"] = ctx_label(reading.tokens if reading else None)
+            if screen and at - last_output >= BAR_QUIET:
+                _write_all(stdout_fd, _bar_text(screen[0], screen[1], resized["label"]))
+            calm = at - last_output >= quiet_output and at - keys.last_key >= quiet_keys and not keys.dirty
+            if not calm:
+                continue
+            try:
+                typed = rotator.step(reading, calm, at)
+            except (OSError, EgoError, ValueError, KeyError, TypeError):
+                typed = []
             if typed:
                 queue.extend(typed)
                 due = at + typed[0][0]
     finally:
         for signum, handler in handlers.items():
             signal.signal(signum, handler)
+        if screen:
+            try:
+                _write_all(stdout_fd, _bar_release(screen[0]))
+            except OSError:
+                pass
         if saved is not None:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, saved)
         os.close(master)

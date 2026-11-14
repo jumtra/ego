@@ -1,14 +1,16 @@
 """`ego run`: context measured from each host's own record, and the save / clear / resume it types."""
 import json
 import os
+import pty
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 
 from ego import ptyrun
 from ego.cli import main
-from ego.ptyrun import InputState, Reading, Rotator, _paste, measure, record_context, run
+from ego.ptyrun import InputState, Reading, Rotator, _paste, ctx_label, measure, record_context, run
 from ego.session import arm_auto_resume, save_checkpoint
 
 
@@ -79,6 +81,54 @@ def test_agy_reports_through_its_status_line(tmp_path: Path, monkeypatch, capsys
     assert capsys.readouterr().out.strip() == "ego · ctx 125k"
     assert measure("agy", tmp_path, 0, state).idle is False
     assert measure("agy", tmp_path, 0, None) is None
+
+
+def test_an_unmeasured_context_is_shown_as_a_dash(tmp_path: Path):
+    assert ctx_label(None) == "ego · ctx —" and ctx_label(0) == "ego · ctx —"
+    assert ctx_label(125000) == "ego · ctx 125k"
+    empty = {"context_window": {"context_window_size": 0, "used_percentage": 0}}
+    assert record_context(empty, tmp_path / "state.json") == "ego · ctx —"
+
+
+def test_the_bar_keeps_the_last_row_and_the_host_gets_the_rest(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(ptyrun, "BAR_QUIET", 0)
+    screen_master, screen = pty.openpty()
+    ptyrun._set_size(screen, 10, 40)
+    read_end, write_end = os.pipe()
+    chunks: list[bytes] = []
+
+    def drain():
+        while True:
+            try:
+                data = os.read(screen_master, 4096)
+            except OSError:
+                return
+            if not data:
+                return
+            chunks.append(data)
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    host = ("import fcntl,struct,termios,time\n"
+            "time.sleep(0.4)\n"
+            "rows, cols, _, _ = struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0' * 8))\n"
+            "print('SIZE', rows, cols, flush=True)\n")
+    try:
+        code, rotations = run("claude", [sys.executable, "-c", host], tmp_path, 40000, stdin_fd=read_end,
+                              stdout_fd=screen, probe=lambda *_: Reading("s1", 12000, False),
+                              poll=0.05, quiet_output=0.05, quiet_keys=0)
+    finally:
+        os.close(read_end)
+        os.close(write_end)
+        os.close(screen)
+    reader.join(5)
+    out = b"".join(chunks)
+    assert (code, rotations) == (0, 0)
+    assert b"SIZE 9 40" in out  # the host draws in 9 rows; the tenth is ego's
+    assert b"\x1b[1;9r" in out and b"\x1b[10;1H" in out  # scrolling stops above the bar row
+    assert "ego · ctx 12k".encode() in out  # the probe's reading reached the bar
+    assert out.endswith(b"\x1b[r\x1b[10;1H\x1b[2K")  # the region is released on exit
+    os.close(screen_master)
 
 
 def test_a_draft_in_the_input_box_is_noticed():
