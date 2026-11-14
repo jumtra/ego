@@ -27,6 +27,10 @@ class RunResult:
     model: str | None = None
     effort: str | None = None
     usage: dict | None = None
+    session_id: str | None = None
+    stop_reason: str | None = None
+    segments: int = 1
+    rotations: int = 0
 
     def as_dict(self): return asdict(self)
 
@@ -113,6 +117,18 @@ def parse_host_usage(host: str, raw: str) -> dict | None:
     return found
 
 
+def parse_claude_session(raw: str) -> tuple[str | None, str | None]:
+    """(session_id, subtype) of the final `result` line of `claude -p --output-format json`."""
+    lines = raw.splitlines() or [raw]
+    for line in reversed(lines):
+        try: obj = json.loads(line)
+        except ValueError: continue
+        if isinstance(obj, dict) and obj.get("type") == "result":
+            sid, sub = obj.get("session_id"), obj.get("subtype")
+            return (sid if isinstance(sid, str) else None), (sub if isinstance(sub, str) else None)
+    return None, None
+
+
 def _agy_failed(raw: str) -> bool:
     """AGY print mode can exit 0 while its JSON reports a non-SUCCESS turn."""
     try: obj = json.loads(raw)
@@ -123,7 +139,8 @@ def _agy_failed(raw: str) -> bool:
 def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: str|None = None,
               effort: str|None = None, read_only: bool = True, max_turns: int = 4,
               autonomy: str = "auto", isolated: bool = False, lean: bool = False,
-              max_budget_usd: float|None = None) -> RunResult:
+              max_budget_usd: float|None = None, resume_session: str|None = None,
+              env: dict[str,str]|None = None) -> RunResult:
     start = time.monotonic()
     if host == "mock":
         # Offline deterministic test driver; it never edits a file and is not an LLM.
@@ -132,9 +149,9 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
         return RunResult("PASS", output, "", 0, elapsed(start), "mock", 0, 0.0, model="mock", effort=effort)
     stdin_supported = host in ("claude", "codex")
     command = build_command(host, prompt, model=model, effort=effort, read_only=read_only, max_turns=max_turns, use_stdin=stdin_supported, autonomy=autonomy, isolated=isolated,
-                            lean=lean, max_budget_usd=max_budget_usd)
+                            lean=lean, max_budget_usd=max_budget_usd, resume_session=resume_session)
     try:
-        code,stdout,stderr,seconds = run_process(command, cwd, timeout, input_text=prompt if stdin_supported else None)
+        code,stdout,stderr,seconds = run_process(command, cwd, timeout, input_text=prompt if stdin_supported else None, env=env)
     except OSError as exc:
         return RunResult("UNAVAILABLE", "", redact(str(exc)), 127, elapsed(start), host, reason="CLI process unavailable", model=model or "native-default", effort=effort)
     output,tokens,cost = parse_host_response(host,stdout)
@@ -142,7 +159,8 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
     if host == "agy" and code == 0 and _agy_failed(stdout): code = 1
     status = "PASS" if code == 0 else "TIMEOUT" if code == 124 else "RATE_LIMIT" if ("rate limit" in error_text or "429" in error_text) else "FAIL"
     return RunResult(status, redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error", model=model or "native-default", effort=effort,
-                     usage=parse_host_usage(host,stdout))
+                     usage=parse_host_usage(host,stdout),
+                     **dict(zip(("session_id","stop_reason"), parse_claude_session(stdout) if host == "claude" else (None, None))))
 
 
 def run_checked_command(argv: list[str], cwd: Path, *, timeout: int = 90, allow: list[str] | None = None) -> RunResult:

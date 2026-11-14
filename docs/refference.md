@@ -21,13 +21,13 @@ inline = `work-plan` Skill の会話内計画、managed = `ego work plan` / `ego
 - 導入（managed のみ）: 証拠必須の `judge` ノードによる局所リトライ（詳細は「ego 独自の追加要素」）
 - 一部導入: 検証・リトライの循環
   - managed は `max_attempts` と `loop.py` の再計画で対応
-  - inline 単体は「計画が誤りなら停止して承認」のみ。承認済み計画を `--task` で managed に渡せば同じ循環に乗る
+  - inline（work-plan）は承認後に計画を managed へ委譲して実行するため、同じ循環に乗る。誤りなら停止して承認を取り直す
 
 ## ⑤ Scheduler-Theoretic Framework ([2604.11378](https://arxiv.org/abs/2604.11378))
 - 導入: 計画・実行・復旧の3層分離（`planner.py` / `work.py` / `loop.py`）
   - 理由: 責務を分けると障害箇所を特定しやすいため
 - 導入（managed のみ）: 前提完了ノードだけのスケジュールと並列実行、ノード単位の障害追跡（`BLOCKED_DEPENDENCY`）
-  - 理由: 並列化と正確な障害追跡に必要。inline はスケジューラを持たないため対象外
+  - 理由: 並列化と正確な障害追跡に必要。inline の実行も managed を通るので、同じスケジューラが使われる
   - 並列は同一ツリーを共有せず、ノードごとの私的コピーで実行し、wave 単位で原子的にマージする（衝突は `MERGE_CONFLICT`）。動的な並列 DAG スケジューラの追加はしない
 
 ## ⑥ Atomic Task Graph ([2607.01942](https://arxiv.org/abs/2607.01942))
@@ -70,6 +70,11 @@ inline = `work-plan` Skill の会話内計画、managed = `ego work plan` / `ego
   - 理由: 自明な失敗を LLM に見せず、仕様の抜け漏れだけを低コストで監査するため
 - 有界な再計画入力（失敗ノード・切り詰めたチェック出力・変更パスのみ）
   - 理由: transcript を渡さず、① の圧縮を再計画に適用するため
+- work-plan の実行を managed に委譲し、途中経過を JSONL で返す（`work.py` の `Progress` / `watch`、`ego work run --run-id` / `ego work watch` / `ego work status`）
+  - 理由: judge・role・リトライ・依存追跡を inline でも同じ強制力で効かせ、実行中の失敗や REJECT を終了を待たずにユーザーへ伝えるため。Claude Code は Monitor、他ホストは `status` の `progress` を読む
+  - 計画なしの `/work` の小さな変更は対象外（ワーカー起動の token が見合わないため）
+- Claude ワーカーの区切り実行と自動 checkpoint・再開（`worker.py`、`worker_segment_turns`）
+  - 理由: headless ワーカーには `/clear` を打てないため、数ターンごとに実測コンテキストを測り、`clear_suggest_tokens` 以上なら checkpoint を保存して新セッションで続きから再開する。ターン上限・`--resume`・実測が揃う Claude のみ対応し、他ホストは1回で実行する
 - 承認済み計画をそのまま実行（`ego work run --task` / `ego work loop --task`）
   - 理由: inline で承認した計画を managed で作り直す二重計画をやめ、承認内容と実行を一致させるため
   - `loop --task` の再計画は承認済み計画からの逸脱なので、使う前にユーザーの同意を取る

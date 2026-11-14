@@ -129,6 +129,8 @@ def test_managed_worker_gets_configured_turns_not_the_planner_default(tmp_path: 
         return RunResult("PASS", "ok", "", 0, 0.0, host)
 
     monkeypatch.setattr(work, "run_agent", fake_agent)
+    (tmp_path / ".ego").mkdir()
+    (tmp_path / ".ego/config.toml").write_text("clear_suggest_tokens = 0\n")  # no segmenting: one worker call gets the whole budget
     spec = {"goal": "g", "nodes": [{"id": "impl", "kind": "agent", "prompt": "p", "host": "claude", "write_allowlist": ["src/**"]}]}
     execute(tmp_path, spec, host="claude", trust_cli=True)
     assert seen["max_turns"] == Config().max_turns == 30 and seen["lean"] is True
