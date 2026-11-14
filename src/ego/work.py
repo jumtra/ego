@@ -17,7 +17,8 @@ from .policy import check_write, check_role_write
 from .runner import run_agent, run_checked_command
 from .worker import run_worker
 from .util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
-                   filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove)
+                   filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove,
+                   sha256, json_text)
 from .task_routing import validate_task_context, resolve_routes, build_task_prompt
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 from .context import clip_output
@@ -102,6 +103,36 @@ def _ancestors(amap:dict, nid:str)->set:
         d=stack.pop()
         if d not in out:out.add(d);stack.extend(amap[d].get("depends_on",[]))
     return out
+
+
+def node_fingerprints(spec:dict)->dict[str,str]:
+    """Per node: a hash of its own definition, the shared task context and every ancestor's fingerprint.
+
+    Equal fingerprints mean the node would get the same prompt, routing and upstream work.
+    The goal is left out: a replanned task restates the same objective, and a node is
+    accepted by its own checks, not by the goal's wording.
+    """
+    amap={n["id"]:n for n in spec["nodes"]}
+    context={k:spec[k] for k in ("instructions","instructions_file","defaults") if k in spec}
+    out:dict[str,str]={}
+    def visit(nid:str)->str:
+        if nid not in out:
+            node=amap[nid]
+            out[nid]=sha256(json_text({"node":node,"context":context,"deps":[visit(d) for d in node.get("depends_on",[])]}))
+        return out[nid]
+    for nid in amap:visit(nid)
+    return out
+
+
+def _carry_verified(nodes:list[dict], fingerprints:dict[str,str], seed_record:dict)->list[str]:
+    """Agent nodes the seed run verified with an identical fingerprint; their edits are already in the seeded staging.
+
+    Code and gate nodes are cheap and re-verify the seeded tree, so they always run again.
+    """
+    before=seed_record.get("fingerprints") or {}
+    status=seed_record.get("node_status") or {}
+    return [n["id"] for n in nodes if n.get("kind","agent") not in ("code","gate")
+            and status.get(n["id"])=="PASSED" and before.get(n["id"])==fingerprints[n["id"]]]
 
 
 def _between(amap:dict, target:str, judge:str)->set:
@@ -370,17 +401,41 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                     # working tree would report (and apply) uncommitted or untracked files as reverted/deleted.
                     "base_snapshot":seed_record["base_snapshot"] if seed_dir else snapshot(staging if worktree_created else root),
                     "final_status":"RUNNING","applied":False,
-                    "worktree":worktree_created}
+                    "worktree":worktree_created,
+                    "fingerprints":node_fingerprints(spec)}
+            if seed_dir:
+                carried=_carry_verified(nodes,record["fingerprints"],seed_record)
+                for nid in carried:
+                    record["node_status"][nid]="PASSED"
+                    record["results"][nid]={"id":nid,"status":"PASSED","attempts":[],"carried_from":seed_from}
+                if carried:record["carried"]=carried
             write_json(record_path,record)
         # A resume is a fresh host invocation; carry only the most recent
         # durable, bounded summary, not the previous session transcript.
         handoff = load_checkpoint(root, run_id) if resume else None
         progress.emit("run_started",run_id=run_id,nodes=[n["id"] for n in nodes],resume=resume)
+        if record.get("carried") and not resume:
+            progress.emit("nodes_carried",nodes=record["carried"],from_run=seed_from)
         start=time.monotonic()
-        pending={n["id"]:n for n in nodes if record["node_status"].get(n["id"])!="PASSED"}
-        failed=[]
         amap={n["id"]:n for n in nodes}
         feedbacks:dict[str,str]={}
+        if resume:
+            # A failed node reruns with the evidence of its last failure instead of repeating the same attempt blind.
+            for nid,data in record["results"].items():
+                if nid not in amap or record["node_status"].get(nid)=="PASSED":continue
+                last=(data.get("attempts") or [{}])[-1]
+                text=last.get("feedback") or last.get("execution",{}).get("stderr") or data.get("output")
+                if not text:continue
+                node=amap[nid]
+                if node.get("role")=="judge":
+                    if data.get("verdict")!="REJECT":continue
+                    # Rerunning the judge alone would reject the same code: send the reviewed coder back with the findings.
+                    feedbacks[node["reviews"]]=clip_output(str(text),4000)
+                    for rid in _between(amap,node["reviews"],nid):record["node_status"].pop(rid,None)
+                else:
+                    feedbacks[nid]=clip_output(str(text),4000)
+        pending={n["id"]:n for n in nodes if record["node_status"].get(n["id"])!="PASSED"}
+        failed=[]
         retries=record.setdefault("judge_retries",{})
         while pending:
             if (runroot/"cancel.flag").exists():
@@ -394,7 +449,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                     record["final_status"]="BUDGET_EXHAUSTED";break
             ready=[n for n in pending.values() if all(record["node_status"].get(dep)=="PASSED" for dep in n.get("depends_on",[]))]
             if not ready:
-                record["final_status"]="BLOCKED_DEPENDENCY";break
+                record["final_status"]="FAILED" if failed else "BLOCKED_DEPENDENCY";break
             wave=ready[:cfg.max_parallel]
             for n in wave:progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
             with ThreadPoolExecutor(max_workers=len(wave)) as pool:
@@ -442,10 +497,12 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             # Exactly one tiny file overwrite per completed wave. No LLM or
             # per-tool hook, and no transcript or tool logs in long-term memory.
             managed_checkpoint(root,record,state="BLOCKED" if failed else "IN_PROGRESS")
-            if failed:
-                record["final_status"]="FAILED";break
+            # A failure stops only its dependents: independent nodes still finish, so a
+            # corrected rerun (`--from`) carries them instead of running them for the first time.
         if not pending and not failed:
             record["final_status"]="COMPARISON_READY" if any(v.get("review_required") for v in record["results"].values()) else "PASSED"
+        elif failed and record["final_status"]=="RUNNING":
+            record["final_status"]="FAILED"
         record["changed_files"]=_changed(record["base_snapshot"],snapshot(staging))
         record["usage"]=usage_summary(record)
         if record["final_status"]=="PASSED" and apply:
@@ -474,7 +531,8 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                     else:atomic_bytes(dst,b)
                 raise
         write_json(record_path,record)
-        if record.get("worktree") and should_cleanup:
+        # An unfinished run keeps its worktree: resume and `--from` continue from that staging.
+        if record.get("worktree") and should_cleanup and record["final_status"] in ("PASSED","COMPARISON_READY"):
             git_worktree_remove(root, staging, force=True)
             record["worktree_cleaned"] = True
             write_json(record_path, record)

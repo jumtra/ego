@@ -42,6 +42,7 @@ Do not edit project files yourself. ego's engine runs every node in an isolated 
 5. After `run_finished`, read `ego work status run-<slug> --root .` once for `nodes`, `failures`, `changed_files` and `next_action`.
 6. A PASSED run is **検証済み・未適用**. Show the changed files and ask for approval to apply. After approval run the `next_action` command, then inspect `git diff`.
 7. If a node fails, a step cannot be done as written, needs a file outside its Where, or one of the node's assumptions turns out false, stop and ask instead of improvising: explain, and get approval before changing the plan or rerunning.
+8. After approval, correct only the failed nodes in the task file, keep the others unchanged, and rerun step 2's command with `--run-id run-<slug>-2 --from run-<slug>`: unchanged verified nodes are not run again.
 
 Use `ego work loop --task` (`.claude/skills/work/references/loop.md`) instead only when a command proves the whole goal and the user agreed that a failed iteration may be replanned.
 

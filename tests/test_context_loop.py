@@ -222,6 +222,94 @@ def test_loop_replans_from_bounded_history_and_carries_verified_work(tmp_path: P
     assert checkpoint["status"] == "VERIFIED"
 
 
+def _writing_agent(monkeypatch) -> list[str]:
+    """Fake worker: `WRITE <file>=<text>` in a node prompt writes that file; returns the node ids that ran."""
+    import re
+    ran: list[str] = []
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        for name, text in re.findall(r"WRITE (\S+?)=(\S+)", prompt):
+            (Path(cwd) / name).write_text(text)
+        ran.append(re.search(r"NODE (\S+)", prompt).group(1))
+        return RunResult("PASS", "ok", "", 0, 0.0, host, cost_usd=0.0)
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    return ran
+
+
+def _agent(nid: str, write: str, deps=(), checks=None) -> dict:
+    node = {"id": nid, "kind": "agent", "prompt": f"NODE {nid} WRITE {write}", "write_allowlist": ["*.txt"],
+            "depends_on": list(deps), "max_attempts": 1}
+    if checks:
+        node["checks"] = checks
+    return node
+
+
+def test_seeded_run_skips_verified_agent_nodes_and_reruns_only_the_failed_one(tmp_path: Path, monkeypatch):
+    ran = _writing_agent(monkeypatch)
+    (tmp_path / "check_b.py").write_text("from pathlib import Path\nimport sys\nsys.exit(Path('b.txt').read_text()!='ok')\n")
+    (tmp_path / "noop.py").write_text("print('ok')\n")
+    gate = {"id": "gate", "kind": "gate", "depends_on": ["a"], "argv": ["python3", "noop.py"]}
+    first = {"goal": "g", "nodes": [_agent("a", "a.txt=A"), gate,
+                                    _agent("b", "b.txt=bad", ["gate"], [["python3", "check_b.py"]])]}
+    r1 = execute(tmp_path, first, extra_allow=["*.py"])
+    assert r1["final_status"] == "FAILED" and ran == ["a", "b"]
+    second = {"goal": "restated goal", "nodes": [_agent("a", "a.txt=A"), gate,
+                                                 _agent("b", "b.txt=ok", ["gate"], [["python3", "check_b.py"]])]}
+    r2 = execute(tmp_path, second, seed_from=r1["run_id"])
+    assert r2["final_status"] == "PASSED" and ran == ["a", "b", "b"]
+    assert r2["carried"] == ["a"] and r2["results"]["a"]["carried_from"] == r1["run_id"]
+    assert r2["changed_files"] == ["a.txt", "b.txt"]
+    progress = (tmp_path / ".ego/state/runs" / r2["run_id"] / "progress.jsonl").read_text()
+    assert '"nodes_carried"' in progress
+    # A changed ancestor invalidates every node below it.
+    third = {"goal": "g", "nodes": [_agent("a", "a.txt=A2"), gate,
+                                    _agent("b", "b.txt=ok", ["gate"], [["python3", "check_b.py"]])]}
+    r3 = execute(tmp_path, third, seed_from=r2["run_id"])
+    assert r3["final_status"] == "PASSED" and "carried" not in r3 and ran[3:] == ["a", "b"]
+
+
+def test_node_fingerprint_covers_ancestors_and_shared_settings_but_not_the_goal():
+    base = {"goal": "g", "nodes": [_agent("a", "a.txt=A"), _agent("b", "b.txt=B", ["a"]), _agent("c", "c.txt=C")]}
+    fp = work.node_fingerprints(base)
+    assert work.node_fingerprints({**base, "goal": "reworded"}) == fp
+    changed = work.node_fingerprints({**base, "nodes": [_agent("a", "a.txt=X")] + base["nodes"][1:]})
+    assert changed["a"] != fp["a"] and changed["b"] != fp["b"] and changed["c"] == fp["c"]
+    assert work.node_fingerprints({**base, "instructions": "be careful"})["c"] != fp["c"]
+
+
+def test_loop_replan_keeps_verified_agent_nodes_without_running_them_again(tmp_path: Path, monkeypatch):
+    _loop_project(tmp_path)
+    ran = _writing_agent(monkeypatch)
+    histories = []
+
+    def planner(goal, history, workdir):
+        histories.append(history)
+        return {"goal": goal, "nodes": [_agent("make-a", "a.txt=A") if history is None else _agent("make-b", "b.txt=B")]}
+
+    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], planner=planner,
+                      scope=["*.txt"], max_iterations=3)
+    assert result["status"] == "VERIFIED"
+    assert ran == ["make-a", "make-b"]
+    assert "verified nodes (kept, not re-run): make-a" in histories[1]
+    record = json.loads((tmp_path / ".ego/state/runs" / result["iterations"][1]["run_id"] / "record.json").read_text())
+    assert record["carried"] == ["make-a"] and [n["id"] for n in record["spec"]["nodes"]] == ["make-a", "make-b", DONE_NODE]
+
+
+def test_loop_planner_may_redo_a_verified_node_by_reusing_its_id(tmp_path: Path, monkeypatch):
+    _loop_project(tmp_path)
+    ran = _writing_agent(monkeypatch)
+
+    def planner(goal, history, workdir):
+        if history is None:
+            return {"goal": goal, "nodes": [_agent("make-a", "a.txt=A")]}
+        return {"goal": goal, "nodes": [_agent("make-a", "a.txt=A WRITE b.txt=B")]}
+
+    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], planner=planner,
+                      scope=["*.txt"], max_iterations=3)
+    assert result["status"] == "VERIFIED" and ran == ["make-a", "make-a"]
+
+
 def test_loop_applies_only_with_approval_and_only_after_the_goal_holds(tmp_path: Path):
     _loop_project(tmp_path)
     with pytest.raises(EgoError):

@@ -55,6 +55,29 @@ def with_done_gate(spec: dict, done_checks: list[list[str]]) -> dict:
     return {**spec, "nodes": nodes + [gate]}
 
 
+def keep_verified(spec: dict, previous: dict, node_status: dict) -> dict:
+    """Prepend the previous run's verified agent nodes (and their ancestors), copied verbatim.
+
+    Unchanged definitions keep their fingerprint, so execute() skips them and runs only
+    the replanned remainder. A planned node with the same id replaces the verified one
+    and runs again; the kept nodes downstream of it then change fingerprint and rerun too.
+    """
+    planned = {n.get("id") for n in spec.get("nodes", []) if isinstance(n, dict)}
+    before = {n["id"]: n for n in previous["nodes"] if n["id"] != DONE_NODE}
+    stack = [nid for nid, n in before.items()
+             if node_status.get(nid) == "PASSED" and n.get("kind", "agent") not in ("code", "gate")]
+    keep: set[str] = set()
+    while stack:
+        nid = stack.pop()
+        if nid in keep or nid in planned:
+            continue
+        keep.add(nid)
+        stack.extend(before[nid].get("depends_on", []))
+    if not keep:
+        return spec
+    return {**spec, "nodes": [dict(n) for nid, n in before.items() if nid in keep] + list(spec.get("nodes", []))}
+
+
 def history_text(iterations: list[dict]) -> str | None:
     """Bounded replan input. Recent iterations in detail, older ones masked to a line."""
     if not iterations:
@@ -67,7 +90,7 @@ def history_text(iterations: list[dict]) -> str | None:
     for it in recent:
         lines.append(f"Iteration {it['n']}: {it['status']}")
         if it.get("passed"):
-            lines.append("  verified nodes: " + ", ".join(it["passed"][:12]))
+            lines.append("  verified nodes (kept, not re-run): " + ", ".join(it["passed"][:12]))
         for failure in it.get("failures", []):
             where = "goal check" if failure["node"] == DONE_NODE else f"node {failure['node']}"
             lines.append(f"  failed {where}:\n" + clip_output(failure["feedback"], 700))
@@ -194,6 +217,9 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
     write_json(path, ledger)
     start = time.monotonic()
     seed: str | None = None
+    # The task and node states of the run `seed` names; verified nodes of it are carried into the next plan.
+    seed_spec: dict | None = None
+    seed_status: dict = {}
     last_signature: str | None = None
 
     def spend(cost: Any, calls: int) -> None:
@@ -222,6 +248,8 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
             if planner_usage is not None:
                 spend(planner_usage.get("cost_usd"), 1)
                 add_usage(ledger["usage"], plan_tokens=tokens_of(planner_usage))
+            if seed_spec is not None:
+                spec = keep_verified(spec, seed_spec, seed_status)
             spec = with_done_gate(spec, done_checks)
             # Reject a plan with a forbidden command before anything runs, so the planner
             # hears why instead of the loop dying halfway through an iteration.
@@ -260,6 +288,7 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
                 # The new run copied this tree; keep one staging copy per loop, not one per iteration.
                 shutil.rmtree(root / ".ego" / "state" / "runs" / seed / "staging", ignore_errors=True)
             seed = result["run_id"]
+            seed_spec, seed_status = spec, dict(result.get("node_status", {}))
             signature = _signature(root, result, failures)
             if result["final_status"] == "PASSED":
                 entry["finished_at"] = now()

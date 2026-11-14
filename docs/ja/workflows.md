@@ -54,7 +54,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 
 1. プロジェクトを `.ego/state/runs/<run_id>/` 配下のステージング用ディレクトリにコピーします（`--worktree` または `isolation = "worktree"` の場合は Git worktree）。
 2. 依存関係の順にノードを実行します。独立したノードは最大 `max_parallel` 件まで同時に実行します。
-3. agent ノードごとに、CLI をノードのプロンプトで実行し、変更された全ファイルが `write_allowlist` に一致するか確認し、ノードの `checks` を実行します。失敗したら、チェックの出力をフィードバックとして修正し、`max_attempts` まで繰り返します。
+3. agent ノードごとに、CLI をノードのプロンプトで実行し、変更された全ファイルが `write_allowlist` に一致するか確認し、ノードの `checks` を実行します。失敗したら、チェックの出力をフィードバックとして修正し、`max_attempts` まで繰り返します。ノードが失敗しても止まるのはその下流だけで、独立したノードは最後まで実行します。
 4. 各 wave の後、run ID の下にチェックポイントを保存します。
 5. `--apply --approve` を指定すると、run の開始後にプロジェクト側の対象ファイルが変更されていないことを確認したうえで、変更ファイルをプロジェクトにコピーします（変更されていれば `STALE_BASE`）。
 
@@ -70,6 +70,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `--model <id>` / `--models <json>` | タスク全体の既定モデル、またはホスト → モデルの対応表 |
 | `--autonomy <mode>` | `auto`（既定）、`safe`（計画・読み取り専用モード）、`bypass`（権限確認をスキップ。`--attest-external-sandbox` が必要） |
 | `--run-id <id>` | （`run` のみ）実行 ID を固定し、`ego work watch <id>` で追えるようにします |
+| `--from <run_id>` | （`run` のみ）失敗した run を、修正したタスクで続けます。その run の検証済みの変更から始め、定義と上流が変わっていない検証済み agent ノードは再実行しません |
 | `--worktree` / `--keep-worktree` | Git worktree を使う。終了後も残す |
 | `--verbose` | 要約ではなく、完全な run の記録を表示 |
 
@@ -85,6 +86,8 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `BLOCKED_DEPENDENCY`、`MERGE_CONFLICT` | 依存するノードが失敗した、または並列ノードが同じファイルを矛盾して編集した | 5 |
 | `TIMEOUT`、`BUDGET_EXHAUSTED`、`CANCELLED` | 上限に達した、または `ego work cancel <run_id>` を実行した | 5 |
 
+**失敗した run の続け方。** 失敗したノードだけをタスクファイルで直し、`ego work run --task <file> --from <run_id>` で実行すると、直したノードとその下流だけが動きます。タスクを変えずに `ego work resume <run_id>` すると、失敗したノードが前回の失敗内容をフィードバックとして受け取って再実行されます（judge の REJECT なら対象の coder に指摘を渡します）。未完了の run の worktree は、続けられるように削除しません。
+
 `ego work status <run_id>` で run を再表示できます。使用量の行（例: `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`）は、入力 + 出力 + キャッシュ読み取り + キャッシュ作成のトークン数です。コストはホスト CLI 自身の見積もりです。`cost_known: false` はホストがコストを報告しなかったことを意味します。
 
 ### 途中経過
@@ -94,6 +97,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | イベント | 主な項目 |
 |---|---|
 | `run_started` | `nodes`, `resume` |
+| `nodes_carried` | `nodes`, `from_run`（前の run で検証済みのため実行しない agent ノード） |
 | `node_started` | `node`, `kind`, `role` |
 | `attempt_finished` | `node`, `attempt`, `host`, `model`, `status`, `checks`（argv と結果）, 切り詰めた `feedback`, `changed`, `tokens`, `segments`, `rotations` |
 | `worker_segment` | `node`, `attempt`, `segment`, `tokens`, `action`（`continue` か `rotate`） |
@@ -216,6 +220,7 @@ ego work cancel <loop_id>                    # 次のイテレーションの前
 - 各イテレーションは、新しい CLI セッションで計画と実行を行います。状態は会話ではなく `.ego/state/loops/<loop_id>/ledger.json` に保存されます。
 - 再計画に渡されるのは、上限付きの記録だけです。失敗したノード、切り詰めたチェック出力、変更されたパスです。
 - 検証済みの変更は次のイテレーションに引き継がれます。失敗したノードの編集は引き継がれません。
+- 検証済みの agent ノードは、定義をそのまま次のタスクに残します。自ノード・祖先・共有設定から求めたフィンガープリントが一致すれば再実行しません。プランナーが同じ id のノードを出した場合は置き換え、そのノードと下流だけを再実行します。gate/code ノードは安価な再検証として毎回実行します。
 
 | 終了状態 | 意味 |
 |---|---|
