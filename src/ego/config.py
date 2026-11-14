@@ -1,6 +1,7 @@
 """Strict configuration, with a tiny TOML writer for the supported primitives."""
 from __future__ import annotations
 from dataclasses import dataclass, field
+import copy
 import json
 from pathlib import Path
 import tomllib
@@ -13,6 +14,52 @@ MEMORY = ("file", "engram")
 POLICIES = ("strict", "relaxed")
 ROLE_NAMES = ("coder", "tester", "judge")
 VALID_EFFORTS = {"auto", "low", "medium", "high", "xhigh", "max"}
+EFFORT_ALIASES = {"middle": "medium"}
+MAX_ROLE_CANDIDATES = 8
+# Host-neutral starting point: no `host` key, so the run's host decides which entry applies.
+DEFAULT_ROLES: dict[str, Any] = {
+    "coder": {"claude": [{"model": "haiku", "effort": ["low", "medium"]}, {"model": "sonnet"}], "codex": {"model": "auto", "effort": "medium"}},
+    "tester": {"claude": {"model": "haiku", "effort": "low"}, "codex": {"model": "auto", "effort": "low"}},
+    "judge": {"claude": {"model": "sonnet", "effort": "high"}, "codex": {"model": "auto", "effort": "high"}},
+}
+
+
+def parse_role_spec(value: Any, where: str = "role spec") -> list[tuple[str | None, str | None]]:
+    """Expand a per-host role spec into ordered (model, effort) candidates; None means host default / auto.
+
+    Accepts a {model, effort} table or a list of them; effort may be a list (["low", "middle"]) and fans out
+    into one candidate each, in order.
+    """
+    def bad(msg: str) -> EgoError:
+        return EgoError("INVALID_CONFIG", f"{where}: {msg}", 2)
+
+    def model_of(raw: Any) -> str | None:
+        if not isinstance(raw, str) or not raw.strip() or len(raw) > 128 or any(c in raw for c in " |"):
+            raise bad("model must be a non-empty string without spaces or '|'")
+        return None if raw.strip() in ("auto", "native-default") else raw.strip()
+
+    def effort_of(raw: Any) -> str | None:
+        raw = EFFORT_ALIASES.get(raw, raw)
+        if not isinstance(raw, str) or raw not in VALID_EFFORTS:
+            raise bad(f"effort must be one of {sorted(VALID_EFFORTS)} (or 'middle')")
+        return None if raw == "auto" else raw
+
+    out: list[tuple[str | None, str | None]] = []
+    if isinstance(value, dict):
+        if set(value) - {"model", "effort"}:
+            raise bad("table takes only model/effort")
+        m = model_of(value.get("model", "auto"))
+        efforts = value.get("effort", "auto")
+        for e in efforts if isinstance(efforts, list) else [efforts]:
+            out.append((m, effort_of(e)))
+    elif isinstance(value, list) and value:
+        for item in value:
+            out.extend(parse_role_spec(item, where))
+    else:
+        raise bad("must be a {model, effort} table or a non-empty list of them")
+    if len(out) > MAX_ROLE_CANDIDATES:
+        raise bad(f"at most {MAX_ROLE_CANDIDATES} candidates")
+    return out
 
 @dataclass
 class Config:
@@ -33,7 +80,7 @@ class Config:
     usage_switch_percent: int = 0  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
     run_yolo: bool = False  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
     models: dict[str, Any] = field(default_factory=dict)
-    roles: dict[str, Any] = field(default_factory=dict)  # role (coder/tester/judge) -> {host, model, effort}; same vocabulary as hosts/models
+    roles: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_ROLES))  # role (coder/tester/judge) -> {host, model, effort}; same vocabulary as hosts/models
     isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool = True  # whether to remove the worktree after run
     tests: list[list[str]] = field(default_factory=list)
@@ -91,8 +138,11 @@ class Config:
         for r, c in self.roles.items():
             if r not in ROLE_NAMES:
                 raise EgoError("INVALID_CONFIG", f"Unsupported role '{r}' in roles (use {ROLE_NAMES})", 2)
-            if not isinstance(c, dict) or set(c) - {"host", "model", "effort"}:
-                raise EgoError("INVALID_CONFIG", f"roles.{r} must be a table with only host/model/effort", 2)
+            if not isinstance(c, dict) or set(c) - {"host", "model", "effort", *HOSTS}:
+                raise EgoError("INVALID_CONFIG", f"roles.{r} must be a table with only host/model/effort or per-host specs ({', '.join(HOSTS)})", 2)
+            for h in HOSTS:
+                if h in c:
+                    parse_role_spec(c[h], f"roles.{r}.{h}")
             if "host" in c and c["host"] not in HOSTS:
                 raise EgoError("INVALID_CONFIG", f"roles.{r}.host must be one of {HOSTS}", 2)
             if "model" in c and (not isinstance(c["model"], str) or not c["model"].strip() or len(c["model"]) > 128):
@@ -129,6 +179,8 @@ def dump_config(cfg: Config) -> str:
         "#\n"
         "# 役割別の host/model/effort (roles。models と同じ語彙。未指定の項目は models/hosts の設定に従う):\n"
         "#   roles = {judge = {host = \"agy\", model = \"gemini-2.5-pro\", effort = \"high\"}, coder = {host = \"claude\", model = \"sonnet\"}}\n"
+        "#   ホスト別・複数指定: coder = {host = \"claude\", claude = [{model = \"haiku\", effort = [\"low\", \"middle\"]}, {model = \"sonnet\"}], codex = {model = \"gpt-5-codex\", effort = \"medium\"}}\n"
+        "#     (リストは先頭から順に候補化。2つ以上なら UNAVAILABLE/TIMEOUT/RATE_LIMIT で次の候補へ fallback。middle は medium)\n"
         "#   優先順位: ノード > タスク defaults.roles > config roles > タスク defaults > config models\n"
         "#\n"
         "# 実行環境の隔離 (isolation, cleanup_worktree):\n"

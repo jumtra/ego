@@ -149,3 +149,40 @@ def test_config_roles_route_host_model_effort_with_precedence():
     for bad in ({"boss": {}}, {"judge": {"host": "x"}}, {"judge": {"effort": "huge"}}, {"judge": {"foo": 1}}):
         with pytest.raises(EgoError):
             Config(roles=bad).validate()
+
+
+def test_role_per_host_and_multi_candidate_specs():
+    import pytest
+    from ego.config import Config, parse_role_spec
+    from ego.util import EgoError
+    assert parse_role_spec([{"model": "haiku", "effort": ["low", "high"]}, {"model": "auto"}]) == [("haiku", "low"), ("haiku", "high"), (None, None)]
+    roles = {"coder": {"claude": [{"model": "haiku", "effort": ["low", "middle"]}, {"model": "sonnet"}], "codex": {"model": "gpt-5-codex", "effort": "medium"}}}
+    Config(roles=roles).validate()
+    c = {"id": "c", "role": "coder", "prompt": "p"}
+    strategy, routes, _ = resolve_routes(c, {}, "claude", default_roles=roles)
+    assert strategy == "fallback"
+    assert [(r.host, r.model, r.effort) for r in routes] == [("claude", "haiku", "low"), ("claude", "haiku", "medium"), ("claude", "sonnet", None)]
+    strategy, routes, _ = resolve_routes(c, {}, "claude", default_roles={"coder": {**roles["coder"], "host": "codex"}})
+    assert strategy == "single" and [(r.host, r.model, r.effort) for r in routes] == [("codex", "gpt-5-codex", "medium")]
+    # a node that pins its own model beats per-host specs
+    assert resolve_routes({**c, "model": "opus"}, {}, "claude", default_roles=roles)[1][0].model == "opus"
+    for bad in ({"coder": {"claude": "haiku"}}, {"coder": {"claude": ""}}, {"coder": {"claude": {"foo": 1}}}):
+        with pytest.raises(EgoError):
+            Config(roles=bad).validate()
+
+
+def test_role_spec_table_list_with_pipe_efforts():
+    from ego.config import Config, parse_role_spec
+    spec = [{"model": "haiku", "effort": ["low", "middle"]}, {"model": "sonnet"}]
+    assert parse_role_spec(spec) == [("haiku", "low"), ("haiku", "medium"), ("sonnet", None)]
+    Config(roles={"coder": {"claude": spec}}).validate()
+
+
+def test_role_spec_effort_is_a_list_only():
+    import pytest
+    from ego.config import parse_role_spec
+    from ego.util import EgoError
+    assert parse_role_spec({"model": "haiku", "effort": ["low", "middle"]}) == [("haiku", "low"), ("haiku", "medium")]
+    for bad in ("low|middle", "{low,middle}"):
+        with pytest.raises(EgoError):
+            parse_role_spec({"model": "haiku", "effort": bad})
