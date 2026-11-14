@@ -130,8 +130,10 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
              scope: list[str] | None = None, max_iterations: int = 3, max_budget_usd: float | None = None,
              max_wall_seconds: int | None = None, trust_cli: bool = False, execute_planner: bool = False,
              apply: bool = False, approve: bool = False, autonomy: str = "auto", isolated: bool = False,
-             planner: Planner | None = None, loop_id: str | None = None, plan_first: bool = False) -> dict[str, Any]:
-    from .work import execute
+             planner: Planner | None = None, loop_id: str | None = None, plan_first: bool = False,
+             task: dict | None = None) -> dict[str, Any]:
+    """task: an approved plan run as the first iteration; later iterations replan from the bounded history."""
+    from .work import execute, validate_task
     root = root.resolve()
     cfg = load_config(root)
     if not isinstance(goal, str) or not goal.strip() or len(goal) > 6000:
@@ -147,6 +149,23 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
     if apply and not approve:
         raise EgoError("APPROVAL_REQUIRED", "--apply requires --approve")
     scope = scope or ["src/**", "tests/**"]
+    seeded: dict | None = None
+    if task is not None:
+        if plan_first:
+            raise EgoError("INVALID_LOOP", "--task already is the first plan; do not combine it with --plan-first", 2)
+        if not isinstance(task, dict):
+            raise EgoError("INVALID_TASK", "Task must be a JSON object", 2)
+        seed_task = dict(task)
+        # A task file written by `ego work plan --out` carries what that plan cost.
+        seed_usage = seed_task.pop("planner_usage", None)
+        if cfg.models and "models" not in seed_task.get("defaults", {}):
+            seed_task["defaults"] = {**seed_task.get("defaults", {}), "models": dict(cfg.models)}
+        # Reject a broken approved plan before the ledger exists; replanning it would silently replace it.
+        validate_task(seed_task)
+        for node in seed_task["nodes"]:
+            for argv in ([node["argv"]] if node.get("argv") else []) + list(node.get("checks") or []):
+                check_command(argv, cfg.allow_commands, cfg.policy_mode)
+        seeded = {"task": seed_task, **({"planner_usage": seed_usage} if isinstance(seed_usage, dict) else {})}
     if planner is None:
         from .planner import plan_work
 
@@ -167,6 +186,7 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
         raise EgoError("LOOP_EXISTS", loop_id)
     ledger: dict[str, Any] = {"loop_id": loop_id, "goal": goal.strip(), "done_checks": done_checks, "scope": scope,
                               "host": host, "created_at": now(), "status": "RUNNING", "iterations": [],
+                              "seeded_from_task": seeded is not None,
                               "cost_usd": 0.0, "cost_known": True,
                               "usage": {"planned": False, "plan_tokens": 0, "work_tokens": 0, "by_task": {}},
                               "limits": {"max_iterations": max_iterations, "max_budget_usd": max_budget_usd,
@@ -195,7 +215,8 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
         entry: dict[str, Any] = {"n": n, "started_at": now()}
         workdir = root / ".ego" / "state" / "runs" / seed / "staging" if seed else root
         try:
-            plan = planner(ledger["goal"], history_text(ledger["iterations"]), workdir)
+            plan = seeded if n == 1 and seeded is not None else \
+                planner(ledger["goal"], history_text(ledger["iterations"]), workdir)
             spec = plan.get("task", plan)
             planner_usage = plan.get("planner_usage") if isinstance(plan, dict) else None
             if planner_usage is not None:

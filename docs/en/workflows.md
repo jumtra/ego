@@ -180,11 +180,12 @@ ego work cancel <loop_id>                    # stops before the next iteration
 | `--max-budget-usd`, `--max-wall-seconds` | Optional limits |
 | `--execute` | Allow planner model calls |
 | `--plan-first` | Call the planner before the first iteration |
+| `--task <file>` | Run an approved task JSON as the first iteration; `--goal` defaults to its goal. Not combined with `--plan-first` |
 | `--trust-cli`, `--autonomy`, `--attest-external-sandbox`, `--apply --approve` | As for managed runs |
 
 How it works:
 
-- The first iteration skips the planner: one worker is run and repaired against the done-checks. The planner is called only after a failed iteration, or up front with `--plan-first`.
+- The first iteration skips the planner: one worker is run and repaired against the done-checks. The planner is called only after a failed iteration, or up front with `--plan-first`. With `--task`, the approved task replaces that first attempt, and a failure is replanned like any other iteration.
 - Every iteration plans and executes in new CLI sessions. State lives in `.ego/state/loops/<loop_id>/ledger.json`, not in a conversation.
 - Replanning receives a bounded record only: failed nodes, clipped check output and changed paths.
 - Verified changes carry over to the next iteration; edits of failed nodes do not.

@@ -397,3 +397,54 @@ def test_plan_with_a_forbidden_check_is_rejected_and_replanned_not_a_crash(tmp_p
     assert [it["status"] for it in result["iterations"]] == ["PLAN_REJECTED", "PLAN_REJECTED"]
     assert "Inline Python" in histories[1]
     assert not (tmp_path / ".ego" / "state" / "runs").exists()  # rejected before any staging copy
+
+
+def test_approved_task_is_the_first_iteration_and_replanning_follows_only_on_failure(tmp_path: Path):
+    _loop_project(tmp_path)
+    calls = []
+
+    def planner(goal, history, workdir):
+        calls.append(history)
+        return {"goal": goal, "nodes": [_node("make_b.py", "b.txt")]}
+
+    approved = {"goal": "produce a and b", "nodes": [_node("make_a.py", "a.txt")],
+                "planner_usage": {"cost_usd": 0.05}}
+    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], planner=planner,
+                      scope=["*.txt"], task=approved, max_iterations=3)
+    assert result["status"] == "VERIFIED"
+    assert [it["status"] for it in result["iterations"]] == ["FAILED", "PASSED"]
+    assert len(calls) == 1 and "missing: b.txt" in calls[0]  # the planner never replaced the approved first plan
+    assert result["usage"]["planned"] and result["cost_usd"] >= 0.05
+    ledger = json.loads((tmp_path / result["ledger_path"]).read_text())
+    assert ledger["seeded_from_task"] is True
+
+
+def test_approved_task_is_validated_and_excludes_plan_first(tmp_path: Path):
+    _loop_project(tmp_path)
+    with pytest.raises(EgoError) as broken:
+        run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=lambda *a: {},
+                 task={"goal": "g", "nodes": [{"id": "x", "kind": "code", "argv": ["python3", "noop.py"], "depends_on": ["y"],
+                                                "write_allowlist": ["*.txt"]}]})
+    assert broken.value.code == "INVALID_TASK"
+    with pytest.raises(EgoError):
+        run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=lambda *a: {},
+                 task={"goal": "g", "nodes": [{"id": "x", "kind": "code", "argv": ["bash", "-c", "true"],
+                                                "write_allowlist": ["*.txt"]}]})
+    assert not (tmp_path / ".ego/state/loops").exists()
+    with pytest.raises(EgoError) as both:
+        run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=lambda *a: {},
+                 task={"goal": "g", "nodes": [_node("make_a.py", "a.txt")]}, plan_first=True)
+    assert both.value.code == "INVALID_LOOP"
+
+
+def test_loop_cli_runs_an_approved_task_file_with_its_goal(tmp_path: Path, capsys):
+    _loop_project(tmp_path)
+    task_file = tmp_path / "task.json"
+    task_file.write_text(json.dumps({"goal": "produce a and b", "nodes": [
+        _node("make_a.py", "a.txt"), {**_node("make_b.py", "b.txt"), "depends_on": ["step-a"]}]}))
+    code = main(["work", "loop", "--root", str(tmp_path), "--task", str(task_file),
+                 "--done-check", "python3 check.py", "--scope", "*.txt"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0 and out["status"] == "VERIFIED" and out["goal"] == "produce a and b"
+    assert len(out["iterations"]) == 1
+    assert main(["work", "loop", "--root", str(tmp_path), "--done-check", "python3 check.py"]) != 0

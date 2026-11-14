@@ -5,7 +5,7 @@ import json
 import shutil
 import time
 from .config import Config, save_config, dump_config
-from .templates import generated_files, root_instructions, MARK_BEGIN, MARK_END, LEGACY_WORK_HASHES
+from .templates import generated_files, root_instructions, MARK_BEGIN, MARK_END, LEGACY_SKILL_HASHES
 from .util import EgoError, safe_path, filehash, sha256, read_json, write_json, atomic_text, ident, exclusive_lock
 
 OWNERSHIP = ".ego/ownership.json"
@@ -41,7 +41,7 @@ def installation_plan(root: Path, cfg: Config) -> dict:
         rel = f".ego/spec/skills/{skill}/SKILL.md"
         canon = safe_path(root, rel)
         if (canon.exists() and rel in prev and filehash(canon) == prev[rel]
-                and not (skill == "work" and prev[rel] in LEGACY_WORK_HASHES)):
+                and prev[rel] not in LEGACY_SKILL_HASHES.get(skill, ())):
             content = canon.read_text(encoding="utf-8")
             wanted[rel] = content
             if "claude" in cfg.hosts: wanted[f".claude/skills/{skill}/SKILL.md"] = content
