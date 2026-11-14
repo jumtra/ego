@@ -435,3 +435,27 @@ def test_opencode_plugin_pins_the_ego_binary_and_reports_failures(monkeypatch):
     assert 'spawnSync(EGO_BIN, ["hook"' in plugin and "systemMessage" in plugin
     monkeypatch.setattr(templates.shutil, "which", lambda name: None)
     assert 'const EGO_BIN = "ego"' in generated_files(Config(clear_suggest_tokens=200000))[".opencode/plugins/ego.ts"]
+
+
+def test_a_hook_under_ego_run_records_its_session(tmp_path: Path, monkeypatch, capsys):
+    (tmp_path / ".ego").mkdir()
+    (tmp_path / ".ego/config.toml").write_text("clear_suggest_tokens = 120000\n")
+    bound = tmp_path / ".ego/state/run/1.session.json"
+    monkeypatch.setenv("EGO_RUN", "claude")
+    monkeypatch.setenv("EGO_RUN_SESSION", str(bound))
+    payload = json.dumps({"session_id": "s-9", "transcript_path": "/x/s-9.jsonl"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    assert main(["hook", "stop", "--root", str(tmp_path)]) == 0
+    record = read_json(bound)
+    assert record["session_id"] == "s-9" and record["transcript_path"] == "/x/s-9.jsonl"
+    elsewhere = tmp_path / "elsewhere.json"
+    monkeypatch.setenv("EGO_RUN_SESSION", str(elsewhere))  # never a file outside this project's run state
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    assert main(["hook", "stop", "--root", str(tmp_path)]) == 0
+    assert not elsewhere.exists()
+
+
+def test_checkpoint_under_ego_run_records_the_run(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.setenv("EGO_RUN_ID", "r1")
+    assert main(["session", "checkpoint", "--root", str(tmp_path), "--task-id", "t1", "--goal", "g"]) == 0
+    assert read_json(tmp_path / ".ego/memory/handoffs/t1.json")["run"] == "r1"

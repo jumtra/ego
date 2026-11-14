@@ -22,17 +22,20 @@ import shlex
 import shutil
 import signal
 import sqlite3
+import struct
 import sys
 import termios
 import time
 import tty
+import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from .session import HOST_CLEAR, RESUGGEST_GROWTH, context_tokens, latest_open_checkpoint, resume_prompt
+from .session import (HOST_CLEAR, RESUGGEST_GROWTH, RUN_ID_ENV, RUN_SESSION_ENV, context_tokens,
+                      latest_open_checkpoint, resume_prompt)
 from .util import EgoError, read_json, safe_path, write_json
 
 RUN_ENV = "EGO_RUN"              # set for the host: its own ego hooks stand down, this process rotates instead
@@ -42,6 +45,7 @@ QUIET_OUTPUT = 2.0               # the host has drawn nothing for this long
 QUIET_KEYS = 5.0                 # the user has typed nothing for this long
 SAVE_TIMEOUT = 300.0             # no checkpoint this long after asking: give up until the context grows again
 AFTER_CLEAR = 3.0                # let the host reset before the resume prompt is typed
+BAR_QUIET = 0.5                  # the status row is redrawn only once the host has paused this long (no half-written escapes)
 TAIL_BYTES = 512 * 1024
 # Each CLI's own switch for "approve every tool call without asking"; all it means is that CLI's meaning.
 YOLO_FLAGS = {"claude": "--dangerously-skip-permissions", "codex": "--dangerously-bypass-approvals-and-sandbox",
@@ -86,9 +90,12 @@ def _newest_first(paths, since: float) -> list[Path]:
     return [p for _, p in sorted(found, reverse=True)]
 
 
-def _claude(root: Path, since: float) -> Reading | None:
-    home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    paths = _newest_first((home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(root))).glob("*.jsonl"), since)
+def _claude(root: Path, since: float, transcript: str | None = None) -> Reading | None:
+    if transcript:
+        paths = [Path(transcript)] if Path(transcript).is_file() else []
+    else:
+        home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        paths = _newest_first((home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(root))).glob("*.jsonl"), since)
     if not paths:
         return None
     idle = False
@@ -101,9 +108,10 @@ def _claude(root: Path, since: float) -> Reading | None:
     return Reading(str(paths[0]), context_tokens(paths[0]), idle)
 
 
-def _codex(root: Path, since: float) -> Reading | None:
+def _codex(root: Path, since: float, transcript: str | None = None) -> Reading | None:
     home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-    for path in _newest_first((home / "sessions").glob("*/*/*/rollout-*.jsonl"), since):
+    candidates = [Path(transcript)] if transcript else _newest_first((home / "sessions").glob("*/*/*/rollout-*.jsonl"), since)
+    for path in candidates:
         try:
             with path.open("rb") as f:
                 meta = json.loads(f.readline(4 * 1024 * 1024))
@@ -130,15 +138,18 @@ def _codex(root: Path, since: float) -> Reading | None:
     return None
 
 
-def _opencode(root: Path, since: float) -> Reading | None:
+def _opencode(root: Path, since: float, session_id: str | None = None) -> Reading | None:
     db = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "opencode" / "opencode.db"
     if not db.is_file():
         return None
     try:
         con = sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True, timeout=1)
         try:
-            row = con.execute("select id from session where directory=? and parent_id is null and time_updated>=? "
-                              "order by time_updated desc limit 1", (str(root), int(since * 1000))).fetchone()
+            if session_id:
+                row = con.execute("select id from session where id=? and parent_id is null", (session_id,)).fetchone()
+            else:
+                row = con.execute("select id from session where directory=? and parent_id is null and time_updated>=? "
+                                  "order by time_updated desc limit 1", (str(root), int(since * 1000))).fetchone()
             if row is None:
                 return None
             rows = con.execute("select data from message where session_id=? order by time_created desc limit 20",
@@ -178,15 +189,55 @@ def _reported(state: Path | None) -> Reading | None:
     return Reading(record["key"], tokens if isinstance(tokens, int) and tokens > 0 else None, record.get("idle") is True)
 
 
-def measure(host: str, root: Path, since: float, state: Path | None = None) -> Reading | None:
-    """The live session of `host` in `root`, from the host's own record. None when there is none to read."""
+def _bound(session: Path | None) -> dict[str, Any] | None:
+    record = read_json(session) if session else None
+    return record if isinstance(record, dict) and isinstance(record.get("session_id"), str) else None
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, OverflowError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _other_runs(root: Path, own: Path) -> bool:
+    """Another live `ego run` in this project: then the newest record may be its session, not ours."""
+    for path in (root / ".ego" / "state" / "run").glob("*.session.json"):
+        try:
+            pid = int(path.name.split(".", 1)[0])
+        except ValueError:
+            continue
+        if path.resolve() != own.resolve() and _alive(pid):
+            return True
+    return False
+
+
+def measure(host: str, root: Path, since: float, state: Path | None = None,
+            session: Path | None = None) -> Reading | None:
+    """The live session of `host` in `root`, from the host's own record. None when there is none to read.
+
+    `session` is this run's binding file, which its hooks fill with the host session they belong to.
+    """
+    if host not in ("claude", "codex", "opencode"):
+        return _reported(state)  # AGY: its status line already reports per run
+    bound = _bound(session)
+    if bound is None and session is not None and _other_runs(root, session):
+        return None  # several runs here and this one's session not yet reported: never read another's
+    transcript = bound["transcript_path"] if bound and isinstance(bound.get("transcript_path"), str) else None
     if host == "claude":
-        return _claude(root, since)
+        return _claude(root, since, transcript)
     if host == "codex":
-        return _codex(root, since)
-    if host == "opencode":
-        return _opencode(root, since)
-    return _reported(state)
+        return _codex(root, since, transcript)
+    return _opencode(root, since, bound["session_id"] if bound else None)
+
+
+def ctx_label(tokens: int | None) -> str:
+    """The context figure as ego shows it; a dash when the host's size cannot be measured."""
+    return f"ego · ctx {tokens // 1000}k" if tokens is not None and tokens > 0 else "ego · ctx —"
 
 
 def record_context(payload: dict[str, Any], state: Path) -> str:
@@ -198,7 +249,7 @@ def record_context(payload: dict[str, Any], state: Path) -> str:
         tokens = round(float(window.get("used_percentage") or 0) * float(window.get("context_window_size") or 0) / 100)
     key = str(payload.get("conversation_id") or payload.get("session_id") or "")[:80]
     write_json(state, {"key": key, "tokens": int(tokens), "idle": payload.get("agent_state") == "idle", "at": time.time()})
-    return f"ego · ctx {tokens // 1000}k" if tokens > 0 else "ego"
+    return ctx_label(int(tokens))
 
 
 _CSI_U = re.compile(rb"\x1b\[(\d+)(?::\d*)*(?:;(\d+)(?::\d+)?)?(?:;[\d:]*)?u")
@@ -264,8 +315,9 @@ Keys = list[tuple[float, bytes]]  # (seconds to wait first, bytes to type)
 class Rotator:
     """Decides what to type and when. Holds no terminal: `step` is given what was observed."""
 
-    def __init__(self, root: Path, host: str, threshold: int) -> None:
+    def __init__(self, root: Path, host: str, threshold: int, run_id: str | None = None) -> None:
         self.root, self.host, self.threshold = root, host, threshold
+        self.run_id = run_id  # only checkpoints saved under this `ego run` count as this session's
         self.trigger = threshold
         self.saving_since: float | None = None
         self.cleared: str | None = None  # the session just rotated away from: its record still reads as full
@@ -293,7 +345,7 @@ class Rotator:
                 return []
             self.saving_since = at
             return [(0.0, _paste(_save_request(tokens, self.threshold))), (0.4, b"\r")]
-        checkpoint = latest_open_checkpoint(self.root, at - self.saving_since)  # saved after we asked
+        checkpoint = latest_open_checkpoint(self.root, at - self.saving_since, run=self.run_id)  # saved after we asked
         if checkpoint is None:
             if at - self.saving_since > SAVE_TIMEOUT:
                 self.saving_since = None
@@ -325,20 +377,55 @@ def _copy_size(source: int, target: int) -> None:
         pass
 
 
+def _terminal(fd: int) -> tuple[int, int] | None:
+    """(rows, cols) of a terminal tall enough to keep a status row, else None."""
+    if not os.isatty(fd):
+        return None
+    try:
+        rows, cols, _, _ = struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8))
+    except OSError:
+        return None
+    return (rows, cols) if rows >= 3 else None
+
+
+def _set_size(fd: int, rows: int, cols: int) -> None:
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    except OSError:
+        pass
+
+
+def _bar_region(rows: int, cols: int, text: str) -> bytes:
+    """Keep the last row for the status bar: the host scrolls above it and the bar is drawn; the cursor is restored."""
+    return f"\x1b7\x1b[1;{rows - 1}r\x1b[{rows};1H\x1b[2K\x1b[7m{text[:cols]}\x1b[0m\x1b8".encode("utf8")
+
+
+def _bar_text(rows: int, cols: int, text: str) -> bytes:
+    return f"\x1b7\x1b[{rows};1H\x1b[2K\x1b[7m{text[:cols]}\x1b[0m\x1b8".encode("utf8")
+
+
+def _bar_release(rows: int) -> bytes:
+    return f"\x1b[r\x1b[{rows};1H\x1b[2K".encode()
+
+
 def _terminated(signum, frame):
     raise SystemExit(128 + signum)
 
 
 def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str, str] | None = None,
         state: Path | None = None, stdin_fd: int = 0, stdout_fd: int = 1,
-        probe: Callable[[str, Path, float, Path | None], Reading | None] = measure, poll: float = POLL,
-        quiet_output: float = QUIET_OUTPUT, quiet_keys: float = QUIET_KEYS) -> tuple[int, int]:
+        probe: Callable[..., Reading | None] = measure, poll: float = POLL,
+        quiet_output: float = QUIET_OUTPUT, quiet_keys: float = QUIET_KEYS,
+        session: Path | None = None, run_id: str | None = None) -> tuple[int, int]:
     """Run `argv` in a pseudo-terminal bridged to this one. Returns (exit code, rotations done)."""
     started = time.time()
     master, slave = pty.openpty()
     interactive = os.isatty(stdin_fd)
     if interactive:
         _copy_size(stdin_fd, slave)
+    screen = _terminal(stdout_fd)  # a terminal to draw the status row on; the host is then one row shorter
+    if screen:
+        _set_size(slave, screen[0] - 1, screen[1])
     pid = os.fork()
     if pid == 0:
         try:
@@ -352,12 +439,16 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
     saved = termios.tcgetattr(stdin_fd) if interactive else None
     handlers = {}
     try:
-        if interactive:
-            tty.setraw(stdin_fd)
-            handlers[signal.SIGWINCH] = signal.signal(signal.SIGWINCH, lambda *_: _copy_size(stdin_fd, master))
+        resized = {"flag": False, "label": ctx_label(None)}  # the handler only sets a flag; the loop does the writes
+        if interactive or screen:
+            if interactive:
+                tty.setraw(stdin_fd)
+            handlers[signal.SIGWINCH] = signal.signal(signal.SIGWINCH, lambda *_: resized.__setitem__("flag", True))
+        if screen:
+            _write_all(stdout_fd, _bar_region(screen[0], screen[1], resized["label"]))
         for signum in (signal.SIGTERM, signal.SIGHUP):  # leave through `finally`: the terminal must not stay raw
             handlers[signum] = signal.signal(signum, _terminated)
-        rotator, keys = Rotator(root, host, threshold), InputState()
+        rotator, keys = Rotator(root, host, threshold, run_id), InputState()
         queue: deque[tuple[float, bytes]] = deque()
         due = last_output = last_poll = 0.0
         watched = [master, stdin_fd]
@@ -367,6 +458,14 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
             except InterruptedError:
                 continue
             at = time.time()
+            if resized["flag"]:
+                resized["flag"] = False
+                if screen:
+                    screen = _terminal(stdout_fd) or screen
+                    _set_size(master, screen[0] - 1, screen[1])
+                    _write_all(stdout_fd, _bar_region(screen[0], screen[1], resized["label"]))
+                elif interactive:
+                    _copy_size(stdin_fd, master)
             if master in ready:
                 try:
                     data = os.read(master, 65536)
@@ -390,20 +489,34 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
                     _write_all(master, queue.popleft()[1])
                     due = at + queue[0][0] if queue else 0.0
                 continue
-            calm = at - last_output >= quiet_output and at - keys.last_key >= quiet_keys and not keys.dirty
-            if not calm or at - last_poll < poll:
+            if at - last_poll < poll:
                 continue
             last_poll = at
             try:
-                typed = rotator.step(probe(host, root, started, state), calm, at)
+                reading = probe(host, root, started, state, session)
             except (OSError, EgoError, ValueError, KeyError, TypeError):
-                typed = []  # a record we cannot read means "do nothing", never "stop the session"
+                reading = None  # a record we cannot read means "do nothing", never "stop the session"
+            resized["label"] = ctx_label(reading.tokens if reading else None)
+            if screen and at - last_output >= BAR_QUIET:
+                _write_all(stdout_fd, _bar_text(screen[0], screen[1], resized["label"]))
+            calm = at - last_output >= quiet_output and at - keys.last_key >= quiet_keys and not keys.dirty
+            if not calm:
+                continue
+            try:
+                typed = rotator.step(reading, calm, at)
+            except (OSError, EgoError, ValueError, KeyError, TypeError):
+                typed = []
             if typed:
                 queue.extend(typed)
                 due = at + typed[0][0]
     finally:
         for signum, handler in handlers.items():
             signal.signal(signum, handler)
+        if screen:
+            try:
+                _write_all(stdout_fd, _bar_release(screen[0]))
+            except OSError:
+                pass
         if saved is not None:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, saved)
         os.close(master)
@@ -432,6 +545,12 @@ def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool 
     root = root.resolve()
     env = dict(os.environ)
     env[RUN_ENV] = host
+    run_id = uuid.uuid4().hex
+    env[RUN_ID_ENV] = run_id
+    session = safe_path(root, f".ego/state/run/{os.getpid()}.session.json")
+    session.parent.mkdir(parents=True, exist_ok=True)
+    write_json(session, {})  # exists from the start: a parallel run sees this one before its first turn
+    env[RUN_SESSION_ENV] = str(session)
     argv, state = [binary, *args], None
     if host == "agy" and "--settings" not in args:
         # AGY's conversation store is opaque; its status line input carries the context size and agent state.
@@ -441,8 +560,9 @@ def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool 
         probe_command = shlex.join([sys.executable, "-m", "ego", "hook", "context-probe"])
         argv = [binary, "--settings", json.dumps({"statusLine": {"type": "command", "command": probe_command}}), *args]
     try:
-        code, rotations = run(host, argv, root, threshold, env=env, state=state)
+        code, rotations = run(host, argv, root, threshold, env=env, state=state, session=session, run_id=run_id)
     finally:
+        session.unlink(missing_ok=True)
         if state is not None:
             state.unlink(missing_ok=True)
     if rotations:

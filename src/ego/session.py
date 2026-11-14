@@ -85,6 +85,7 @@ def save_checkpoint(
     status: str = "IN_PROGRESS",
     source: str = "interactive",
     host: str | None = None,
+    run: str | None = None,
 ) -> dict[str, Any]:
     """Atomically replace, do not append to an ever-growing history.
 
@@ -124,6 +125,8 @@ def save_checkpoint(
         host = host or (prev.get("host") if prev else None)
         if host in HOST_CLEAR:
             record["host"] = host
+        if run:
+            record["run"] = str(run)[:64]
         write_json(path, record)
     return {**record, "path": handoff_relpath(task_id)}
 
@@ -178,6 +181,8 @@ def resume_prompt(checkpoint: dict[str, Any], *, limit: int = MAX_PROMPT_CHARS, 
     return "\n".join(lines)[:limit]
 
 
+RUN_ID_ENV = "EGO_RUN_ID"  # set by ego run: which wrapper a checkpoint belongs to
+RUN_SESSION_ENV = "EGO_RUN_SESSION"  # set by ego run: where its hooks record the host session
 ADVICE_STATE = ".ego/state/session_advice.json"
 CLEAR_PENDING = ".ego/state/clear_pending.json"
 PENDING_TTL = 1800
@@ -273,12 +278,13 @@ def _age_seconds(stamp: str) -> float:
 
 
 def latest_open_checkpoint(root: Path, max_age: int = FRESH_CHECKPOINT,
-                           exclude: set[str] | frozenset[str] = frozenset()) -> dict[str, Any] | None:
+                           exclude: set[str] | frozenset[str] = frozenset(), run: str | None = None) -> dict[str, Any] | None:
     best = None
     for path in (root / ".ego" / "memory" / "handoffs").glob("*.json"):
         record = read_json(path)
         if (not isinstance(record, dict) or record.get("schema_version") != SCHEMA or record.get("status") == "COMPLETED"
-                or record.get("source") != "interactive" or record.get("task_id") in exclude or _age_seconds(record.get("updated_at", "")) > max_age):
+                or record.get("source") != "interactive" or record.get("task_id") in exclude or _age_seconds(record.get("updated_at", "")) > max_age
+                or (run is not None and record.get("run") != run)):
             continue
         if best is None or record["updated_at"] > best["updated_at"]:
             best = record
@@ -694,6 +700,22 @@ def completion_message(record: dict[str, Any]) -> str:
     if state == "COMPARISON_READY":
         return "比較実行完了（採用待ち）：比較結果を確認して採用する候補を選んでください。"
     return f"未完了：実行状態は {state or 'UNKNOWN'} です。チェックポイントから再開してください。"
+
+
+def bind_run_session(root: Path, payload: dict[str, Any]) -> bool:
+    """Under `ego run`: record which host session this wrapper's terminal holds, for its context probe."""
+    target = os.environ.get(RUN_SESSION_ENV)
+    if not target or not os.environ.get("EGO_RUN") or not isinstance(payload, dict):
+        return False
+    path = Path(target)
+    if path.resolve().parent != (root.resolve() / ".ego" / "state" / "run").resolve():
+        return False  # only the wrapper's own file under this project's run state
+    session, transcript = payload.get("session_id"), payload.get("transcript_path")
+    if not isinstance(session, str) or not session:
+        return False
+    write_json(path, {"session_id": session[:200],
+                      "transcript_path": transcript if isinstance(transcript, str) else None, "at": time.time()})
+    return True
 
 
 def project_root(root: Path, *candidates: Any) -> Path:

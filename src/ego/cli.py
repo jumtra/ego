@@ -383,7 +383,7 @@ def _cmd_memory(args):
 
 def _cmd_session(args):
     from .session import (save_checkpoint, load_checkpoint, rotation_instructions, arm_auto_resume,
-                          detect_host, list_checkpoints, resolve_task, handoff, pickup)
+                          detect_host, list_checkpoints, resolve_task, handoff, pickup, RUN_ID_ENV)
     root = _root(args)
     if args.action == "checkpoint":
         result = save_checkpoint(
@@ -391,6 +391,7 @@ def _cmd_session(args):
             next_steps=args.next_steps, decisions=args.decision,
             blockers=args.blocker, evidence=args.evidence,
             status=args.status, source="interactive", host=args.host or detect_host(),
+            run=os.environ.get(RUN_ID_ENV),
         )
         # Acknowledge only: the caller just supplied these notes, echoing them back costs context twice.
         result = {"task_id": result["task_id"], "status": result["status"], "revision": result["revision"],
@@ -465,9 +466,10 @@ def _cmd_hook(args):
         # Advisory hooks never fail the host turn: any problem means "say nothing".
         host=args.host
         try:
-            from .session import adapt_output,clear_advice,clear_resume,codex_limits,normalize_payload,project_root,usage_advice
+            from .session import adapt_output,bind_run_session,clear_advice,clear_resume,codex_limits,normalize_payload,project_root,usage_advice
             obj=normalize_payload(host,json.loads(raw))
             root=project_root(root,obj.get("cwd"))
+            bind_run_session(root,obj)
             info={}
             if args.event=="stop":
                 cfg=load_config(root)

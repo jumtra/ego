@@ -1,15 +1,18 @@
 """`ego run`: context measured from each host's own record, and the save / clear / resume it types."""
 import json
 import os
+import pty
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 
 from ego import ptyrun
 from ego.cli import main
-from ego.ptyrun import InputState, Reading, Rotator, _paste, measure, record_context, run
+from ego.ptyrun import InputState, Reading, Rotator, _paste, ctx_label, measure, record_context, run
 from ego.session import arm_auto_resume, save_checkpoint
+from ego.util import write_json
 
 
 def _lines(path: Path, rows: list[dict]) -> Path:
@@ -30,6 +33,39 @@ def test_claude_is_measured_from_its_transcript(tmp_path: Path, monkeypatch):
                   {"type": "system", "subtype": "turn_duration"}])
     assert measure("claude", root, 0) == Reading(str(path), 90015, True)
     assert measure("claude", root, time.time() + 60) is None  # written before this run started: someone else's
+
+
+def _two_claude_sessions(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path]:
+    """Sessions a (150k, older) and b (10k, written last) of one project, as two parallel runs leave them."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    root = tmp_path / "proj"
+    folder = tmp_path / "cfg" / "projects" / str(root).replace("/", "-").replace(".", "-").replace("_", "-")
+    def transcript(name, tokens):
+        usage = {"input_tokens": tokens, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        return _lines(folder / f"{name}.jsonl", [{"type": "assistant", "message": {"usage": usage, "stop_reason": "end_turn"}}])
+    a, b = transcript("a", 150000), transcript("b", 10000)
+    os.utime(a, (time.time() - 60, time.time() - 60))
+    return root, a, b
+
+
+def test_parallel_claude_runs_each_read_their_own_session(tmp_path: Path, monkeypatch):
+    root, a, b = _two_claude_sessions(tmp_path, monkeypatch)
+    runs = root / ".ego" / "state" / "run"
+    write_json(runs / "111.session.json", {"session_id": "a", "transcript_path": str(a)})
+    write_json(runs / "222.session.json", {"session_id": "b", "transcript_path": str(b)})
+    assert measure("claude", root, 0, None, runs / "111.session.json").tokens == 150000
+    assert measure("claude", root, 0, None, runs / "222.session.json").tokens == 10000
+
+
+def test_an_unbound_run_does_not_guess_beside_a_live_run(tmp_path: Path, monkeypatch):
+    root, a, b = _two_claude_sessions(tmp_path, monkeypatch)
+    runs = root / ".ego" / "state" / "run"
+    own, other = runs / "999999.session.json", runs / f"{os.getpid()}.session.json"
+    write_json(own, {})
+    write_json(other, {})
+    assert measure("claude", root, 0, None, own) is None  # the newest record may be the other run's
+    other.unlink()
+    assert measure("claude", root, 0, None, own).key == str(b)  # alone: the newest record, as before
 
 
 def test_codex_is_measured_from_the_rollout_of_this_directory(tmp_path: Path, monkeypatch):
@@ -67,6 +103,42 @@ def test_opencode_is_measured_from_its_database(tmp_path: Path, monkeypatch):
     assert measure("opencode", root, 0) == Reading("ses_1", 42500, False)  # a turn is running
 
 
+def test_parallel_codex_runs_each_read_their_own_rollout(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    root = tmp_path / "proj"
+    def rollout(name, tokens):
+        count = {"type": "token_count", "info": {"last_token_usage": {"input_tokens": tokens}}}
+        return _lines(tmp_path / "sessions" / "2026" / "11" / "11" / f"rollout-{name}.jsonl",
+                      [{"type": "session_meta", "payload": {"cwd": str(root)}}]
+                      + [{"type": "event_msg", "payload": e} for e in (count, {"type": "task_complete"})])
+    a = rollout("a", 247583)
+    os.utime(a, (time.time() - 60, time.time() - 60))
+    rollout("b", 1000)  # the other run's session, written last
+    bound = root / ".ego" / "state" / "run" / "111.session.json"
+    write_json(bound, {"session_id": "a", "transcript_path": str(a)})
+    assert measure("codex", root, 0, None, bound).tokens == 247583
+
+
+def test_parallel_opencode_runs_each_read_their_own_session(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    root = tmp_path / "proj"
+    (tmp_path / "opencode").mkdir()
+    con = sqlite3.connect(tmp_path / "opencode" / "opencode.db")
+    con.execute("create table session (id text, directory text, parent_id text, time_updated integer)")
+    con.execute("create table message (id text, session_id text, time_created integer, data text)")
+    now = int(time.time() * 1000)
+    def done(tokens):
+        return json.dumps({"role": "assistant", "finish": "stop", "time": {"completed": now}, "tokens": {"input": tokens}})
+    con.execute("insert into session values ('ses_1', ?, null, ?)", (str(root), now))
+    con.execute("insert into session values ('ses_2', ?, null, ?)", (str(root), now + 5))  # the other run's, newer
+    con.execute("insert into message values ('m1', 'ses_1', 1, ?)", (done(42500),))
+    con.execute("insert into message values ('m2', 'ses_2', 1, ?)", (done(1000),))
+    con.commit(); con.close()
+    bound = root / ".ego" / "state" / "run" / "111.session.json"
+    write_json(bound, {"session_id": "ses_1", "transcript_path": None})
+    assert measure("opencode", root, 0, None, bound) == Reading("ses_1", 42500, True)
+
+
 def test_agy_reports_through_its_status_line(tmp_path: Path, monkeypatch, capsys):
     state = tmp_path / "state.json"
     payload = {"conversation_id": "c1", "agent_state": "idle",
@@ -79,6 +151,54 @@ def test_agy_reports_through_its_status_line(tmp_path: Path, monkeypatch, capsys
     assert capsys.readouterr().out.strip() == "ego · ctx 125k"
     assert measure("agy", tmp_path, 0, state).idle is False
     assert measure("agy", tmp_path, 0, None) is None
+
+
+def test_an_unmeasured_context_is_shown_as_a_dash(tmp_path: Path):
+    assert ctx_label(None) == "ego · ctx —" and ctx_label(0) == "ego · ctx —"
+    assert ctx_label(125000) == "ego · ctx 125k"
+    empty = {"context_window": {"context_window_size": 0, "used_percentage": 0}}
+    assert record_context(empty, tmp_path / "state.json") == "ego · ctx —"
+
+
+def test_the_bar_keeps_the_last_row_and_the_host_gets_the_rest(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(ptyrun, "BAR_QUIET", 0)
+    screen_master, screen = pty.openpty()
+    ptyrun._set_size(screen, 10, 40)
+    read_end, write_end = os.pipe()
+    chunks: list[bytes] = []
+
+    def drain():
+        while True:
+            try:
+                data = os.read(screen_master, 4096)
+            except OSError:
+                return
+            if not data:
+                return
+            chunks.append(data)
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    host = ("import fcntl,struct,termios,time\n"
+            "time.sleep(0.4)\n"
+            "rows, cols, _, _ = struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0' * 8))\n"
+            "print('SIZE', rows, cols, flush=True)\n")
+    try:
+        code, rotations = run("claude", [sys.executable, "-c", host], tmp_path, 40000, stdin_fd=read_end,
+                              stdout_fd=screen, probe=lambda *_: Reading("s1", 12000, False),
+                              poll=0.05, quiet_output=0.05, quiet_keys=0)
+    finally:
+        os.close(read_end)
+        os.close(write_end)
+        os.close(screen)
+    reader.join(5)
+    out = b"".join(chunks)
+    assert (code, rotations) == (0, 0)
+    assert b"SIZE 9 40" in out  # the host draws in 9 rows; the tenth is ego's
+    assert b"\x1b[1;9r" in out and b"\x1b[10;1H" in out  # scrolling stops above the bar row
+    assert "ego · ctx 12k".encode() in out  # the probe's reading reached the bar
+    assert out.endswith(b"\x1b[r\x1b[10;1H\x1b[2K")  # the region is released on exit
+    os.close(screen_master)
 
 
 def test_a_draft_in_the_input_box_is_noticed():
@@ -147,6 +267,17 @@ def test_without_a_checkpoint_nothing_is_cleared(tmp_path: Path):
     assert rot.rotations == 0
 
 
+def test_a_run_waits_only_for_its_own_checkpoint(tmp_path: Path):
+    rot = Rotator(tmp_path, "claude", 100000, "mine")
+    asked = time.time() - 10
+    assert rot.step(Reading("s1", 120000, True), True, asked)  # asks this session to save
+    save_checkpoint(tmp_path, "task-b", goal="b", run="other")  # a parallel run's session saved first
+    assert rot.step(Reading("s1", 120000, True), True, asked + 20) == []
+    save_checkpoint(tmp_path, "task-a", goal="a", run="mine")
+    typed = b"".join(keys for _, keys in rot.step(Reading("s1", 120000, True), True, asked + 30))
+    assert b"Resume task task-a" in typed and b"task-b" not in typed
+
+
 HOST = r"""
 import os, sys, tty
 tty.setraw(0)
@@ -168,7 +299,7 @@ def test_the_wrapped_cli_is_typed_into(tmp_path: Path, monkeypatch):
     sink = os.open(os.devnull, os.O_WRONLY)
     deadline = time.time() + 30
 
-    def probe(host, root, since, state):
+    def probe(host, root, since, state, session=None):
         typed = log.read_bytes() if log.exists() else b""
         if b"Resume task feat" in typed or time.time() > deadline:
             if typed.endswith(b"\r") or time.time() > deadline:
