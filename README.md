@@ -6,7 +6,7 @@
 
 Bring planning, task routing, tests, and memory to Claude Code, Codex, OpenCode, and Antigravity.
 
-![Version](https://img.shields.io/badge/version-0.0.13-2563eb)
+![Version](https://img.shields.io/badge/version-0.0.14-2563eb)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-475569)
 
