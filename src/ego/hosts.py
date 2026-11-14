@@ -32,7 +32,7 @@ def capability(host: str) -> HostCapability:
 def build_command(host: str, prompt: str, *, model: str | None = None, effort: str | None = None,
                   read_only: bool = True, max_turns: int = 4, use_stdin: bool = False,
                   autonomy: str = "auto", isolated: bool = False, lean: bool = False,
-                  max_budget_usd: float | None = None) -> list[str]:
+                  max_budget_usd: float | None = None, resume_session: str | None = None) -> list[str]:
     cap=capability(host)
     if not cap.supported:raise EgoError("HOST_UNAVAILABLE",cap.reason,3)
     if host=="mock":return []
@@ -57,6 +57,9 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         if effort and effort != "auto":
             require_flags(info,"--effort")
             argv += ["--effort",effort]
+        if resume_session:
+            require_flags(info,"--resume")
+            argv += ["--resume",resume_session]
         if autonomy=="bypass":
             require_flags(info,"--dangerously-skip-permissions")
             argv.append("--dangerously-skip-permissions")

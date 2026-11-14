@@ -6,12 +6,16 @@ import copy
 import json
 from pathlib import Path
 import shutil
+import sys
 import tempfile
+import threading
 import time
+import uuid
 from typing import Any
 from .config import load_config
 from .policy import check_write, check_role_write
 from .runner import run_agent, run_checked_command
+from .worker import run_worker
 from .util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
                    filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove)
 from .task_routing import validate_task_context, resolve_routes, build_task_prompt
@@ -21,6 +25,32 @@ from .judge import parse_verdict, format_findings
 from .usage import TOKEN_KEYS, tokens_of, summary_line
 
 KINDS={"worker","agent","code","gate","splitter"}
+
+class Progress:
+    """Append-only per-run event log (`progress.jsonl`), optionally echoed to stderr.
+
+    A calling agent follows a run through these one-line JSON events instead of
+    waiting for the final summary; the full record stays on disk.
+    """
+    def __init__(self,path:Path|None,echo:bool=False):
+        self.path,self.echo,self.lock=path,echo,threading.Lock()
+        self.seq=0
+        if path is not None and path.exists():
+            self.seq=sum(1 for line in path.read_text(encoding="utf8").splitlines() if line.strip())
+
+    def emit(self,event:str,**fields)->None:
+        if self.path is None:return
+        with self.lock:
+            self.seq+=1
+            line=json.dumps({"seq":self.seq,"at":now(),"event":event,**fields},ensure_ascii=False)
+            self.path.parent.mkdir(parents=True,exist_ok=True)
+            with self.path.open("a",encoding="utf8") as f:f.write(line+"\n")
+            if self.echo:print(line,file=sys.stderr,flush=True)
+
+
+def _brief_findings(findings)->list[str]:
+    return [clip_output(json.dumps(f,ensure_ascii=False) if not isinstance(f,str) else f,300) for f in (findings or [])[:5]]
+
 
 def validate_task(spec: dict) -> list[dict]:
     if not isinstance(spec,dict) or not isinstance(spec.get("nodes"),list) or not spec["nodes"]:
@@ -86,11 +116,12 @@ def _changed(before:dict[str,str],after:dict[str,str])->list[str]:
 
 def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
               autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
-              budget_usd: float|None=None)->dict:
+              budget_usd: float|None=None, progress:Progress|None=None)->dict:
     """A task node sees a private copy; fallback never reuses failed edits.
 
     Compare runs have their own isolated copies and never merge any candidate.
     """
+    progress=progress or Progress(None)
     start=time.monotonic()
     kind=node.get("kind","agent")
     if kind in ("code","gate"):
@@ -117,10 +148,13 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     raise EgoError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
                 prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff)
                 try:
-                    r=run_agent(chosen_host,prompt,work,timeout,model=chosen_model,effort=chosen_effort,
-                                read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
-                                max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
-                                lean=cfg.worker_context=="lean",max_budget_usd=budget_usd)
+                    r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,threshold=cfg.clear_suggest_tokens,
+                                 segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
+                                 on_event=lambda **f:progress.emit("worker_segment",node=node["id"],attempt=iteration,**f),
+                                 model=chosen_model,effort=chosen_effort,
+                                 read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
+                                 max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
+                                 lean=cfg.worker_context=="lean",max_budget_usd=budget_usd)
                 except EgoError as exc:
                     if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
                         raise
@@ -130,7 +164,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             if r.status=="PASS":
                 for argv in node.get("checks",[]):
                     cr=run_checked_command(argv,work,timeout=min(timeout,120),allow=cfg.allow_commands)
-                    checks.append(cr.as_dict())
+                    checks.append({**cr.as_dict(),"argv":argv})
                     if cr.status!="PASS":feedback=clip_output(cr.output+"\n"+cr.stderr,4000);break
             ok=(r.status=="PASS" and all(c["status"]=="PASS" for c in checks))
             if ok and node.get("role")=="judge":
@@ -157,6 +191,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 for rel in changed:
                     path=safe_path(work,rel)
                     edits[rel]=path.read_bytes() if path.exists() else None
+            progress.emit("attempt_finished",node=node["id"],attempt=iteration,host=chosen_host,model=record["model"],
+                          status=record["status"],checks=[{"argv":c["argv"],"status":c["status"]} for c in checks],
+                          feedback=clip_output(feedback or "",800),changed=changed[:20],
+                          tokens=tokens_of(r.usage or {}),segments=getattr(r,"segments",1),rotations=getattr(r,"rotations",0))
             return {"ok":ok,"record":record,"edits":edits,"output":r.output,"execution_status":r.status}
 
     if strategy=="compare":
@@ -229,7 +267,13 @@ def usage_summary(record:dict)->dict:
     return total
 
 
-def compact_result(result:dict, *, max_files:int=40)->dict:
+def next_action(result:dict, task_file:str="<task-file>")->str|None:
+    if result.get("final_status")!="PASSED" or result.get("applied") or not result.get("run_id"):return None
+    return (f"ego work resume {result['run_id']} --root . --task {task_file} --host {result.get('host','<host>')} "
+            "--trust-cli --apply --approve")
+
+
+def compact_result(result:dict, *, max_files:int=40, task_file:str="<task-file>")->dict:
     """What a calling agent needs to decide its next step, without the record.
 
     The full record (per-file base snapshot, every attempt and raw worker
@@ -242,7 +286,17 @@ def compact_result(result:dict, *, max_files:int=40)->dict:
         text=last.get("feedback") or last.get("execution",{}).get("stderr") or data.get("output") or ""
         failures.append({"node":nid,"attempts":len(data.get("attempts",[])),"feedback":clip_output(str(text),800)})
     changed=result.get("changed_files",[])
-    out={k:result[k] for k in ("run_id","final_status","applied","node_status","message","checkpoint_path","usage") if k in result}
+    out={k:result[k] for k in ("run_id","final_status","applied","node_status","message","checkpoint_path","usage","progress") if k in result}
+    nodes={}
+    for nid,data in result.get("results",{}).items():
+        last=(data.get("attempts") or [{}])[-1]
+        entry={"status":data.get("status"),"attempts":len(data.get("attempts",[])),
+               "checks":[{"argv":c.get("argv"),"status":c.get("status")} for c in last.get("checks",[])]}
+        if data.get("verdict"):entry["verdict"]=data["verdict"];entry["findings"]=_brief_findings(data.get("findings"))
+        nodes[nid]=entry
+    if nodes:out["nodes"]=nodes
+    action=next_action(result,task_file)
+    if action:out["next_action"]=action
     if "usage" in result:out["usage_text"]=summary_line(result["usage"])
     out["changed_files"]=changed[:max_files]
     if len(changed)>max_files:out["changed_files_omitted"]=len(changed)-max_files
@@ -253,7 +307,7 @@ def compact_result(result:dict, *, max_files:int=40)->dict:
     return out
 
 
-def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bool=False,
+def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:bool=False,approve:bool=False,
             trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False,
             worktree:bool|None=None,cleanup_worktree:bool|None=None,seed_from:str|None=None,
             extra_allow:list[str]|None=None,budget_usd:float|None=None,planner_usage:dict|None=None)->dict:
@@ -321,6 +375,7 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
         # A resume is a fresh host invocation; carry only the most recent
         # durable, bounded summary, not the previous session transcript.
         handoff = load_checkpoint(root, run_id) if resume else None
+        progress.emit("run_started",run_id=run_id,nodes=[n["id"] for n in nodes],resume=resume)
         start=time.monotonic()
         pending={n["id"]:n for n in nodes if record["node_status"].get(n["id"])!="PASSED"}
         failed=[]
@@ -341,8 +396,9 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
             if not ready:
                 record["final_status"]="BLOCKED_DEPENDENCY";break
             wave=ready[:cfg.max_parallel]
+            for n in wave:progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
             with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-                results=list(pool.map(lambda n:_run_node(n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget),wave))
+                results=list(pool.map(lambda n:_run_node(n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress),wave))
             # Atomic wave merge: two nodes may not write the same relative path.
             edit_owners={}
             for result in results:
@@ -357,6 +413,9 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                 record["node_status"][identifier]=result["status"]
                 # No bytes in persisted JSON, only references to changed paths
                 record["results"][identifier]={k:v for k,v in result.items() if k!="edits"}
+                extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"))} if result.get("verdict") else {}
+                progress.emit("node_finished",node=identifier,status=result["status"],attempts=len(result["attempts"]),
+                              changed=sorted(result["edits"])[:20],**extra)
                 if result["status"]!="PASSED":failed.append(identifier)
                 else:
                     for rel,data in result["edits"].items():
@@ -374,6 +433,7 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
                 if result.get("verdict")!="REJECT" or jid not in failed or retries.get(jid,0)>=jnode.get("max_retries",1):continue
                 failed.remove(jid)
                 retries[jid]=retries.get(jid,0)+1
+                progress.emit("judge_retry",judge=jid,reviews=jnode["reviews"],retry=retries[jid])
                 feedbacks[jnode["reviews"]]=format_findings(result["findings"])
                 for rid in _between(amap,jnode["reviews"],jid):
                     record["node_status"].pop(rid,None)
@@ -428,13 +488,68 @@ def execute(root:Path, spec:dict, *, host:str="mock",apply:bool=False,approve:bo
         return result
 
 
+def execute(root:Path, spec:dict, *, run_id:str|None=None, progress_stderr:bool=False, **kwargs)->dict:
+    """Run a task and journal its progress to `.ego/state/runs/<run_id>/progress.jsonl`."""
+    run_id=run_id or ident("run")
+    if not all(c.isalnum() or c in "-_" for c in run_id):raise EgoError("INVALID_ID",run_id,2)
+    runroot=root.resolve()/".ego"/"state"/"runs"/run_id
+    progress=Progress(runroot/"progress.jsonl",echo=progress_stderr)
+    try:
+        result=_execute(root,spec,progress,run_id=run_id,**kwargs)
+    except BaseException as exc:
+        # Only a run that exists can be followed; a refused start (RUN_EXISTS, bad task) leaves no log.
+        if (runroot/"record.json").exists() and not (isinstance(exc,EgoError) and exc.code=="RUN_EXISTS"):
+            code=exc.code if isinstance(exc,EgoError) else type(exc).__name__
+            progress.emit("run_error",run_id=run_id,code=code,message=clip_output(str(exc),400))
+        raise
+    progress.emit("run_finished",run_id=run_id,final_status=result["final_status"],applied=result.get("applied",False),
+                  changed_files=len(result.get("changed_files",[])),message=result.get("message"))
+    return result
+
+
 def status(root:Path,run_id:str)->dict:
     if not run_id.replace("-","").replace("_","").isalnum():raise EgoError("INVALID_ID",run_id,2)
     data=read_json(root/".ego"/"state"/"runs"/run_id/"record.json")
     if not data:raise EgoError("RUN_NOT_FOUND",run_id,3)
     return {**{k:v for k,v in data.items() if k!="spec"},
             "message":completion_message(data), "checkpoint_path":handoff_relpath(run_id),
-            "usage":usage_summary(data)}
+            "usage":usage_summary(data),"progress":_progress_tail(root,run_id)}
+
+
+def _progress_tail(root:Path,run_id:str,n:int=10)->list[dict]:
+    path=root/".ego"/"state"/"runs"/run_id/"progress.jsonl"
+    if not path.exists():return []
+    out=[]
+    for line in path.read_text(encoding="utf8").splitlines()[-n:]:
+        try:out.append(json.loads(line))
+        except ValueError:continue
+    return out
+
+
+def watch(root:Path,run_id:str,*,after:int=0,poll:float=1.0,write=lambda s:print(s,flush=True),start_wait:float=60.0)->int:
+    """Print the run's events after `after` as they appear; return the last seq once the run ended."""
+    if not run_id.replace("-","").replace("_","").isalnum():raise EgoError("INVALID_ID",run_id,2)
+    runroot=root/".ego"/"state"/"runs"/run_id
+    path=runroot/"progress.jsonl"
+    seen,idle_ended,begun=after,0,time.monotonic()
+    while True:
+        lines=path.read_text(encoding="utf8").splitlines() if path.exists() else []
+        for line in lines:
+            try:event=json.loads(line)
+            except ValueError:continue
+            if event.get("seq",0)<=seen:continue
+            write(line);seen=event["seq"]
+            if event.get("event") in ("run_finished","run_error"):return seen
+        record=read_json(runroot/"record.json") if (runroot/"record.json").exists() else None
+        if record is None and not path.exists():
+            if time.monotonic()-begun>start_wait:raise EgoError("RUN_NOT_FOUND",run_id,3)
+        elif record is not None and record.get("final_status")!="RUNNING":
+            idle_ended+=1
+            if idle_ended>=2:
+                write(json.dumps({"event":"run_stopped","final_status":record.get("final_status")},ensure_ascii=False))
+                return seen
+        else:idle_ended=0
+        time.sleep(poll)
 
 
 def cancel(root:Path,run_id:str)->dict:

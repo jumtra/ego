@@ -70,6 +70,7 @@ Or run and apply in one step with `ego work run ... --apply --approve`.
 | `--model <id>` / `--models <json>` | Task-wide default model, or host → model map |
 | `--autonomy <mode>` | `auto` (default), `safe` (plan/read-only modes), `bypass` (skip permissions; requires `--attest-external-sandbox`) |
 | `--worktree` / `--keep-worktree` | Use a Git worktree; keep it afterwards |
+| `--run-id <id>` | (`run` only) Fixed run ID, so `ego work watch <id>` can follow the run |
 | `--verbose` | Print the full run record instead of the summary |
 
 ### Results
@@ -85,6 +86,26 @@ Output is a compact JSON summary: `run_id`, `final_status`, `applied`, per-node 
 | `TIMEOUT`, `BUDGET_EXHAUSTED`, `CANCELLED` | A limit was reached or `ego work cancel <run_id>` was used | 5 |
 
 `ego work status <run_id>` shows a run again. The usage line (for example `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`) counts input + output + cache read + cache creation tokens. Costs are the host CLI's own estimates; `cost_known: false` means a host reported none.
+
+### Progress
+
+While a run is going, ego appends one JSON line per event to `.ego/state/runs/<run_id>/progress.jsonl` (and echoes it to stderr). `ego work watch <run_id> [--after <seq>]` streams those lines until the run ends; `ego work status <run_id>` shows the last ten as `progress`.
+
+| Event | Fields |
+|---|---|
+| `run_started` | `nodes`, `resume` |
+| `node_started` | `node`, `kind`, `role` |
+| `attempt_finished` | `node`, `attempt`, `host`, `model`, `status`, `checks` (argv + status), clipped `feedback`, `changed`, `tokens`, `segments`, `rotations` |
+| `worker_segment` | `node`, `attempt`, `segment`, `tokens`, `action` (`continue` or `rotate`) |
+| `node_finished` | `node`, `status`, `attempts`, `changed`, and for a judge `verdict` and `findings` |
+| `judge_retry` | `judge`, `reviews`, `retry` |
+| `run_finished` / `run_error` | `final_status`, `applied`, `changed_files`, `message` / `code`, `message` |
+
+The summary adds `nodes` (status, attempts and check results per node) and, for a PASSED unapplied run, `next_action`: the exact command that applies it.
+
+**`/work-plan` runs through this.** After you approve a plan, the AI writes it as a Task JSON, starts `ego work run --run-id ...`, relays these events to you as they arrive (Monitor in Claude Code, `ego work status` elsewhere), and asks before applying.
+
+**Context limit for workers.** A Claude worker runs in segments of `worker_segment_turns` turns. Between segments ego measures the session's real context size. Below `clear_suggest_tokens` the same session continues with `--resume`; at or above it, the session saves a checkpoint and the work continues in a fresh session from that checkpoint (`worker_segment` event with `action: rotate`). Other hosts and read-only nodes run once, as before.
 
 ### Task JSON
 

@@ -19,6 +19,7 @@ max_attempts = 3
 timeout_seconds = 3600
 max_turns = 30
 worker_context = "lean"
+worker_segment_turns = 10
 clear_suggest_tokens = 200000
 usage_switch_percent = 0
 run_yolo = false
@@ -66,6 +67,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `timeout_seconds` | `3600` | 5–7200 | Upper bound per node; a whole run is limited to this × number of nodes |
 | `max_turns` | `30` | 1–200 | Agent turns per worker invocation |
 | `worker_context` | `"lean"` | `lean`, `inherit` | `lean` starts Claude workers without your MCP servers; `inherit` keeps them |
+| `worker_segment_turns` | `10` | 1–200 | Claude workers run this many turns per segment; between segments the context is measured against `clear_suggest_tokens` and, at the limit, the worker checkpoints and continues in a fresh session |
 | `isolation` | `"copy"` | `copy`, `worktree` | Where a run works: a staging copy, or a Git worktree. `--worktree` overrides per run |
 | `cleanup_worktree` | `true` | bool | Remove the worktree after the run. `--keep-worktree` overrides per run |
 | `allow_commands` | common toolchains | list of command names | Executables that `checks` and `--done-check` may start. Shells and `python -c` are always refused |

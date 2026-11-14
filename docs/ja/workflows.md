@@ -69,6 +69,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `--hosts <list>` / `--strategy <s>` | タスク全体の既定ホストと戦略（`single`、`fallback`、`compare`） |
 | `--model <id>` / `--models <json>` | タスク全体の既定モデル、またはホスト → モデルの対応表 |
 | `--autonomy <mode>` | `auto`（既定）、`safe`（計画・読み取り専用モード）、`bypass`（権限確認をスキップ。`--attest-external-sandbox` が必要） |
+| `--run-id <id>` | （`run` のみ）実行 ID を固定し、`ego work watch <id>` で追えるようにします |
 | `--worktree` / `--keep-worktree` | Git worktree を使う。終了後も残す |
 | `--verbose` | 要約ではなく、完全な run の記録を表示 |
 
@@ -85,6 +86,26 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `TIMEOUT`、`BUDGET_EXHAUSTED`、`CANCELLED` | 上限に達した、または `ego work cancel <run_id>` を実行した | 5 |
 
 `ego work status <run_id>` で run を再表示できます。使用量の行（例: `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`）は、入力 + 出力 + キャッシュ読み取り + キャッシュ作成のトークン数です。コストはホスト CLI 自身の見積もりです。`cost_known: false` はホストがコストを報告しなかったことを意味します。
+
+### 途中経過
+
+実行中、ego は `.ego/state/runs/<run_id>/progress.jsonl` にイベントを 1 行ずつ JSON で追記します（stderr にも同じ行を出します）。`ego work watch <run_id> [--after <seq>]` は実行が終わるまでその行を流し、`ego work status <run_id>` は直近 10 件を `progress` として表示します。
+
+| イベント | 主な項目 |
+|---|---|
+| `run_started` | `nodes`, `resume` |
+| `node_started` | `node`, `kind`, `role` |
+| `attempt_finished` | `node`, `attempt`, `host`, `model`, `status`, `checks`（argv と結果）, 切り詰めた `feedback`, `changed`, `tokens`, `segments`, `rotations` |
+| `worker_segment` | `node`, `attempt`, `segment`, `tokens`, `action`（`continue` か `rotate`） |
+| `node_finished` | `node`, `status`, `attempts`, `changed`。judge は `verdict` と `findings` も |
+| `judge_retry` | `judge`, `reviews`, `retry` |
+| `run_finished` / `run_error` | `final_status`, `applied`, `changed_files`, `message` / `code`, `message` |
+
+要約には、ノードごとの状態・試行回数・check 結果を持つ `nodes` と、検証済みで未適用の run の適用コマンド `next_action` が加わります。
+
+**`/work-plan` はこの経路で実行されます。** 計画を承認すると、AI は計画を Task JSON にし、`ego work run --run-id ...` を起動して、届いたイベントを順にあなたへ伝えます（Claude Code は Monitor、他のホストは `ego work status`）。適用の前には確認を取ります。
+
+**ワーカーのコンテキスト上限。** Claude ワーカーは `worker_segment_turns` ターンごとの区間で実行されます。区間の間に ego がセッションの実測コンテキストを測り、`clear_suggest_tokens` 未満なら同じセッションを `--resume` で続け、以上ならチェックポイントを保存させて、新しいセッションでそこから続きを実行します（`worker_segment` イベントの `action: rotate`）。他のホストと読み取り専用ノードは従来どおり 1 回で実行します。
 
 ### タスク JSON
 

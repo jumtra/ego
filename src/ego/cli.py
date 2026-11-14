@@ -233,12 +233,13 @@ def _cmd_migrate(args):
         _print(remove_legacy(root,read_json(Path(args.hashes))));return 0
 
 def _cmd_work(args):
-    from .work import execute,status,cancel,compact_result
+    from .work import execute,status,cancel,compact_result,watch
     root=_root(args)
     # Default output is a compact summary: the full record holds a per-file
     # snapshot and raw worker output, which would land in the caller's context.
-    shape=(lambda r:r) if getattr(args,"verbose",False) else compact_result
+    shape=(lambda r:r) if getattr(args,"verbose",False) else (lambda r:compact_result(r,task_file=getattr(args,"task",None) or "<task-file>"))
     if args.action=="status":_print(shape(status(root,args.run_id)));return 0
+    if args.action=="watch":watch(root,args.run_id,after=args.after);return 0
     if args.action=="cancel":
         from .loop import ledger_path,cancel_loop
         _print(cancel_loop(root,args.run_id) if ledger_path(root,args.run_id).exists() else cancel(root,args.run_id));return 0
@@ -297,7 +298,7 @@ def _cmd_work(args):
             except json.JSONDecodeError as exc:raise EgoError("INVALID_MODEL",str(exc),2) from exc
         task["defaults"]=defaults
     result=execute(root,task,host=args.host,apply=args.apply,approve=args.approve,trust_cli=args.trust_cli,
-                   run_id=args.run_id if args.action=="resume" else None,resume=args.action=="resume",
+                   run_id=args.run_id,resume=args.action=="resume",progress_stderr=True,
                    autonomy=args.autonomy,isolated=args.attest_external_sandbox,
                    worktree=args.worktree,cleanup_worktree=args.cleanup_worktree,planner_usage=planner_usage)
     _print(shape(result));return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
@@ -683,6 +684,7 @@ def build_parser()->argparse.ArgumentParser:
     r=s.add_parser("loop-status");r.add_argument("loop_id")
     r=s.add_parser("loop-apply",help="Apply the staged result of a VERIFIED loop");r.add_argument("loop_id");r.add_argument("--approve",action="store_true")
     r=s.add_parser("plan");r.add_argument("--goal",required=True);r.add_argument("--host",default="mock");r.add_argument("--scope");r.add_argument("--out");r.add_argument("--execute",action="store_true")
+    r=s.add_parser("watch",help="Stream a run's progress events (JSON lines) until it ends");r.add_argument("run_id");r.add_argument("--after",type=int,default=0)
     for name in ("run","resume"):
         r=s.add_parser(name);r.add_argument("--task",required=True);r.add_argument("--host",choices=["mock","claude","codex","opencode","agy"],default="mock")
         r.add_argument("--apply",action="store_true");r.add_argument("--approve",action="store_true");r.add_argument("--trust-cli",action="store_true")
@@ -696,6 +698,7 @@ def build_parser()->argparse.ArgumentParser:
         r.add_argument("--keep-worktree",dest="cleanup_worktree",action="store_false",default=None,help="Keep the Git worktree after task completion")
         r.add_argument("--verbose",action="store_true",help="Print the full run record instead of the compact summary")
         if name=="resume":r.add_argument("run_id")
+        else:r.add_argument("--run-id",help="Fixed run ID, so `ego work watch <id>` can follow the run")
     sp.set_defaults(func=_cmd_work)
     sp=sub.add_parser("eval");common(sp);s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("run");r.add_argument("--suite",required=True);r.add_argument("--host",default="mock");r.add_argument("--trials",type=int,default=1);r.add_argument("--model");r.add_argument("--split");r.add_argument("--timeout",type=int,default=120)

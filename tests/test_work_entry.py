@@ -64,7 +64,7 @@ def test_approved_plan_is_handed_to_the_engine_not_replanned():
     from ego.templates import WORK_REFERENCES
     plan = skill_md('work-plan')
     assert 'do not plan it again with `ego work plan`' in plan
-    assert '`ego work run --task`' in plan and '`ego work loop --task`' in plan
+    assert 'ego work run --root . --task' in plan and '`ego work loop --task`' in plan
     assert 'approved a `work-plan` graph' in WORK_REFERENCES['managed']
     assert '--task <task-file>' in WORK_REFERENCES['loop'] and 'departs from the approved plan' in WORK_REFERENCES['loop']
 
@@ -84,6 +84,30 @@ def test_v0014_work_plan_skill_refreshes(tmp_path: Path):
     apply_install(tmp_path, cfg)
     assert canonical.read_text() == skill_md('work-plan')
     assert (tmp_path / '.claude/skills/work-plan/SKILL.md').read_text() == skill_md('work-plan')
+
+
+def test_v0015_work_plan_skill_refreshes(tmp_path: Path):
+    from ego.templates import LEGACY_WORK_PLAN_HASHES
+    cfg = Config()
+    apply_install(tmp_path, cfg)
+    canonical = tmp_path / '.ego/spec/skills/work-plan/SKILL.md'
+    old = (Path(__file__).parent / 'fixtures/work-plan-v0015.md').read_text()
+    assert sha256(old) in LEGACY_WORK_PLAN_HASHES
+    assert sha256(skill_md('work-plan')) not in LEGACY_WORK_PLAN_HASHES
+    canonical.write_text(old)
+    ownership = json.loads((tmp_path / '.ego/ownership.json').read_text())
+    ownership['files']['.ego/spec/skills/work-plan/SKILL.md'] = sha256(old)
+    write_json(tmp_path / '.ego/ownership.json', ownership)
+    apply_install(tmp_path, cfg)
+    assert canonical.read_text() == skill_md('work-plan')
+
+
+def test_work_plan_executes_through_managed_with_progress():
+    from ego.templates import WORK_REFERENCES
+    plan = skill_md('work-plan')
+    for needle in ('Do not edit project files yourself', 'ego work watch', '--run-id', 'next_action', 'Monitor'):
+        assert needle in plan
+    assert 'ego work watch <id>' in WORK_REFERENCES['managed']
 
 
 def test_instruction_block_overrides_external_planning():

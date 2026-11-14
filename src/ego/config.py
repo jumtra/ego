@@ -75,6 +75,7 @@ class Config:
     timeout_seconds: int = 3600
     max_turns: int = 30  # agentic turns per managed worker invocation
     worker_context: str = "lean"  # "lean" (no inherited MCP servers) or "inherit"
+    worker_segment_turns: int = 10  # managed Claude worker: turns per segment; context is measured between segments
     clear_suggest_tokens: int = 200000  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
     auto_resume: bool = True  # Claude Code/Codex/AGY: SessionStart(clear) hook injects the saved checkpoint after /clear (core; independent of clear_suggest_tokens)
     usage_switch_percent: int = 0  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
@@ -103,6 +104,8 @@ class Config:
             raise EgoError("INVALID_CONFIG", "Invalid runtime limits", 2)
         if not isinstance(self.max_turns, int) or not 1 <= self.max_turns <= 200:
             raise EgoError("INVALID_CONFIG", "max_turns must be between 1 and 200", 2)
+        if not isinstance(self.worker_segment_turns, int) or isinstance(self.worker_segment_turns, bool) or not 1 <= self.worker_segment_turns <= 200:
+            raise EgoError("INVALID_CONFIG", "worker_segment_turns must be between 1 and 200", 2)
         if not isinstance(self.clear_suggest_tokens, int) or not (self.clear_suggest_tokens == 0 or 20000 <= self.clear_suggest_tokens <= 2000000):
             raise EgoError("INVALID_CONFIG", "clear_suggest_tokens must be 0 (off) or between 20000 and 2000000", 2)
         if not isinstance(self.auto_resume, bool):
@@ -191,6 +194,7 @@ def dump_config(cfg: Config) -> str:
         "# Managed worker のコンテキスト (max_turns, worker_context):\n"
         "#   max_turns = 30             # worker 1 回あたりの最大ターン数\n"
         "#   worker_context = \"lean\"   # \"lean\": ユーザーの MCP サーバーを継承しない / \"inherit\": 継承する\n"
+        "#   worker_segment_turns = 10  # Claude worker をこのターン数ごとに区切り、clear_suggest_tokens 超過時はチェックポイントから新セッションで再開\n"
         "#\n"
         "# /clear 後の自動再開 (auto_resume, Claude Code / Codex / AGY / OpenCode。既定 true。SessionStart hook が保存済みチェックポイントを注入):\n"
         "#   auto_resume = true\n"
