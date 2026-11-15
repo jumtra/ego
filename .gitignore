@@ -33,7 +33,7 @@ scratch/
 .ego/artifacts/
 .ego/backups/
 .ego/locks/
-.ego/memory/handoffs/
+.ego/memory/
 
 # Legacy harness paths
 .harness/
