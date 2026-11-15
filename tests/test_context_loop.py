@@ -106,13 +106,32 @@ def _fake_claude(monkeypatch, tmp_path: Path, flags: str):
 
 
 def test_lean_worker_drops_inherited_mcp_and_carries_turn_and_budget_limits(monkeypatch, tmp_path: Path):
-    _fake_claude(monkeypatch, tmp_path, "--output-format --max-turns --permission-mode --strict-mcp-config --max-budget-usd auto")
+    _fake_claude(monkeypatch, tmp_path, "--output-format --max-turns --permission-mode --strict-mcp-config --mcp-config --max-budget-usd auto")
     argv = hosts.build_command("claude", "p", read_only=False, max_turns=30, lean=True, max_budget_usd=1.5, use_stdin=True)
     assert "--strict-mcp-config" in argv
+    assert "--mcp-config" not in argv
     assert argv[argv.index("--max-turns") + 1] == "30"
     assert argv[argv.index("--max-budget-usd") + 1] == "1.50"
     inherit = hosts.build_command("claude", "p", read_only=False, use_stdin=True)
     assert "--strict-mcp-config" not in inherit and "--max-budget-usd" not in inherit
+
+
+def test_lean_worker_with_alter_loads_only_requested_mcp(monkeypatch, tmp_path: Path):
+    _fake_claude(monkeypatch, tmp_path, "--output-format --max-turns --permission-mode --strict-mcp-config --mcp-config auto")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude.json").write_text(json.dumps({
+        "mcpServers": {
+            "alter": {"type": "stdio", "command": "node", "args": ["alter.js"]},
+            "other": {"type": "stdio", "command": "node", "args": ["other.js"]},
+        }
+    }))
+    monkeypatch.setenv("HOME", str(home))
+    argv = hosts.build_command("claude", "p", read_only=False, lean=True, mcp_servers=["alter"], cwd=tmp_path, use_stdin=True)
+    assert "--strict-mcp-config" in argv
+    assert "--mcp-config" in argv
+    loaded = json.loads(argv[argv.index("--mcp-config") + 1])
+    assert list(loaded["mcpServers"].keys()) == ["alter"]
 
 
 def test_lean_flags_are_skipped_when_the_installed_cli_lacks_them(monkeypatch, tmp_path: Path):
@@ -134,6 +153,7 @@ def test_managed_worker_gets_configured_turns_not_the_planner_default(tmp_path: 
     spec = {"goal": "g", "nodes": [{"id": "impl", "kind": "agent", "prompt": "p", "host": "claude", "write_allowlist": ["src/**"]}]}
     execute(tmp_path, spec, host="claude", trust_cli=True)
     assert seen["max_turns"] == Config().max_turns == 30 and seen["lean"] is True
+    assert seen["mcp_servers"] == ["alter"]
     spec["nodes"][0]["max_turns"] = 5
     execute(tmp_path, spec, host="claude", trust_cli=True)
     assert seen["max_turns"] == 5

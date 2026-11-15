@@ -88,6 +88,8 @@ def test_full_opt_in_budget(project):
     assert len(result["rounds"][0]["experiment_ids"])==3
 
 def test_cli_root_after_action(project):
+    from ego.config import Config, save_config
+    save_config(project, Config(memory="file"))
     cmd=[sys.executable,"-m","ego","memory","add","some note","--root",str(project)]
     env={**os.environ,"PYTHONPATH":str(Path(__file__).resolve().parents[1]/"src")}
     res=subprocess.run(cmd,capture_output=True,text=True,env=env,timeout=20)

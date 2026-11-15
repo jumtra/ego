@@ -7,7 +7,10 @@ write runs pass --dangerously-skip-permissions (read-only runs use plan mode).
 """
 from __future__ import annotations
 from dataclasses import dataclass
+import json
+from pathlib import Path
 import shutil
+from typing import Any
 from .util import EgoError
 
 @dataclass(frozen=True)
@@ -29,9 +32,38 @@ def capability(host: str) -> HostCapability:
     return HostCapability(host,path,bool(path),bool(path),"cli","ready" if path else "CLI not installed")
 
 
+def _read_json_dict(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _select_claude_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...]) -> dict[str, Any]:
+    wanted = [n for n in names if isinstance(n, str) and n]
+    if not wanted:
+        return {}
+    servers: dict[str, Any] = {}
+    claude_cfg = _read_json_dict(Path.home() / ".claude.json")
+    if isinstance(claude_cfg.get("mcpServers"), dict):
+        servers.update(claude_cfg["mcpServers"])
+    if cwd is not None:
+        projects = claude_cfg.get("projects")
+        if isinstance(projects, dict):
+            proj_cfg = projects.get(str(cwd.resolve()))
+            if isinstance(proj_cfg, dict) and isinstance(proj_cfg.get("mcpServers"), dict):
+                servers.update(proj_cfg["mcpServers"])
+        mcp_json = _read_json_dict(cwd / ".mcp.json")
+        if isinstance(mcp_json.get("mcpServers"), dict):
+            servers.update(mcp_json["mcpServers"])
+    return {name: servers[name] for name in wanted if name in servers and isinstance(servers[name], dict)}
+
+
 def build_command(host: str, prompt: str, *, model: str | None = None, effort: str | None = None,
                   read_only: bool = True, max_turns: int = 4, use_stdin: bool = False,
                   autonomy: str = "auto", isolated: bool = False, lean: bool = False,
+                  mcp_servers: list[str] | tuple[str, ...] | None = None, cwd: Path | None = None,
                   max_budget_usd: float | None = None, resume_session: str | None = None) -> list[str]:
     cap=capability(host)
     if not cap.supported:raise EgoError("HOST_UNAVAILABLE",cap.reason,3)
@@ -46,9 +78,13 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         require_flags(info,"--output-format")
         argv=[cap.binary,"-p","--output-format","json"]
         if "--max-turns" in info["flags"]:argv += ["--max-turns",str(max_turns)]
-        # Lean workers do not inherit the user's MCP servers: their tool
-        # definitions and server instructions are context a scoped node never uses.
-        if lean and "--strict-mcp-config" in info["flags"]:argv.append("--strict-mcp-config")
+        # Lean workers do not inherit the user's MCP servers, except servers explicitly requested (e.g. alter).
+        if lean and "--strict-mcp-config" in info["flags"]:
+            argv.append("--strict-mcp-config")
+            if mcp_servers and "--mcp-config" in info["flags"]:
+                selected = _select_claude_mcp_servers(cwd, mcp_servers)
+                if selected:
+                    argv += ["--mcp-config", json.dumps({"mcpServers": selected}, ensure_ascii=False)]
         if max_budget_usd is not None and max_budget_usd > 0 and "--max-budget-usd" in info["flags"]:
             argv += ["--max-budget-usd",f"{max_budget_usd:.2f}"]
         if model:

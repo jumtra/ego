@@ -21,25 +21,25 @@ DEFAULT_MODELS: dict[str, Any] = {
     "claude": {"model": "sonnet", "effort": "auto"},
     "codex": {"model": "auto", "effort": "medium"},
     "opencode": "auto",
-    "agy": {"model": "auto", "effort": "auto"},
+    "agy": {"model": "gemini-4-hydrogen-medium", "effort": "auto"},
 }
 DEFAULT_ROLES: dict[str, Any] = {
     "coder": {
-        "claude": [{"model": "haiku", "effort": ["low", "medium"]}, {"model": "sonnet"}],
+        "claude": {"model": "haiku", "effort": ["low", "medium"]},
         "codex": {"model": "auto", "effort": "medium"},
-        "agy": {"model": "auto", "effort": "medium"},
+        "agy": {"model": "gemini-4-hydrogen-medium", "effort": "medium"},
         "opencode": {"model": "auto", "effort": "medium"},
     },
     "tester": {
         "claude": {"model": "haiku", "effort": "low"},
         "codex": {"model": "auto", "effort": "low"},
-        "agy": {"model": "auto", "effort": "low"},
+        "agy": {"model": "gemini-4-hydrogen-low", "effort": "low"},
         "opencode": {"model": "auto", "effort": "low"},
     },
     "judge": {
-        "claude": {"model": "sonnet", "effort": "high"},
+        "claude": {"model": "haiku", "effort": "high"},
         "codex": {"model": "auto", "effort": "high"},
-        "agy": {"model": "auto", "effort": "high"},
+        "agy": {"model": "gemini-4-hydrogen-medium", "effort": "high"},
         "opencode": {"model": "auto", "effort": "high"},
     },
 }
@@ -88,22 +88,22 @@ class Config:
     profile: str = "balanced"
     policy_mode: str = "relaxed"
     hosts: list[str] = field(default_factory=lambda: ["claude", "codex", "opencode", "agy"])
-    code_intelligence: str = "none"
-    memory: str = "file"
+    code_intelligence: str = "codegraph"
+    memory: str = "alter"
     runtime_mode: str = "native"
-    max_parallel: int = 2
+    max_parallel: int = 4
     max_attempts: int = 3
-    timeout_seconds: int = 3600
+    timeout_seconds: int = 7200
     max_turns: int = 30  # agentic turns per managed worker invocation
     worker_context: str = "lean"  # "lean" (no inherited MCP servers) or "inherit"
     worker_segment_turns: int = 10  # managed Claude worker: turns per segment; context is measured between segments
-    clear_suggest_tokens: int = 200000  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
+    clear_suggest_tokens: int = 150000  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
     auto_resume: bool = True  # Claude Code/Codex/AGY: SessionStart(clear) hook injects the saved checkpoint after /clear (core; independent of clear_suggest_tokens)
     usage_switch_percent: int = 85  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
     run_yolo: bool = True  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
     models: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_MODELS))
     roles: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_ROLES))  # role (coder/tester/judge) -> {host, model, effort}; same vocabulary as hosts/models
-    isolation: str = "copy"  # "copy" (staging directory) or "worktree" (git worktree)
+    isolation: str = "worktree"  # "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool = True  # whether to remove the worktree after run
     tests: list[list[str]] = field(default_factory=list)
     allow_commands: list[str] = field(default_factory=lambda: ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"])
@@ -221,7 +221,7 @@ def dump_config(cfg: Config) -> str:
         "#   auto_resume = true\n"
         "#\n"
         "# セッションクリアのしきい値 (clear_suggest_tokens, Claude Code / Codex / OpenCode / AGY。Stop hook が強制):\n"
-        "#   clear_suggest_tokens = 200000  # 実測コンテキストがこの値に達したらチェックポイントを自動保存させ /clear を提案。0 で無効\n"
+        "#   clear_suggest_tokens = 150000  # 実測コンテキストがこの値に達したらチェックポイントを自動保存させ /clear を提案。0 で無効\n"
         "#\n"
         "# 使用量上限が近いときの自動保存と切り替え提案 (usage_switch_percent, Claude Code / Codex。使用量を報告しない OpenCode / AGY は対象外):\n"
         "#   usage_switch_percent = 85  # 5時間/7日枠の使用率がこの%以上でチェックポイント保存と別CLIへの切り替えを提案。0 で無効\n"

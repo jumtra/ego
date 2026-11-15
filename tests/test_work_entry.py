@@ -250,29 +250,34 @@ def test_custom_agent_discovery_task_routing_and_non_lean_alter(tmp_path: Path, 
     assert '## Required MCP / Knowledge context' in prompt
     assert 'alter_task_context' in prompt
 
-    # work.execute passes lean=False when cfg.memory == 'alter'
+    # work.execute passes lean=True and mcp_servers=['alter'] when cfg.memory == 'alter'
     save_config(tmp_path, Config(memory='alter', worker_context='lean'))
     captured_lean = []
+    captured_mcp = []
 
     def fake_run_worker(host, p, cwd, timeout=180, **kw):
         captured_lean.append(kw.get('lean'))
+        captured_mcp.append(kw.get('mcp_servers'))
         return RunResult('PASS', 'ok', '', 0, 0.0, host)
 
     monkeypatch.setattr(work, 'run_worker', fake_run_worker)
     res = work.execute(tmp_path, {'goal': 'g', 'nodes': [{'id': 'n1', 'kind': 'agent', 'prompt': 'p', 'write_allowlist': ['src/**']}]}, host='claude', trust_cli=True)
     assert res['final_status'] == 'PASSED'
-    assert captured_lean == [False]
+    assert captured_lean == [True]
+    assert captured_mcp == [['alter']]
 
-    # planner.plan_work passes lean=False and includes custom agents when cfg.memory == 'alter'
+    # planner.plan_work passes lean=True, mcp_servers=['alter'], and includes custom agents when cfg.memory == 'alter'
     captured_plan = {}
 
     def fake_plan_agent(host, p, cwd, timeout=180, **kw):
         captured_plan['prompt'] = p
         captured_plan['lean'] = kw.get('lean')
+        captured_plan['mcp_servers'] = kw.get('mcp_servers')
         return RunResult('PASS', json.dumps({'goal': 'g', 'nodes': [{'id': 'n1', 'kind': 'agent', 'prompt': 'p', 'write_allowlist': ['src/**']}]}), '', 0, 0.0, host)
 
     monkeypatch.setattr(planner, 'run_agent', fake_plan_agent)
     planner.plan_work(tmp_path, 'g', host='claude', execute=True)
-    assert captured_plan['lean'] is False
+    assert captured_plan['lean'] is True
+    assert captured_plan['mcp_servers'] == ['alter']
     assert 'domain-expert' in captured_plan['prompt']
     assert 'alter' in captured_plan['prompt']

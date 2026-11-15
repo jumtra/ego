@@ -188,6 +188,9 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 if chosen_host!="mock" and not trust_cli:
                     raise EgoError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
                 prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff)
+                mcp_servers=list(node.get("mcp") or [])
+                if cfg.memory=="alter" and "alter" not in mcp_servers:
+                    mcp_servers.append("alter")
                 try:
                     r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,threshold=cfg.clear_suggest_tokens,
                                  segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
@@ -195,7 +198,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                                  model=chosen_model,effort=chosen_effort,
                                  read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
                                  max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
-                                 lean=cfg.worker_context=="lean" and cfg.memory!="alter" and not node.get("mcp"),max_budget_usd=budget_usd)
+                                 lean=cfg.worker_context=="lean",mcp_servers=mcp_servers or None,max_budget_usd=budget_usd)
                 except EgoError as exc:
                     if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
                         raise

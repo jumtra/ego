@@ -139,7 +139,7 @@ def test_templates_progressively_load_short_rules_and_skip_docs():
     assert '完了' in work and '未完了' in work
     basic=instruction_block(Config())
     assert 'do NOT create requirements/design/plan docs' in basic
-    assert len(basic)<1200
+    assert len(basic)<1300
     assert 'ego optimize' in basic
 
 

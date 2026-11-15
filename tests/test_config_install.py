@@ -8,7 +8,7 @@ from ego.author import lint
 
 def test_initial_setup(project):
     assert load_config(project).profile=="balanced"
-    assert load_config(project).timeout_seconds==3600
+    assert load_config(project).timeout_seconds==7200
     assert (project/".claude/skills/work/SKILL.md").exists()
     assert (project/".agents/skills/work/SKILL.md").exists()
     assert len(list((project/".claude/agents").glob("*.md")))==4

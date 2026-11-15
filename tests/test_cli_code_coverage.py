@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
 def test_code_index_impact_affected_options(tmp_path):
+    (tmp_path / '.ego').mkdir()
+    (tmp_path / '.ego' / 'config.toml').write_text('code_intelligence = "none"\n', encoding='utf-8')
     entry = ROOT / 'run_ego.py'
     for action in (['code','index'], ['code','impact','Some.symbol'], ['code','affected','tests/test_unit.py']):
         p=subprocess.run([sys.executable,str(entry), *action,'--root',str(tmp_path)],capture_output=True,text=True)

@@ -74,7 +74,8 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
         effort=chosen.get("effort") if isinstance(chosen,dict) else None
         response=run_agent(host,prompt,workdir,timeout=300,read_only=True,max_turns=8,
                            model=None if model in (None,"auto") else model,effort=effort,
-                           lean=cfg.worker_context=="lean" and cfg.memory!="alter")
+                           lean=cfg.worker_context=="lean",
+                           mcp_servers=["alter"] if cfg.memory=="alter" else None)
         usage={"cost_usd":response.cost_usd,**(response.usage or {})}
     try:
         if host!="mock":

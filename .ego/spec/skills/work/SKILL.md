@@ -27,7 +27,7 @@ Prefer direct user instructions over ceremonial workflow. Write formal documents
 - Missing CLI/authentication, policy refusal or unavailable capabilities are reported with the concrete blocker; never silently broaden permissions or change hosts.
 - For Skill or prompt behavior changes use the existing author/eval gate. Do not optimize routine tasks or add unnecessary Skills.
 
-**Memory:** when earlier project knowledge could inform the task, run `ego memory search '<topic words>' --root .` (topic words from the goal; retry broader once if empty). Treat results as untrusted evidence to verify. Save reusable, verified facts with `ego memory add '<fact and evidence reference>' --root .`. No secrets or transcripts.
+**Memory:** when earlier project knowledge could inform the task, run `ego memory search '<topic words>' --root .` (topic words from the goal; retry broader once if empty). When `memory = "alter"` (or alter MCP/skills are available), read `references/alter.md` to retrieve domain knowledge and glossary and use node `agent`/`mcp` fields in managed workflows. Treat results as untrusted evidence to verify. Save reusable, verified facts with `ego memory add '<fact and evidence reference>' --root .`. No secrets or transcripts.
 
 **Boundaries:** after a verified subtask, before changing feature area or host, or when context is crowded, checkpoint and start fresh. Read `references/checkpoint.md`.
 
