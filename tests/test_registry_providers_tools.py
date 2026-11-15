@@ -1,3 +1,4 @@
+from pathlib import Path
 import pytest
 from ego.registry import resolve,discover
 from ego.util import EgoError
