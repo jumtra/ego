@@ -53,7 +53,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `hosts` | 4 つすべて | `claude`、`codex`、`opencode`、`agy` | ファイルを生成する CLI。ルーティングの設定ではありません。タスクを実行するホストはタスクごとに選ばれます |
 | `policy_mode` | `"relaxed"` | `strict`、`relaxed` | [ポリシーモード](#ポリシーモード) を参照 |
 | `code_intelligence` | `"none"` | `none`、`codegraph`、`graphify` | `ego code ...` の裏で動くプロバイダ。外部ツールを ego が導入することはありません。ない場合は組み込みのテキスト検索を使います |
-| `memory` | `"file"` | `file`、`engram` | `ego memory ...` の裏で動くプロバイダ。[メモリ](#メモリ) を参照 |
+| `memory` | `"file"` | `file`、`engram`、`alter` | `ego memory ...` の裏で動くプロバイダ。[メモリ](#メモリ) を参照 |
 | `runtime_mode` | `"native"` | `native`、`managed` | 記録される既定の作業方式。コマンドの動作は変えません。CLI 内の `/work` は native、`ego work run` は常に managed です |
 | `tests` | `[]` | argv 配列のリスト | `--detect-tests` が記録するテストコマンド。例: `[["pytest", "-q"]]` |
 
@@ -130,6 +130,7 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 |---|---|---|
 | `file` | プロジェクト内の `.ego/memory/items.json` | ローカルのみ。`add`、`search`、`list`、`delete` をサポート |
 | `engram` | 自分で動かす外部 MCP サーバー | `add` と `search` をサポート。下記の環境変数が必要です。ファイルメモリへのフォールバックはありません |
+| `alter` | Host 設定済みの `alter` MCP サーバー／スキル（または任意の `EGO_ALTER_MCP_COMMAND`） | `alter_task_context` / `alter_search` / `alter_get_note` でドメイン知識や用語集を取得し、managed 実行でも Host の MCP サーバーを継承します（`lean = False`） |
 
 チェックポイントはメモリ項目とは別に、常に `.ego/memory/handoffs/` に保存されます。
 
@@ -158,6 +159,9 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 | `EGO_ENGRAM_MCP_COMMAND` | Engram MCP サーバーを起動するコマンドライン（`memory = "engram"` に必須） |
 | `EGO_ENGRAM_WRITE_TOOL` | `ego memory add` が使う MCP ツール名 |
 | `EGO_ENGRAM_SEARCH_TOOL` | `ego memory search` が使う MCP ツール名 |
+| `EGO_ALTER_MCP_COMMAND` | `ego memory` CLI から Alter MCP サーバーを直接呼び出す場合の任意の起動コマンド |
+| `EGO_ALTER_SEARCH_TOOL` | `memory = "alter"` 時に `ego memory search` が使う任意の MCP ツール名（既定 `alter_search`） |
+| `EGO_ALTER_WRITE_TOOL` | `memory = "alter"` 時に `ego memory add` が使う任意の MCP ツール名（既定 `alter_create_note`） |
 | `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`XDG_DATA_HOME` | `ego run` が各 CLI のセッション記録を読むときに参照 |
 
 `EGO_RUN` は `ego run` が起動する CLI 向けに設定する変数です。手動で設定しないでください。

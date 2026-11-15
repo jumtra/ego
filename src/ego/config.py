@@ -10,7 +10,7 @@ from .util import EgoError, atomic_text
 
 HOSTS = ("claude", "codex", "opencode", "agy")
 PROVIDERS = ("codegraph", "graphify", "none")
-MEMORY = ("file", "engram")
+MEMORY = ("file", "engram", "alter")
 POLICIES = ("strict", "relaxed")
 ROLE_NAMES = ("coder", "tester", "judge")
 VALID_EFFORTS = {"auto", "low", "medium", "high", "xhigh", "max"}
@@ -234,7 +234,7 @@ def dump_config(cfg: Config) -> str:
 V2_SECTIONS = {"runtime", "sdk", "authoring", "evaluation", "evolution"}
 HOST_ALIASES = {"antigravity": "agy"}
 PROFILE_ALIASES = {"standard": "balanced"}
-MEMORY_ALIASES = {"files": "file"}
+MEMORY_ALIASES = {"files": "file", "alter-mcp": "alter"}
 
 def _normalize_loaded_data(raw: dict[str, Any]) -> dict[str, Any]:
     data = dict(raw)
