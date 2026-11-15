@@ -26,6 +26,9 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
     else:
         if not execute:raise EgoError("EXPLICIT_EXECUTION_REQUIRED","Planning via model requires --execute")
         cfg=load_config(root)
+        if cfg.memory == "alter":
+            from .memory import ensure_alter_project_quietly
+            ensure_alter_project_quietly(root)
         ctx=search(workdir,goal,cfg.code_intelligence,limit=8)
         prompt=("Return ONLY a valid JSON object with 'goal' and 'nodes'. "
                 "Every node: id (alphanumeric), kind in ['agent','code','gate'], depends_on list, "

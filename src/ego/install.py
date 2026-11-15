@@ -135,7 +135,11 @@ def apply_install(root: Path, cfg: Config) -> dict:
             raise
     from .projects import register_quietly
     register_quietly(root)
-    return {"status": "APPLIED", "snapshot_id": snapshot_id, "changes": [x for x in plan["changes"] if x["action"] != "unchanged"]}
+    out = {"status": "APPLIED", "snapshot_id": snapshot_id, "changes": [x for x in plan["changes"] if x["action"] != "unchanged"]}
+    if cfg.memory == "alter":
+        from .memory import ensure_alter_project_quietly
+        out["alter_project"] = ensure_alter_project_quietly(root, force=True)
+    return out
 
 
 def rollback(root: Path, snapshot_id: str) -> dict:

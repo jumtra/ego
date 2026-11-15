@@ -113,3 +113,69 @@ def test_install_alter_skills_and_cli(project, monkeypatch, capsys):
     assert main(["apply", "--root", str(project), "--memory", "alter", "--install-alter-skills", "--dry-run"]) == 0
     apply_out = json.loads(capsys.readouterr().out)
     assert apply_out["alter_skills"]["status"] == "DRY_RUN"
+
+
+def test_alter_project_auto_registers_on_apply_and_work(tmp_path: Path, monkeypatch):
+    import json, sys
+    from ego.config import Config
+    from ego.install import apply_install
+    from ego.memory import ensure_alter_project
+    from ego import work
+
+    home = tmp_path / "home"
+    home.mkdir()
+    log_path = tmp_path / "alter_calls.jsonl"
+    fake_mcp = tmp_path / "fake_alter_mcp.py"
+    fake_mcp.write_text(
+        "import json, os, sys\n"
+        "log = os.environ['ALTER_LOG']\n"
+        "for line in sys.stdin:\n"
+        "    req = json.loads(line)\n"
+        "    if req.get('method') == 'initialize':\n"
+        "        sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':{'capabilities':{}}}) + '\\n')\n"
+        "        sys.stdout.flush()\n"
+        "    elif req.get('method') == 'tools/call':\n"
+        "        with open(log, 'a', encoding='utf-8') as f:\n"
+        "            f.write(json.dumps(req['params']) + '\\n')\n"
+        "        sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':{'ok':True}}) + '\\n')\n"
+        "        sys.stdout.flush()\n",
+        encoding="utf-8",
+    )
+    (home / ".claude.json").write_text(json.dumps({
+        "mcpServers": {
+            "alter": {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [str(fake_mcp)],
+                "env": {"ALTER_LOG": str(log_path)},
+            }
+        }
+    }))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("EGO_ALTER_AUTO_REGISTER", "1")
+    monkeypatch.delenv("EGO_ALTER_MCP_COMMAND", raising=False)
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    res = apply_install(proj, Config(memory="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    assert res["alter_project"]["status"] == "registered"
+    calls = [json.loads(x) for x in log_path.read_text(encoding="utf-8").splitlines()]
+    assert len(calls) == 1
+    assert calls[0]["name"] == "alter_bootstrap"
+    assert calls[0]["arguments"] == {"cwd": str(proj.resolve())}
+
+    # Second call without force uses cache and does not spawn MCP again
+    cached = ensure_alter_project(proj)
+    assert cached["status"] == "already_registered"
+    assert len(log_path.read_text(encoding="utf-8").splitlines()) == 1
+
+    # New project without prior apply registers automatically during work.execute
+    proj2 = tmp_path / "proj2"
+    proj2.mkdir()
+    (proj2 / ".ego").mkdir()
+    (proj2 / ".ego/config.toml").write_text('memory = "alter"\n', encoding="utf-8")
+    wres = work.execute(proj2, {"goal": "g", "nodes": [{"id": "n1", "kind": "agent", "prompt": "[[MOCK:ok]]", "write_allowlist": ["src/**"]}]}, host="mock")
+    assert wres["final_status"] == "PASSED"
+    calls = [json.loads(x) for x in log_path.read_text(encoding="utf-8").splitlines()]
+    assert len(calls) == 2
+    assert calls[1]["arguments"] == {"cwd": str(proj2.resolve())}

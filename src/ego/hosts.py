@@ -40,7 +40,7 @@ def _read_json_dict(path: Path) -> dict[str, Any]:
         return {}
 
 
-def _select_claude_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...]) -> dict[str, Any]:
+def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...]) -> dict[str, Any]:
     wanted = [n for n in names if isinstance(n, str) and n]
     if not wanted:
         return {}
@@ -82,7 +82,7 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         if lean and "--strict-mcp-config" in info["flags"]:
             argv.append("--strict-mcp-config")
             if mcp_servers and "--mcp-config" in info["flags"]:
-                selected = _select_claude_mcp_servers(cwd, mcp_servers)
+                selected = select_mcp_servers(cwd, mcp_servers)
                 if selected:
                     argv += ["--mcp-config", json.dumps({"mcpServers": selected}, ensure_ascii=False)]
         if max_budget_usd is not None and max_budget_usd > 0 and "--max-budget-usd" in info["flags"]:

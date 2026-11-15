@@ -361,6 +361,9 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             extra_allow:list[str]|None=None,budget_usd:float|None=None,planner_usage:dict|None=None,
             task_file:str|None=None)->dict:
     root=root.resolve();cfg=load_config(root)
+    if cfg.memory == "alter":
+        from .memory import ensure_alter_project_quietly
+        ensure_alter_project_quietly(root)
     use_worktree = worktree if worktree is not None else (cfg.isolation == "worktree")
     seed_dir=None
     if seed_from:

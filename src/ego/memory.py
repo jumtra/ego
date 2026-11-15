@@ -48,13 +48,14 @@ class FileMemory:
 
 class MCPStdio:
     """Minimal newline-delimited MCP client. Requires a trusted locally configured command."""
-    def __init__(self, command: list[str], timeout:int=10):
+    def __init__(self, command: list[str], timeout:int=10, env: dict[str, str] | None = None):
         if not command or not Path(command[0]).name: raise EgoError("MCP_CONFIG", "Missing command", 2)
-        self.command,self.timeout=command,timeout
+        self.command,self.timeout,self.env=command,timeout,env
     def call_tool(self, name: str, args:dict) -> Any:
         # Protocol version is intentionally configurable by server negotiation at init.
+        merged_env = {**os.environ, **{str(k): str(v) for k, v in self.env.items()}} if self.env else None
         p=subprocess.Popen(self.command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-                           bufsize=0)
+                           bufsize=0,env=merged_env)
         assert p.stdin and p.stdout
         read_buffer=b""
         def send(obj:dict):
@@ -146,6 +147,54 @@ def install_alter_skills(root: Path, *, clients: list[str]|tuple[str,...]|None=N
     return {"status": "DRY_RUN" if dry_run else "INSTALLED", "source": ALTER_SKILLS_SOURCE,
             "scope": scope, "clients": selected, "agents": agents, "command": argv,
             "output": (proc.stdout or "").strip()}
+
+def _alter_registry_path() -> Path:
+    return Path(os.environ.get("EGO_HOME") or Path.home() / ".config" / "ego") / "alter_projects.json"
+
+
+def _alter_mcp_spec(root: Path) -> tuple[list[str], dict[str, str] | None] | None:
+    raw = os.environ.get("EGO_ALTER_MCP_COMMAND", "").strip()
+    if raw:
+        return shlex.split(raw), None
+    from .hosts import select_mcp_servers
+    cfg = select_mcp_servers(root, ["alter"]).get("alter")
+    if isinstance(cfg, dict) and isinstance(cfg.get("command"), str) and cfg["command"].strip():
+        cmd = [cfg["command"], *[str(a) for a in (cfg.get("args") or [])]]
+        env = cfg.get("env") if isinstance(cfg.get("env"), dict) else None
+        return cmd, env
+    return None
+
+
+def ensure_alter_project(root: Path, *, force: bool = False, timeout: int = 10) -> dict[str, Any]:
+    """Ensure the repository at root is registered in Alter via alter_bootstrap(cwd=...)."""
+    if os.environ.get("EGO_ALTER_AUTO_REGISTER", "1").lower() in ("0", "false", "off", "no"):
+        return {"status": "skipped", "reason": "disabled"}
+    key = str(root.resolve())
+    reg_path = _alter_registry_path()
+    reg = read_json(reg_path)
+    projects = reg.get("projects") if isinstance(reg, dict) and isinstance(reg.get("projects"), dict) else {}
+    if not force and key in projects:
+        return {"status": "already_registered", "project": key}
+    spec = _alter_mcp_spec(root)
+    if spec is None:
+        return {"status": "skipped", "reason": "alter MCP not configured"}
+    cmd, env = spec
+    try:
+        MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_bootstrap", {"cwd": key})
+    except (EgoError, OSError, ValueError) as exc:
+        return {"status": "error", "reason": str(exc)}
+    updated = dict(projects)
+    updated[key] = {"registered_at": now()}
+    write_json(reg_path, {"schema_version": 1, "projects": updated})
+    return {"status": "registered", "project": key}
+
+
+def ensure_alter_project_quietly(root: Path, *, force: bool = False, timeout: int = 10) -> dict[str, Any]:
+    try:
+        return ensure_alter_project(root, force=force, timeout=timeout)
+    except Exception as exc:
+        return {"status": "error", "reason": str(exc)}
+
 
 class AlterMemory:
     """alter-mcp provider. Host-configured alter MCP is the default; EGO_ALTER_MCP_COMMAND enables direct CLI calls."""

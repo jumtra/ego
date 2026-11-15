@@ -17,7 +17,7 @@
 #   isolation = "worktree"  # Git worktree によるブランチ作業分離
 #   cleanup_worktree = true  # タスク終了時に worktree を自動削除するかどうか
 schema_version = 1
-profile = "minimal"
+profile = "balanced"
 policy_mode = "relaxed"
 hosts = ["claude", "agy", "codex", "opencode"]
 code_intelligence = "codegraph"
