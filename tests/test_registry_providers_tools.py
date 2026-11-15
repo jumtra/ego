@@ -73,3 +73,43 @@ def test_alter_memory_registry_and_provider(project, monkeypatch):
     assert added["provider"] == "alter" and added["mode"] == "host-mcp"
     health = memory_health(project, "alter")
     assert health["provider"] == "alter" and health["mode"] == "host-mcp"
+    assert "skills_installed" in health
+
+
+def test_install_alter_skills_and_cli(project, monkeypatch, capsys):
+    import json
+    import subprocess
+    from ego.cli import main
+    from ego.memory import alter_skills_installed, install_alter_skills
+
+    # Project skill marker detection
+    assert not alter_skills_installed(project, home=project / "empty_home")
+    (project / ".claude" / "skills" / "alter-context-loader").mkdir(parents=True)
+    assert alter_skills_installed(project, home=project / "empty_home")
+
+    # Missing npx fails closed unless dry-run
+    monkeypatch.setattr("ego.memory.shutil.which", lambda name: None)
+    with pytest.raises(EgoError) as missing:
+        install_alter_skills(project, clients=["claude"])
+    assert missing.value.code == "NPX_MISSING"
+    dry = install_alter_skills(project, clients=["claude", "codex"], scope="project", agents=False, dry_run=True)
+    assert dry["status"] == "DRY_RUN"
+    assert "--project" in dry["command"] and "--no-agents" in dry["command"]
+    assert "github:jumtra/alter-skills" in dry["command"]
+
+    # Mocked npx execution via CLI
+    calls = []
+    monkeypatch.setattr("ego.memory.shutil.which", lambda name: "/usr/local/bin/npx")
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="copied 6 skills\n", stderr="")
+    monkeypatch.setattr("ego.memory.subprocess.run", fake_run)
+
+    assert main(["memory", "--root", str(project), "install-skills", "--clients", "claude,agy", "--scope", "global"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "INSTALLED" and out["clients"] == ["claude", "agy"]
+    assert "--client" in calls[-1] and "claude,agy" in calls[-1]
+
+    assert main(["apply", "--root", str(project), "--memory", "alter", "--install-alter-skills", "--dry-run"]) == 0
+    apply_out = json.loads(capsys.readouterr().out)
+    assert apply_out["alter_skills"]["status"] == "DRY_RUN"

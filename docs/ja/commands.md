@@ -25,7 +25,7 @@
 
 | コマンド | 用途 |
 |---|---|
-| `ego apply [flags]` | プロジェクトを設定し、ホスト向けファイルを生成。フラグ: `--hosts`、`--profile`、`--policy`、`--models`、`--graph`、`--memory`、`--runtime`、`--clear-suggest-tokens`、`--detect-tests`、`--dry-run`、`--check`、`--interactive`、`--non-interactive` |
+| `ego apply [flags]` | プロジェクトを設定し、ホスト向けファイルを生成。フラグ: `--hosts`、`--profile`、`--policy`、`--models`、`--graph`、`--memory`、`--runtime`、`--clear-suggest-tokens`、`--detect-tests`、`--install-alter-skills`、`--dry-run`、`--check`、`--interactive`、`--non-interactive` |
 | `ego status` | ドリフトの状態、導入済みと実行中のバージョン、最後のスナップショット |
 | `ego sync [--apply] [--all]` | `.ego/config.toml` から再生成。`--all` は登録済みの全プロジェクトを対象にする |
 | `ego rollback [snapshot]` | 直前の（または指定した）apply のスナップショットを復元 |
@@ -75,6 +75,7 @@
 |---|---|
 | `ego memory add <text> [--tags <t>]... [--evidence <ref>]...` | 事実を保存 |
 | `ego memory search <query>` / `list` / `delete <id>` | 事実を検索、または管理（`list` と `delete` はファイルプロバイダのみ） |
+| `ego memory install-skills [--scope global\|project] [--clients <list>] [--no-agents] [--dry-run]` | `npx` 経由で外部ツール `alter-skills`（`github:jumtra/alter-skills`）をインストール |
 | `ego code doctor` | プロバイダの利用可否と機能 |
 | `ego code search <query>` / `symbol <name>` | 検索。組み込みのテキスト検索にフォールバック |
 | `ego code impact <name>` / `affected <files>...` | 影響範囲と影響を受けるテスト（プロバイダが必要） |

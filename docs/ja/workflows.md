@@ -171,6 +171,8 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `intent`、`done_when`、`non_goals`、`assumptions`、`provides` | agent | そのステージの理由、受け入れ基準、やらないこと、依拠する事実、後続が必要とするもの。短い文字列（`intent`）か、各 400 文字以内の文字列を最大 6 件含むリスト |
 | `requirement`、`steps` | agent | 5W1H（`who` `what` `when` `where` `why` `how`、各 400 文字以内）と、ワーカーが書かれたとおりに実行する 1〜10 件の手順 |
 | `host` / `hosts`、`strategy`、`model` / `models`、`fallback_on` | agent | ルーティング。下記参照 |
+| `agent` | agent | 任意のカスタムエージェント名（`.claude/agents/*.md`、`.agents/agents/*.md`、`.opencode/agents/*.md`、`.codex/agents/*.toml` から検出）。定義内容がノードのプロンプトに埋め込まれる |
+| `mcp` | agent | 必要な MCP サーバー名のリスト（1〜8 件、例: `["alter"]`）。`worker_context = "lean"` でもホストの MCP サーバーを有効のままにし、ドメイン知識・用語集の取得指示（`alter_task_context` / `alter_search` / `alter_get_note` と `.ego/knowledge/domain.md`）を付与する。`memory = "alter"` 時は自動適用 |
 | `instructions_file`、`context_files` | agent | 追加の指示。参照ファイルは最大 24 件 |
 | `max_attempts`、`max_turns`、`timeout_seconds` | すべて | ノードごとの上限。設定値で頭打ちになる |
 

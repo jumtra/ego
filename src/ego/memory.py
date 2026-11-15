@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import selectors
 import shlex
+import shutil
 import subprocess
 import time
 from typing import Any
@@ -103,6 +104,48 @@ class EngramMemory:
         return [{"provider":"engram","result":self.mcp.call_tool(tool,{"query":query,"limit":limit})}]
 
 ALTER_HOST_HINT="Use host alter MCP tools (alter_task_context / alter_search / alter_get_note) or set EGO_ALTER_MCP_COMMAND"
+ALTER_SKILLS_SOURCE="github:jumtra/alter-skills"
+ALTER_SKILLS_CLIENTS=("claude","codex","opencode","agy")
+ALTER_SKILLS_MARKER="alter-context-loader"
+
+def alter_skills_installed(root: Path, home: Path | None = None) -> bool:
+    """Return True if alter-skills appears installed in global or project skill dirs."""
+    home = home or Path.home()
+    dirs = (
+        home/".claude"/"skills", home/".codex"/"skills",
+        home/".gemini"/"config"/"skills", home/".config"/"opencode"/"skills",
+        root/".claude"/"skills", root/".agents"/"skills", root/".opencode"/"skills",
+    )
+    return any((d/ALTER_SKILLS_MARKER).exists() for d in dirs)
+
+def install_alter_skills(root: Path, *, clients: list[str]|tuple[str,...]|None=None, scope: str="global",
+                         agents: bool=True, dry_run: bool=False) -> dict[str, Any]:
+    """Install external alter-skills from github:jumtra/alter-skills via npx."""
+    if scope not in ("global", "project"):
+        raise EgoError("INVALID_ARGUMENT", f"Unsupported scope: {scope} (use global or project)", 2)
+    selected = [c.strip().lower() for c in (clients or ALTER_SKILLS_CLIENTS) if str(c).strip()]
+    if not selected or any(c not in ALTER_SKILLS_CLIENTS for c in selected):
+        raise EgoError("INVALID_ARGUMENT", f"clients must be a subset of {', '.join(ALTER_SKILLS_CLIENTS)}", 2)
+    npx = shutil.which("npx")
+    if not npx and not dry_run:
+        raise EgoError("NPX_MISSING", "npx (Node.js >= 20) is required to install alter-skills", 3)
+    argv = [npx or "npx", "--yes", ALTER_SKILLS_SOURCE, "--client", ",".join(selected), "--scope", scope]
+    if scope == "project":
+        argv += ["--project", str(root)]
+    if not agents:
+        argv.append("--no-agents")
+    if dry_run:
+        argv.append("--dry-run")
+    if dry_run and not npx:
+        return {"status": "DRY_RUN", "source": ALTER_SKILLS_SOURCE, "scope": scope,
+                "clients": selected, "agents": agents, "command": argv, "output": ""}
+    proc = subprocess.run(argv, cwd=str(root), capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+        raise EgoError("ALTER_SKILLS_INSTALL_FAILED", detail[:500], 5)
+    return {"status": "DRY_RUN" if dry_run else "INSTALLED", "source": ALTER_SKILLS_SOURCE,
+            "scope": scope, "clients": selected, "agents": agents, "command": argv,
+            "output": (proc.stdout or "").strip()}
 
 class AlterMemory:
     """alter-mcp provider. Host-configured alter MCP is the default; EGO_ALTER_MCP_COMMAND enables direct CLI calls."""
@@ -141,5 +184,6 @@ def memory_health(root:Path, name:str) -> dict:
         configured=bool(os.environ.get("EGO_ALTER_MCP_COMMAND"))
         return {"provider":"alter","status":"ok" if configured else "host-managed",
                 "mode":"mcp-cli" if configured else "host-mcp","command_configured":configured,
+                "skills_installed":alter_skills_installed(root),
                 "hint":None if configured else ALTER_HOST_HINT}
     raise EgoError("UNKNOWN_MEMORY",name,2)

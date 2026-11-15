@@ -269,7 +269,7 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
         if spec.get("memory") == "alter" and "alter" not in servers: servers.insert(0, "alter")
         parts.append("## Required MCP / Knowledge context\n"
                      + (("Required MCP servers: " + ", ".join(servers) + "\n") if servers else "")
-                     + "Before editing, retrieve the project's domain knowledge and glossary: call alter_task_context "
+                     + "Before editing, retrieve the project's domain knowledge and glossary: use alter skills or call alter_task_context "
                        "(or alter_search / alter_get_note) with this stage's goal, and read .ego/knowledge/domain.md if it exists. "
                        "Use retrieved terms exactly as defined there; if they conflict with the requirement, stop and report.")
     if node.get("steps"):

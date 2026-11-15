@@ -171,6 +171,8 @@ Node fields:
 | `intent`, `done_when`, `non_goals`, `assumptions`, `provides` | agent | Why the stage exists, acceptance criteria, what not to do, facts relied on, what later stages depend on. Short strings (`intent`) or lists of up to 6 strings of up to 400 characters |
 | `requirement`, `steps` | agent | 5W1H (`who` `what` `when` `where` `why` `how`, strings up to 400 characters) and 1-10 ordered steps the worker follows exactly as written |
 | `host` / `hosts`, `strategy`, `model` / `models`, `fallback_on` | agent | Routing, see below |
+| `agent` | agent | Optional custom agent name (from `.claude/agents/*.md`, `.agents/agents/*.md`, `.opencode/agents/*.md`, or `.codex/agents/*.toml`); its definition is embedded into the node prompt |
+| `mcp` | agent | List of 1–8 required MCP server names (e.g. `["alter"]`). Keeps host MCP servers available even when `worker_context = "lean"`, and adds domain/glossary retrieval instructions (`alter_task_context` / `alter_search` / `alter_get_note` and `.ego/knowledge/domain.md`). Automatically enabled for `memory = "alter"` |
 | `instructions_file`, `context_files` | agent | Extra instructions; up to 24 reference files |
 | `max_attempts`, `max_turns`, `timeout_seconds` | all | Per-node limits, capped by the config |
 

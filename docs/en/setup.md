@@ -16,8 +16,8 @@ uv tool install git+https://github.com/jumtra/ego
 pipx install git+https://github.com/jumtra/ego
 
 # From a published release wheel (replace the version with the latest release)
-pipx install https://github.com/jumtra/ego/releases/download/v0.0.19/ego-0.0.19-py3-none-any.whl
-pip install https://github.com/jumtra/ego/releases/download/v0.0.19/ego-0.0.19-py3-none-any.whl   # inside a virtualenv
+pipx install https://github.com/jumtra/ego/releases/download/v0.0.20/ego-0.0.20-py3-none-any.whl
+pip install https://github.com/jumtra/ego/releases/download/v0.0.20/ego-0.0.20-py3-none-any.whl   # inside a virtualenv
 
 ego --version
 ```
@@ -62,7 +62,7 @@ In an interactive terminal, with none of the selection flags below given, a wiza
 | Profile | `minimal` / `balanced` / `full` | `balanced` |
 | Hosts (multiple) | `claude` / `codex` / `opencode` / `agy` | all four |
 | Code intelligence | `codegraph` / `graphify` / `none` | `none` |
-| Memory | `file` / `engram` | `file` |
+| Memory | `file` / `engram` / `alter` | `file` |
 | Default runtime | `native` / `managed` | `native` |
 | Detect test commands | yes / no (only when none are configured) | no |
 | Apply these changes? | yes / no, after the list of changed files | **no** |
@@ -80,10 +80,11 @@ The wizard does not ask for the policy mode, default models or session threshold
 | `--policy <mode>` | `relaxed` (default) or `strict`. See [Configuration](configuration.md#policy-mode) |
 | `--models <json>` | Default model per host, e.g. `'{"claude":"sonnet","codex":"auto"}'` |
 | `--graph <provider>` | `none`, `codegraph` or `graphify` |
-| `--memory <provider>` | `file` or `engram` |
+| `--memory <provider>` | `file`, `engram` or `alter` |
 | `--runtime <mode>` | `native` or `managed` (recorded default) |
 | `--clear-suggest-tokens <N>` | Context size at which the session is checkpointed and cleared; `0` = off. See [Sessions](sessions.md) |
 | `--detect-tests` | Detect candidate test commands and store them in the config (nothing is executed) |
+| `--install-alter-skills` | Also install external `alter-skills` from `github:jumtra/alter-skills` via `npx` (global scope for configured hosts) |
 | `--dry-run` | Print the plan, write nothing |
 | `--check` | Like `--dry-run`, but exit `5` when there are pending changes or conflicts (CI) |
 | `--interactive` | Always run the wizard, even with flags or redirected stdin |

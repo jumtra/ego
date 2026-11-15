@@ -69,9 +69,15 @@ def _cmd_apply(args):
                "changes": changes, "conflicts": plan["conflicts"],
                "changed_count": len(changes)}
     if args.dry_run or args.check or plan["conflicts"]:
+        if getattr(args, "install_alter_skills", False) and not args.check and not plan["conflicts"]:
+            from .memory import install_alter_skills
+            summary["alter_skills"] = install_alter_skills(root, clients=cfg.hosts, scope="global", dry_run=True)
         _print(summary)
         return 5 if args.check and (changes or plan["conflicts"]) else 0
     if not changes:
+        if getattr(args, "install_alter_skills", False):
+            from .memory import install_alter_skills
+            summary["alter_skills"] = install_alter_skills(root, clients=cfg.hosts, scope="global")
         _print(summary)
         return 0
     if interactive:
@@ -83,7 +89,11 @@ def _cmd_apply(args):
             _print({**summary, "status": "CANCELLED"})
             return 0
     result = apply_install(root, cfg)
-    _print({**summary, "status": result["status"], "snapshot_id": result["snapshot_id"]})
+    out = {**summary, "status": result["status"], "snapshot_id": result["snapshot_id"]}
+    if getattr(args, "install_alter_skills", False):
+        from .memory import install_alter_skills
+        out["alter_skills"] = install_alter_skills(root, clients=cfg.hosts, scope="global")
+    _print(out)
     return 0
 
 def _cmd_status(args):
@@ -388,8 +398,13 @@ def _cmd_optimize(args):
 
 def _cmd_memory(args):
     from .config import load_config
-    from .memory import memory_provider
-    root=_root(args);p=memory_provider(root,load_config(root).memory)
+    from .memory import memory_provider, install_alter_skills
+    root=_root(args);cfg=load_config(root)
+    if args.action=="install-skills":
+        clients=[c.strip() for c in args.clients.split(",") if c.strip()] if args.clients else cfg.hosts
+        _print(install_alter_skills(root,clients=clients,scope=args.scope,agents=not args.no_agents,dry_run=args.dry_run))
+        return 0
+    p=memory_provider(root,cfg.memory)
     if args.action=="add":_print(p.add(args.text,tags=args.tags or [],evidence=args.evidence or []));return 0
     if args.action=="search":_print(p.search(args.query));return 0
     if args.action=="list":
@@ -611,6 +626,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--profile",choices=["minimal","balanced","full"])
     sp.add_argument("--graph",choices=["codegraph","graphify","none"])
     sp.add_argument("--memory",choices=["file","engram","alter"])
+    sp.add_argument("--install-alter-skills",action="store_true",help="Install external alter-skills from github:jumtra/alter-skills")
     sp.add_argument("--detect-tests",action="store_true",help="Detect candidate test commands without running tests")
     sp.add_argument("--runtime",choices=["native","managed"],help="Default runtime; per-task runtime remains configurable")
     sp.add_argument("--policy",choices=["strict","relaxed"],help="Policy mode (strict: safe; relaxed: default, loose mode allowing git push and edits)")
@@ -738,6 +754,11 @@ def build_parser()->argparse.ArgumentParser:
     sp=sub.add_parser("memory");common(sp);s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("add");r.add_argument("text");r.add_argument("--tags",action="append");r.add_argument("--evidence",action="append")
     r=s.add_parser("search");r.add_argument("query");s.add_parser("list");r=s.add_parser("delete");r.add_argument("id")
+    r=s.add_parser("install-skills",help="Install external alter-skills from github:jumtra/alter-skills")
+    r.add_argument("--scope",choices=["global","project"],default="global")
+    r.add_argument("--clients",help="Comma-separated claude,codex,opencode,agy (default: configured hosts)")
+    r.add_argument("--no-agents",action="store_true",help="Skip installing agent definitions")
+    r.add_argument("--dry-run",action="store_true")
     sp.set_defaults(func=_cmd_memory)
     sp=sub.add_parser("session",help="Small durable task checkpoints and manual interactive session rotation");common(sp)
     s=sp.add_subparsers(dest="action",required=True)

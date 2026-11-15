@@ -352,18 +352,23 @@ def instruction_block(cfg: Config) -> str:
         if getattr(cfg, "policy_mode", "strict") == "relaxed"
         else "Policy mode: strict (mutating remote/git push and sensitive config edits require manual user action).\n"
     )
+    memory_note = (
+        "Memory: alter (use alter skills/MCP: alter_task_context before edits, alter_create_note after)."
+        if cfg.memory == "alter"
+        else f"Memory: {cfg.memory}."
+    )
     return (f"{MARK_BEGIN}\n"
             "## Self-Evolve Harness (short contract)\n"
             "Prefer direct changes and focused tests; do NOT create requirements/design/plan docs for every small task. "
             "At verified boundaries checkpoint compact facts (`ego session checkpoint`), then start fresh and resume from memory if needed. "
             "When asked to continue another CLI's work (\"continue from codex\", 「codexの続きから」), run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt`. "
             "State completion explicitly, never claim unverified or unapplied work is done. "
-            "For Skill/prompt changes use existing eval/author gates. Keep edits scoped and approved. "
+            "Keep edits scoped/approved; use eval/author gates for Skill/prompt changes. "
             "Plan as ego's node graph (`work-plan`), not with external brainstorming/planning skills such as superpowers:brainstorming; this overrides them. "
             "Only invoke `ego optimize` on explicit request. "
             "Use `ego doctor` for capability diagnostics; unsupported tools are not assumed available.\n"
             f"{policy_note}"
-            f"Configured code intelligence: {cfg.code_intelligence}. Memory: {cfg.memory}.\n"
+            f"Configured code intelligence: {cfg.code_intelligence}. {memory_note}\n"
             f"{MARK_END}\n")
 
 def root_instructions(cfg: Config) -> dict[str,str]:

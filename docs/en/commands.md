@@ -25,7 +25,7 @@ Details: [Setup](setup.md).
 
 | Command | Purpose |
 |---|---|
-| `ego apply [flags]` | Configure a project and generate host files. Flags: `--hosts`, `--profile`, `--policy`, `--models`, `--graph`, `--memory`, `--runtime`, `--clear-suggest-tokens`, `--detect-tests`, `--dry-run`, `--check`, `--interactive`, `--non-interactive` |
+| `ego apply [flags]` | Configure a project and generate host files. Flags: `--hosts`, `--profile`, `--policy`, `--models`, `--graph`, `--memory`, `--runtime`, `--clear-suggest-tokens`, `--detect-tests`, `--install-alter-skills`, `--dry-run`, `--check`, `--interactive`, `--non-interactive` |
 | `ego status` | Drift status, installed vs. running version, last snapshot |
 | `ego sync [--apply] [--all]` | Re-render from `.ego/config.toml`; `--all` covers every registered project |
 | `ego rollback [snapshot]` | Restore the last (or a named) apply snapshot |
@@ -75,6 +75,7 @@ Details: [Sessions](sessions.md).
 |---|---|
 | `ego memory add <text> [--tags <t>]... [--evidence <ref>]...` | Store a fact |
 | `ego memory search <query>` / `list` / `delete <id>` | Recall or manage facts (`list` and `delete`: file provider only) |
+| `ego memory install-skills [--scope global\|project] [--clients <list>] [--no-agents] [--dry-run]` | Install external `alter-skills` from `github:jumtra/alter-skills` via `npx` |
 | `ego code doctor` | Provider availability and capabilities |
 | `ego code search <query>` / `symbol <name>` | Search; falls back to built-in text search |
 | `ego code impact <name>` / `affected <files>...` | Impact and affected tests (needs a provider) |

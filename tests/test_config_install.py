@@ -120,6 +120,11 @@ def test_alter_memory_config_references_and_context_budget(tmp_path):
     (root / ".ego" / "config.toml").write_text('schema_version = 1\nmemory = "alter-mcp"\n', encoding="utf-8")
     assert load_config(root).memory == "alter"
 
+    # CLAUDE.md and AGENTS.md include alter skill/MCP instructions when memory == "alter"
+    for inst in ("CLAUDE.md", "AGENTS.md"):
+        text = (root / inst).read_text(encoding="utf-8")
+        assert "alter_task_context" in text and "alter skills/MCP" in text
+
     # work/references/alter.md is generated
     alter_ref = root / ".claude" / "skills" / "work" / "references" / "alter.md"
     assert alter_ref.is_file()
