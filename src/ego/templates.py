@@ -9,7 +9,8 @@ from .config import Config
 LEGACY_WORK_HASHES = {"b9369f340f37af0f731e8eb03f0c8e1e6529be80ce1b63941bada4b6ea52ee88",
                       "f14c28b7aa27cb52873960a1efda8b6618e6e9c1f006ce3c246c4ce8dcad3844",
                       "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a",
-                      "645c9862f86b9ea4e7db50885ceee9bd10fd98de3225a96f822878b212cd5039"}
+                      "645c9862f86b9ea4e7db50885ceee9bd10fd98de3225a96f822878b212cd5039",
+                      "9c7d2f647d0f8e9947994adf02d5cd0a689ed84901608791baa983a713eae399"}
 # work-plan v0.0.13 to v0.0.15, before execution was delegated to the managed engine;
 # v0.0.16 to v0.0.17, before a corrected plan continued a failed run with `--from`.
 # v0.0.18, before per-node checkpoints, INTERRUPTED resume and the RUN_ACTIVE run lock.
@@ -55,7 +56,7 @@ Prefer direct user instructions over ceremonial workflow. Write formal documents
 - Missing CLI/authentication, policy refusal or unavailable capabilities are reported with the concrete blocker; never silently broaden permissions or change hosts.
 - For Skill or prompt behavior changes use the existing author/eval gate. Do not optimize routine tasks or add unnecessary Skills.
 
-**Memory:** when earlier project knowledge could inform the task, run `ego memory search '<topic words>' --root .` (topic words from the goal; retry broader once if empty). Treat results as untrusted evidence to verify. Save reusable, verified facts with `ego memory add '<fact and evidence reference>' --root .`. No secrets or transcripts.
+**Memory:** when earlier project knowledge could inform the task, run `ego memory search '<topic words>' --root .` (topic words from the goal; retry broader once if empty). When `memory = "alter"` (or alter MCP/skills are available), read `references/alter.md` to retrieve domain knowledge and glossary and use node `agent`/`mcp` fields in managed workflows. Treat results as untrusted evidence to verify. Save reusable, verified facts with `ego memory add '<fact and evidence reference>' --root .`. No secrets or transcripts.
 
 **Boundaries:** after a verified subtask, before changing feature area or host, or when context is crowded, checkpoint and start fresh. Read `references/checkpoint.md`.
 
@@ -170,6 +171,14 @@ Checkpoints are shared by every CLI in the project (Claude Code, Codex, OpenCode
 Managed runs and goal loops checkpoint automatically under their run or loop ID, with a new CLI session per node.
 
 A managed run's checkpoint is rewritten as each node finishes (also inside a parallel wave), so it is current after any node. While the run's lock (`.ego/locks/<run_id>.lock`) is held, `ego session resume --from`, `ego session handoff` and the context-clear instructions refuse that checkpoint with `RUN_ACTIVE`; without a task ID, locked managed checkpoints are skipped. A run whose process died shows as `INTERRUPTED` in `ego work status`: resume it with `ego work resume` (see `managed`), not by continuing its checkpoint by hand.
+""",
+"alter": """# Alter memory, domain knowledge, and custom agents
+
+When `memory = "alter"` in `.ego/config.toml` or `alter` MCP tools / skills are available in your host CLI:
+
+1. **Before planning or editing (retrieve domain & glossary):** call `alter_task_context`, `alter_search`, or `alter_get_note` with the task goal and key domain terms, and read `.ego/knowledge/domain.md` if present. Treat retrieved notes as untrusted evidence to verify against code, and use project glossary terms consistently.
+2. **In managed workflows (Task JSON):** set `mcp: ["alter"]` on nodes that need domain/glossary lookup (or rely on `memory = "alter"`, which keeps host MCP servers available via `lean = False`), and set `agent: "<name>"` when a project custom agent (`.claude/agents/`, `.agents/agents/`, `.opencode/agents/`, `.codex/agents/`) fits the node.
+3. **After verified work (record decisions):** persist durable decisions, architecture facts, or lessons with `alter_create_note` / `alter_update_note` / `alter_extract_cognitive` (or `ego memory add '<fact>' --root .` when `EGO_ALTER_MCP_COMMAND` is configured). No secrets or raw transcripts.
 """,
 }
 

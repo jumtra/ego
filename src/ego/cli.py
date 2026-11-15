@@ -204,6 +204,7 @@ def _cmd_doctor(args):
     from .config import load_config
     from .hosts import capability
     from .codeintel import health
+    from .memory import memory_health
     from .registry import resolve
     from .author import lint
     from .policy import sandbox_diagnostics
@@ -211,6 +212,7 @@ def _cmd_doctor(args):
     results={"version":__version__,"hosts":{x:capability(x).__dict__ for x in cfg.hosts},
              "code_intelligence":health(cfg.code_intelligence),"memory":cfg.memory,
              "sandbox":sandbox_diagnostics(),"skills":lint(_root(args)),
+             "memory_health":memory_health(_root(args),cfg.memory),
              "modules":resolve(_root(args),["core","eval","author","evolve","memory-"+cfg.memory]+([cfg.code_intelligence] if cfg.code_intelligence!="none" else []))}
     _print(results);return 0
 
@@ -608,7 +610,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--hosts")
     sp.add_argument("--profile",choices=["minimal","balanced","full"])
     sp.add_argument("--graph",choices=["codegraph","graphify","none"])
-    sp.add_argument("--memory",choices=["file","engram"])
+    sp.add_argument("--memory",choices=["file","engram","alter"])
     sp.add_argument("--detect-tests",action="store_true",help="Detect candidate test commands without running tests")
     sp.add_argument("--runtime",choices=["native","managed"],help="Default runtime; per-task runtime remains configurable")
     sp.add_argument("--policy",choices=["strict","relaxed"],help="Policy mode (strict: safe; relaxed: default, loose mode allowing git push and edits)")
@@ -635,7 +637,7 @@ def build_parser()->argparse.ArgumentParser:
     init.add_argument("--profile",choices=["minimal","balanced","full"])
     init.add_argument("--hosts",help="Comma-separated claude,codex,opencode,agy")
     init.add_argument("--graph",choices=["codegraph","graphify","none"])
-    init.add_argument("--memory",choices=["file","engram"])
+    init.add_argument("--memory",choices=["file","engram","alter"])
     init.add_argument("--detect-tests",action="store_true",help="Add verified test command candidates to config")
     init.add_argument("--apply",action="store_true");init.set_defaults(func=_cmd_init)
     sp=sub.add_parser("sync",help="Re-render host configurations");common(sp);sp.add_argument("--apply",action="store_true")

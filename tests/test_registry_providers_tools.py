@@ -53,3 +53,23 @@ def test_hooks_policy():
     assert check_hook_payload("pre-tool", {"tool_name": "Bash", "tool_input": {"command": "git push"}}, policy_mode="relaxed")["decision"] == "allow"
     # but still blocks fatal destructive command
     assert check_hook_payload("pre-tool", {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}, policy_mode="relaxed")["decision"] == "deny"
+
+
+def test_alter_memory_registry_and_provider(project, monkeypatch):
+    from ego.memory import memory_health, memory_provider
+    from ego.registry import resolve
+
+    assert "memory-alter" in resolve(project, ["core", "memory-alter"])["modules"]
+    with pytest.raises(EgoError) as conflict:
+        resolve(project, ["core", "memory-file", "memory-alter"])
+    assert conflict.value.code == "MODULE_CONFLICT"
+
+    monkeypatch.delenv("EGO_ALTER_MCP_COMMAND", raising=False)
+    provider = memory_provider(project, "alter")
+    searched = provider.search("glossary")
+    assert isinstance(searched, list) and len(searched) == 1
+    assert searched[0]["provider"] == "alter" and searched[0]["mode"] == "host-mcp"
+    added = provider.add("domain term")
+    assert added["provider"] == "alter" and added["mode"] == "host-mcp"
+    health = memory_health(project, "alter")
+    assert health["provider"] == "alter" and health["mode"] == "host-mcp"

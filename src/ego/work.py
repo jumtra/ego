@@ -195,7 +195,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                                  model=chosen_model,effort=chosen_effort,
                                  read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
                                  max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
-                                 lean=cfg.worker_context=="lean",max_budget_usd=budget_usd)
+                                 lean=cfg.worker_context=="lean" and cfg.memory!="alter" and not node.get("mcp"),max_budget_usd=budget_usd)
                 except EgoError as exc:
                     if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
                         raise
@@ -479,8 +479,10 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                 progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
             write_json(record_path,record)
             edit_owners={}
+            # Prompt-only memory hint; record['spec'] stays the user's spec so resume comparisons are unchanged.
+            prompt_spec=({**spec,'memory':'alter'} if cfg.memory=='alter' and 'memory' not in spec else spec)
             with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-                futures={pool.submit(_run_node,n,spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress):n["id"] for n in wave}
+                futures={pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress):n["id"] for n in wave}
                 # Each node is persisted as soon as it finishes: a crash or cancel loses only the unfinished nodes.
                 for fut in as_completed(futures):
                     result=fut.result()

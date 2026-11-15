@@ -53,7 +53,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `hosts` | all four | `claude`, `codex`, `opencode`, `agy` | CLIs to generate files for. This is not a routing choice: the host that runs a task is chosen per task |
 | `policy_mode` | `"relaxed"` | `strict`, `relaxed` | See [Policy mode](#policy-mode) |
 | `code_intelligence` | `"none"` | `none`, `codegraph`, `graphify` | Provider behind `ego code ...`. External tools are never installed by ego; without one, a built-in text search is used |
-| `memory` | `"file"` | `file`, `engram` | Provider behind `ego memory ...`. See [Memory](#memory) |
+| `memory` | `"file"` | `file`, `engram`, `alter` | Provider behind `ego memory ...`. See [Memory](#memory) |
 | `runtime_mode` | `"native"` | `native`, `managed` | Recorded default working style. It does not change command behavior: `/work` in the CLI is native, `ego work run` is always managed |
 | `tests` | `[]` | list of argv arrays | Test commands recorded by `--detect-tests`, e.g. `[["pytest", "-q"]]` |
 
@@ -130,6 +130,7 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 |---|---|---|
 | `file` | `.ego/memory/items.json` in the project | Local only. Supports `add`, `search`, `list`, `delete` |
 | `engram` | An external MCP server you run | Supports `add` and `search`. Requires the environment variables below; there is no fallback to file memory |
+| `alter` | Host-configured `alter` MCP server / skills (or optional `EGO_ALTER_MCP_COMMAND`) | Retrieves domain knowledge and glossary via `alter_task_context` / `alter_search` / `alter_get_note` and keeps host MCP servers available in managed runs (`lean = False`) |
 
 Checkpoints are separate from memory items and always stored in `.ego/memory/handoffs/`.
 
@@ -158,6 +159,9 @@ Checkpoints are separate from memory items and always stored in `.ego/memory/han
 | `EGO_ENGRAM_MCP_COMMAND` | Command line that starts the Engram MCP server (required for `memory = "engram"`) |
 | `EGO_ENGRAM_WRITE_TOOL` | MCP tool name used by `ego memory add` |
 | `EGO_ENGRAM_SEARCH_TOOL` | MCP tool name used by `ego memory search` |
+| `EGO_ALTER_MCP_COMMAND` | Optional command line to start the Alter MCP server for direct `ego memory` CLI calls |
+| `EGO_ALTER_SEARCH_TOOL` | Optional MCP tool name used by `ego memory search` when `memory = "alter"` (default `alter_search`) |
+| `EGO_ALTER_WRITE_TOOL` | Optional MCP tool name used by `ego memory add` when `memory = "alter"` (default `alter_create_note`) |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_DATA_HOME` | Respected when `ego run` reads each CLI's session records |
 
 `EGO_RUN` is set by `ego run` for the CLI it starts; do not set it yourself.

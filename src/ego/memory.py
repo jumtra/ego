@@ -102,7 +102,44 @@ class EngramMemory:
         if not tool: raise EgoError("ENGRAM_CONFIG", "EGO_ENGRAM_SEARCH_TOOL is required",3)
         return [{"provider":"engram","result":self.mcp.call_tool(tool,{"query":query,"limit":limit})}]
 
+ALTER_HOST_HINT="Use host alter MCP tools (alter_task_context / alter_search / alter_get_note) or set EGO_ALTER_MCP_COMMAND"
+
+class AlterMemory:
+    """alter-mcp provider. Host-configured alter MCP is the default; EGO_ALTER_MCP_COMMAND enables direct CLI calls."""
+    def __init__(self, root: Path):
+        self.root = root
+        raw=os.environ.get("EGO_ALTER_MCP_COMMAND", "")
+        self.mcp=MCPStdio(shlex.split(raw)) if raw else None
+    def _host_guidance(self) -> dict:
+        return {"provider":"alter","mode":"host-mcp","hint":ALTER_HOST_HINT}
+    def add(self,text:str,**kw)->dict:
+        if self.mcp is None: return self._host_guidance()
+        tool=os.environ.get("EGO_ALTER_WRITE_TOOL","alter_create_note")
+        return {"provider":"alter","result":self.mcp.call_tool(tool,{"content":text,"tags":kw.get("tags",[])})}
+    def search(self,query:str,limit:int=10)->list[dict]:
+        if self.mcp is None: return [self._host_guidance()]
+        tool=os.environ.get("EGO_ALTER_SEARCH_TOOL","alter_search")
+        return [{"provider":"alter","result":self.mcp.call_tool(tool,{"query":query,"limit":limit})}]
+
 def memory_provider(root:Path, name:str):
     if name == "file": return FileMemory(root)
     if name == "engram": return EngramMemory()
+    if name == "alter": return AlterMemory(root)
+    raise EgoError("UNKNOWN_MEMORY",name,2)
+
+def memory_health(root:Path, name:str) -> dict:
+    """Read-only provider status for ego doctor. Never starts an MCP server."""
+    if name == "file":
+        fm=FileMemory(root)
+        return {"provider":"file","status":"ok","path":str(fm.path),"items":len(fm.list())}
+    if name == "engram":
+        configured=bool(os.environ.get("EGO_ENGRAM_MCP_COMMAND"))
+        tools_ok=bool(os.environ.get("EGO_ENGRAM_SEARCH_TOOL")) and bool(os.environ.get("EGO_ENGRAM_WRITE_TOOL"))
+        return {"provider":"engram","status":"ok" if configured and tools_ok else "unconfigured",
+                "command_configured":configured,"tools_configured":tools_ok}
+    if name == "alter":
+        configured=bool(os.environ.get("EGO_ALTER_MCP_COMMAND"))
+        return {"provider":"alter","status":"ok" if configured else "host-managed",
+                "mode":"mcp-cli" if configured else "host-mcp","command_configured":configured,
+                "hint":None if configured else ALTER_HOST_HINT}
     raise EgoError("UNKNOWN_MEMORY",name,2)

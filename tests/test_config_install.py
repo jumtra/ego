@@ -104,3 +104,31 @@ def test_recommended_defaults_and_sync_fallback(tmp_path):
     assert synced.run_yolo is True
     assert "agy" in synced.models
     assert "agy" in synced.roles["coder"]
+
+
+def test_alter_memory_config_references_and_context_budget(tmp_path):
+    from ego.context import audit
+
+    cfg = Config(memory="alter")
+    cfg.validate()
+    root = tmp_path / "alter_proj"
+    root.mkdir()
+    apply_install(root, cfg)
+    assert load_config(root).memory == "alter"
+
+    # alter-mcp alias normalizes to alter
+    (root / ".ego" / "config.toml").write_text('schema_version = 1\nmemory = "alter-mcp"\n', encoding="utf-8")
+    assert load_config(root).memory == "alter"
+
+    # work/references/alter.md is generated
+    alter_ref = root / ".claude" / "skills" / "work" / "references" / "alter.md"
+    assert alter_ref.is_file()
+    assert "alter_task_context" in alter_ref.read_text(encoding="utf-8")
+
+    # Context budget check: always_on <= 650, skill_body <= 1500
+    report = audit(root)
+    assert report["findings"] == []
+    claude_report = report["hosts"]["claude"]
+    assert claude_report["always_on_est_tokens"] <= 650
+    work_bodies = [i["est_tokens"] for i in claude_report["items"] if i["part"] == "body" and "work/SKILL.md" in i["path"]]
+    assert work_bodies and all(tok <= 1500 for tok in work_bodies)

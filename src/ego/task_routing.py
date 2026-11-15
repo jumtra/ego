@@ -24,6 +24,9 @@ MAX_NOTE_CHARS = 400
 MAX_NOTE_ITEMS = 6
 REQUIREMENT_KEYS = ("who", "what", "when", "where", "why", "how")
 MAX_STEP_ITEMS = 10
+MAX_AGENT_CHARS = 128
+MAX_MCP_ITEMS = 8
+MAX_MCP_CHARS = 64
 
 @dataclass(frozen=True)
 class Route:
@@ -168,6 +171,32 @@ def validate_node_notes(node: dict) -> None:
         if not isinstance(steps, list) or not steps or len(steps) > MAX_STEP_ITEMS or not all(_note(s) for s in steps):
             raise EgoError("INVALID_TASK", f"steps of {node['id']} must be a list of 1-{MAX_STEP_ITEMS} "
                            f"nonempty strings <= {MAX_NOTE_CHARS} chars", 2)
+    if "agent" in node or "mcp" in node:
+        if node.get("kind", "agent") in ("code", "gate"):
+            raise EgoError("INVALID_TASK", f"Deterministic node {node['id']} cannot have agent or mcp", 2)
+    if "agent" in node:
+        agent = node["agent"]
+        if (not isinstance(agent, str) or not agent.strip() or len(agent) > MAX_AGENT_CHARS
+                or any(bad in agent for bad in ("..", "/", "\\"))):
+            raise EgoError("INVALID_TASK", f"agent of {node['id']} must be a nonempty name <= {MAX_AGENT_CHARS} chars "
+                           "without '..', '/' or '\\'", 2)
+    if "mcp" in node:
+        servers = node["mcp"]
+        if (not isinstance(servers, list) or not 1 <= len(servers) <= MAX_MCP_ITEMS
+                or not all(isinstance(s, str) and s.strip() and len(s) <= MAX_MCP_CHARS for s in servers)):
+            raise EgoError("INVALID_TASK", f"mcp of {node['id']} must be a list of 1-{MAX_MCP_ITEMS} "
+                           f"nonempty strings <= {MAX_MCP_CHARS} chars", 2)
+
+
+def _agent_file(cwd: Path, name: str) -> Path | None:
+    """First existing host agent definition for name, in the same order as detect.discover_agents."""
+    candidates = (
+        cwd / ".claude" / "agents" / f"{name}.md",
+        cwd / ".agents" / "agents" / f"{name}.md",
+        cwd / ".opencode" / "agents" / f"{name}.md",
+        cwd / ".codex" / "agents" / f"{name}.toml",
+    )
+    return next((p for p in candidates if p.is_file()), None)
 
 
 def _bullets(items: list[str]) -> str:
@@ -224,10 +253,25 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
         parts.append(f"## Shared instructions from {rel}\n" + src.read_text(encoding="utf8"))
     if node.get("role"): parts.append("## Assigned role\n" + str(node["role"]))
     if node.get("intent"): parts.append("## Why this stage exists\n" + node["intent"].strip())
+    if node.get("agent"):
+        agent = str(node["agent"]).strip()
+        parts.append(f"## Assigned custom agent\n{agent}")
+        src = _agent_file(cwd, agent)
+        if src is not None:
+            if src.stat().st_size > MAX_INSTRUCTION_BYTES: raise EgoError("INSTRUCTIONS_TOO_LARGE", src.name, 2)
+            parts.append(f"## Custom agent definition from {src.relative_to(cwd)}\n" + src.read_text(encoding="utf8"))
     parts.append("## This node's instructions (user instruction)\n" + node["prompt"])
     req = node.get("requirement") or {}
     if req:
         parts.append("## Requirement (5W1H)\n" + "\n".join(f"- {k.title()}: {req[k].strip()}" for k in REQUIREMENT_KEYS if k in req))
+    if node.get("mcp") or spec.get("memory") == "alter":
+        servers = [str(s).strip() for s in node.get("mcp", [])]
+        if spec.get("memory") == "alter" and "alter" not in servers: servers.insert(0, "alter")
+        parts.append("## Required MCP / Knowledge context\n"
+                     + (("Required MCP servers: " + ", ".join(servers) + "\n") if servers else "")
+                     + "Before editing, retrieve the project's domain knowledge and glossary: call alter_task_context "
+                       "(or alter_search / alter_get_note) with this stage's goal, and read .ego/knowledge/domain.md if it exists. "
+                       "Use retrieved terms exactly as defined there; if they conflict with the requirement, stop and report.")
     if node.get("steps"):
         parts.append("## Implementation steps (follow in order, exactly as written; if a step cannot be done as written, "
                      "stop and report instead of improvising)\n" + "\n".join(f"{i}. {s.strip()}" for i, s in enumerate(node["steps"], 1)))

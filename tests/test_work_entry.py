@@ -205,3 +205,74 @@ def test_planner_prompt_requires_requirement_and_steps(tmp_path: Path, monkeypat
     assert 'requirement' in prompt and 'steps' in prompt
     assert "Never write 'consider'" in prompt
     assert result['task']['nodes'][0]['steps'] == ['Edit src/ego/x.py function f: return 1']
+
+
+def test_custom_agent_discovery_task_routing_and_non_lean_alter(tmp_path: Path, monkeypatch):
+    import pytest
+    from ego import work
+    from ego.config import Config, save_config
+    from ego.detect import detect, discover_agents
+    from ego.task_routing import build_task_prompt, validate_node_notes
+    from ego.util import EgoError
+
+    (tmp_path / '.claude/agents').mkdir(parents=True)
+    (tmp_path / '.claude/agents/domain-expert.md').write_text(
+        '---\nname: domain-expert\ndescription: Domain glossary specialist\n---\nAlways verify domain terms.\n',
+        encoding='utf-8',
+    )
+    (tmp_path / '.codex/agents').mkdir(parents=True)
+    (tmp_path / '.codex/agents/db-checker.toml').write_text(
+        'description = "Database schema checker"\n',
+        encoding='utf-8',
+    )
+
+    agents = discover_agents(tmp_path)
+    assert [a['name'] for a in agents] == ['db-checker', 'domain-expert']
+    assert detect(tmp_path)['custom_agents'] == ['db-checker', 'domain-expert']
+
+    # validate_node_notes accepts valid agent/mcp on agent nodes and rejects invalid ones
+    validate_node_notes({'id': 'n1', 'kind': 'agent', 'agent': 'domain-expert', 'mcp': ['alter']})
+    with pytest.raises(EgoError):
+        validate_node_notes({'id': 'n1', 'kind': 'agent', 'agent': '../escape'})
+    with pytest.raises(EgoError):
+        validate_node_notes({'id': 'n1', 'kind': 'code', 'agent': 'domain-expert'})
+    with pytest.raises(EgoError):
+        validate_node_notes({'id': 'n1', 'kind': 'code', 'mcp': ['alter']})
+
+    # build_task_prompt embeds custom agent definition and alter/MCP retrieval instructions
+    prompt = build_task_prompt(
+        {'goal': 'Add alter support', 'memory': 'alter'},
+        {'id': 'n1', 'prompt': 'Implement feature', 'agent': 'domain-expert', 'mcp': ['alter']},
+        tmp_path,
+    )
+    assert '## Assigned custom agent' in prompt and 'domain-expert' in prompt
+    assert 'Always verify domain terms.' in prompt
+    assert '## Required MCP / Knowledge context' in prompt
+    assert 'alter_task_context' in prompt
+
+    # work.execute passes lean=False when cfg.memory == 'alter'
+    save_config(tmp_path, Config(memory='alter', worker_context='lean'))
+    captured_lean = []
+
+    def fake_run_worker(host, p, cwd, timeout=180, **kw):
+        captured_lean.append(kw.get('lean'))
+        return RunResult('PASS', 'ok', '', 0, 0.0, host)
+
+    monkeypatch.setattr(work, 'run_worker', fake_run_worker)
+    res = work.execute(tmp_path, {'goal': 'g', 'nodes': [{'id': 'n1', 'kind': 'agent', 'prompt': 'p', 'write_allowlist': ['src/**']}]}, host='claude', trust_cli=True)
+    assert res['final_status'] == 'PASSED'
+    assert captured_lean == [False]
+
+    # planner.plan_work passes lean=False and includes custom agents when cfg.memory == 'alter'
+    captured_plan = {}
+
+    def fake_plan_agent(host, p, cwd, timeout=180, **kw):
+        captured_plan['prompt'] = p
+        captured_plan['lean'] = kw.get('lean')
+        return RunResult('PASS', json.dumps({'goal': 'g', 'nodes': [{'id': 'n1', 'kind': 'agent', 'prompt': 'p', 'write_allowlist': ['src/**']}]}), '', 0, 0.0, host)
+
+    monkeypatch.setattr(planner, 'run_agent', fake_plan_agent)
+    planner.plan_work(tmp_path, 'g', host='claude', execute=True)
+    assert captured_plan['lean'] is False
+    assert 'domain-expert' in captured_plan['prompt']
+    assert 'alter' in captured_plan['prompt']

@@ -1,8 +1,58 @@
 """Deterministic, non-mutating project profiler used by setup and troubleshooting."""
 from __future__ import annotations
 import json
+import re
+import tomllib
 from pathlib import Path
 from .util import safe_path
+
+AGENT_DIRS = (
+    (".claude/agents", "*.md"),
+    (".agents/agents", "*.md"),
+    (".opencode/agents", "*.md"),
+    (".codex/agents", "*.toml"),
+)
+
+
+def _agent_description(path: Path) -> str:
+    """Description from YAML-style frontmatter (.md) or a top-level key (.toml); empty when absent."""
+    try:
+        text = path.read_text(encoding="utf8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    if path.suffix == ".toml":
+        try:
+            value = tomllib.loads(text).get("description", "")
+        except (tomllib.TOMLDecodeError, ValueError):
+            return ""
+        return value.strip() if isinstance(value, str) else ""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return ""
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        match = re.match(r"^description\s*:\s*(.*)$", line)
+        if match:
+            return match.group(1).strip().strip("\"'")
+    return ""
+
+
+def discover_agents(root: Path) -> list[dict[str, str]]:
+    """Project custom agents from host agent directories, sorted and deduplicated by file stem (first in list wins)."""
+    root = root.resolve()
+    found: dict[str, dict[str, str]] = {}
+    candidates = []
+    for rel_dir, pattern in AGENT_DIRS:
+        base = root / rel_dir
+        if base.is_dir():
+            candidates.extend(sorted(p for p in base.glob(pattern) if p.is_file()))
+    for path in sorted(candidates, key=lambda p: (p.stem, str(p))):
+        name = path.stem
+        if name in found:
+            continue
+        found[name] = {"name": name, "path": str(path.relative_to(root)), "description": _agent_description(path)}
+    return [found[name] for name in sorted(found)]
 
 
 def detect(root:Path)->dict:
@@ -49,4 +99,5 @@ def detect(root:Path)->dict:
     for provider,path in (("github",root/".github"/"workflows"),("gitlab",root/".gitlab-ci.yml"),("circleci",root/".circleci")):
         if path.exists():ci.append(provider)
     return {"root":str(root),"stack":languages,"test_commands":tests,"ci":ci,
+            "custom_agents":[a['name'] for a in discover_agents(root)],
             "git":(root/".git").exists(),"existing_host_configs":[name for name in ("CLAUDE.md","AGENTS.md",".claude", ".agents", ".opencode", ".codex") if (root/name).exists()]}
