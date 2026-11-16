@@ -99,7 +99,7 @@ class Config:
     worker_segment_turns: int = 10  # managed Claude worker: turns per segment; context is measured between segments
     clear_suggest_tokens: int = 150000  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
     auto_resume: bool = True  # Claude Code/Codex/AGY: SessionStart(clear) hook injects the saved checkpoint after /clear (core; independent of clear_suggest_tokens)
-    usage_switch_percent: int = 85  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
+    usage_switch_percent: int = 99  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
     run_yolo: bool = True  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
     models: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_MODELS))
     roles: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_ROLES))  # role (coder/tester/judge) -> {host, model, effort}; same vocabulary as hosts/models
@@ -224,7 +224,7 @@ def dump_config(cfg: Config) -> str:
         "#   clear_suggest_tokens = 150000  # 実測コンテキストがこの値に達したらチェックポイントを自動保存させ /clear を提案。0 で無効\n"
         "#\n"
         "# 使用量上限が近いときの自動保存と切り替え提案 (usage_switch_percent, Claude Code / Codex。使用量を報告しない OpenCode / AGY は対象外):\n"
-        "#   usage_switch_percent = 85  # 5時間/7日枠の使用率がこの%以上でチェックポイント保存と別CLIへの切り替えを提案。0 で無効\n"
+        "#   usage_switch_percent = 99  # 5時間/7日枠の使用率がこの%以上でチェックポイント保存と別CLIへの切り替えを提案。0 で無効\n"
         "#\n"
         "# ego run の権限確認スキップ (run_yolo):\n"
         "#   run_yolo = true  # ego run が各CLIを権限確認なしで起動 (claude/agy: --dangerously-skip-permissions, codex: --dangerously-bypass-approvals-and-sandbox, opencode: --auto)。--yolo / --no-yolo で起動ごとに上書き\n"

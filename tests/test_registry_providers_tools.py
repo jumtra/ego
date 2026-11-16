@@ -180,3 +180,49 @@ def test_alter_project_auto_registers_on_apply_and_work(tmp_path: Path, monkeypa
     calls = [json.loads(x) for x in log_path.read_text(encoding="utf-8").splitlines()]
     assert len(calls) == 2
     assert calls[1]["arguments"] == {"cwd": str(proj2.resolve())}
+
+
+def test_apply_install_auto_installs_alter_skills_and_npx_fallback(tmp_path: Path, monkeypatch):
+    import subprocess
+    from ego.config import Config
+    from ego.install import apply_install
+    from ego import memory
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("EGO_ALTER_AUTO_INSTALL_SKILLS", "1")
+    monkeypatch.setattr("ego.memory.shutil.which", lambda name: f"/usr/local/bin/{name}" if name in ("npx", "node") else None)
+
+    script = home / ".npm" / "_npx" / "abc" / "node_modules" / "alter-skills" / "bin" / "install.mjs"
+    script.parent.mkdir(parents=True)
+    script.write_text("// stub", encoding="utf-8")
+
+    seen = []
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        if argv[0].endswith("npx"):
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="copied 6 skills\n", stderr="")
+
+    monkeypatch.setattr("ego.memory.subprocess.run", fake_run)
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    res = apply_install(proj, Config(memory="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    assert res["alter_skills"]["status"] == "INSTALLED"
+    assert res["alter_skills"]["output"] == "copied 6 skills"
+    assert seen[0][0].endswith("npx")
+    assert seen[1][0].endswith("node") and seen[1][1] == str(script)
+
+    # Only agy installed when hosts=['claude', 'agy'] -> still installs for missing client
+    (home / ".gemini" / "config" / "skills" / "alter-context-loader").mkdir(parents=True)
+    res2 = apply_install(proj, Config(memory="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    assert res2["alter_skills"]["status"] == "INSTALLED"
+    assert len(seen) == 4
+
+    # Both claude and agy installed -> skip npx
+    (home / ".claude" / "skills" / "alter-context-loader").mkdir(parents=True)
+    res3 = apply_install(proj, Config(memory="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    assert res3["alter_skills"] == {"status": "already_installed"}
+    assert len(seen) == 4

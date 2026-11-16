@@ -40,7 +40,34 @@ def _read_json_dict(path: Path) -> dict[str, Any]:
         return {}
 
 
-def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...]) -> dict[str, Any]:
+def _read_toml_dict(path: Path) -> dict[str, Any]:
+    try:
+        import tomllib
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _normalize_opencode_mcp(entry: Any) -> dict[str, Any] | None:
+    if not isinstance(entry, dict) or entry.get("enabled") is False:
+        return None
+    cmd = entry.get("command")
+    if isinstance(cmd, list) and cmd and isinstance(cmd[0], str) and cmd[0].strip():
+        command, args = cmd[0], [str(a) for a in cmd[1:]]
+    elif isinstance(cmd, str) and cmd.strip():
+        command = cmd
+        args = [str(a) for a in (entry.get("args") or [])] if isinstance(entry.get("args"), list) else []
+    else:
+        return None
+    out: dict[str, Any] = {"command": command, "args": args}
+    env = entry.get("environment") if isinstance(entry.get("environment"), dict) else entry.get("env")
+    if isinstance(env, dict):
+        out["env"] = env
+    return out
+
+
+def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...], *, host: str | None = None) -> dict[str, Any]:
     wanted = [n for n in names if isinstance(n, str) and n]
     if not wanted:
         return {}
@@ -54,6 +81,41 @@ def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...]) -> 
             proj_cfg = projects.get(str(cwd.resolve()))
             if isinstance(proj_cfg, dict) and isinstance(proj_cfg.get("mcpServers"), dict):
                 servers.update(proj_cfg["mcpServers"])
+    if host == "agy":
+        for cfg_path in (
+            Path.home() / ".gemini" / "antigravity-cli" / "mcp_config.json",
+            Path.home() / ".gemini" / "config" / "mcp_config.json",
+        ):
+            agy_cfg = _read_json_dict(cfg_path)
+            if isinstance(agy_cfg.get("mcpServers"), dict):
+                servers.update(agy_cfg["mcpServers"])
+    elif host == "codex":
+        codex_paths = [Path.home() / ".codex" / "config.toml"]
+        if cwd is not None:
+            codex_paths.append(cwd / ".codex" / "config.toml")
+        for cfg_path in codex_paths:
+            codex_cfg = _read_toml_dict(cfg_path)
+            mcp_servers = codex_cfg.get("mcp_servers")
+            if isinstance(mcp_servers, dict):
+                for name, entry in mcp_servers.items():
+                    if isinstance(entry, dict) and entry.get("enabled") is not False:
+                        servers[name] = entry
+    elif host == "opencode":
+        oc_paths = [
+            Path.home() / ".config" / "opencode" / "config.json",
+            Path.home() / ".config" / "opencode" / "opencode.json",
+        ]
+        if cwd is not None:
+            oc_paths.append(cwd / "opencode.json")
+        for cfg_path in oc_paths:
+            oc_cfg = _read_json_dict(cfg_path)
+            mcp_map = oc_cfg.get("mcp")
+            if isinstance(mcp_map, dict):
+                for name, entry in mcp_map.items():
+                    norm = _normalize_opencode_mcp(entry)
+                    if norm is not None:
+                        servers[name] = norm
+    if cwd is not None:
         mcp_json = _read_json_dict(cwd / ".mcp.json")
         if isinstance(mcp_json.get("mcpServers"), dict):
             servers.update(mcp_json["mcpServers"])
@@ -82,7 +144,7 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         if lean and "--strict-mcp-config" in info["flags"]:
             argv.append("--strict-mcp-config")
             if mcp_servers and "--mcp-config" in info["flags"]:
-                selected = select_mcp_servers(cwd, mcp_servers)
+                selected = select_mcp_servers(cwd, mcp_servers, host="claude")
                 if selected:
                     argv += ["--mcp-config", json.dumps({"mcpServers": selected}, ensure_ascii=False)]
         if max_budget_usd is not None and max_budget_usd > 0 and "--max-budget-usd" in info["flags"]:
