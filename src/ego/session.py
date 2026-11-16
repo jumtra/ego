@@ -769,6 +769,23 @@ def normalize_payload(host: str, obj: Any) -> dict[str, Any]:
     return obj
 
 
+ALTER_SESSION_MANDATE = (
+    "ego: memory = \"alter\" is required on this host. Before planning or editing, call `alter_bootstrap` "
+    "with cwd set to the repo root, and use `alter_task_context` / `alter_search` for domain terms."
+)
+
+
+def with_alter_mandate(out: dict[str, Any]) -> dict[str, Any]:
+    """Add the alter-first requirement to a session-start output, keeping any checkpoint advice already there."""
+    merged = dict(out or {})
+    hook = dict(merged.get("hookSpecificOutput") or {})
+    hook.setdefault("hookEventName", "SessionStart")
+    previous = hook.get("additionalContext") or ""
+    hook["additionalContext"] = f"{previous}\n{ALTER_SESSION_MANDATE}" if previous else ALTER_SESSION_MANDATE
+    merged["hookSpecificOutput"] = hook
+    return merged
+
+
 def adapt_output(host: str, event: str, out: dict[str, Any], once: bool = False) -> dict[str, Any]:
     """The advice in the output format `host` reads for `event` (`stop` or `session-start`)."""
     if host == "agy":
@@ -779,5 +796,7 @@ def adapt_output(host: str, event: str, out: dict[str, Any], once: bool = False)
                 return {"decision": "continue", "reason": f"ego: Tell the user, briefly and in their language: {out['systemMessage']} Then stop."}
             return {}
         context = (out.get("hookSpecificOutput") or {}).get("additionalContext")
-        return {"injectSteps": [{"systemMessage": {"systemMessage": f"{context}\nTell the user briefly that this checkpoint was loaded."}}]} if context else {}
+        # Only a restored checkpoint is worth announcing; the alter requirement alone is silent context.
+        note = "" if context == ALTER_SESSION_MANDATE else "\nTell the user briefly that this checkpoint was loaded."
+        return {"injectSteps": [{"systemMessage": {"systemMessage": f"{context}{note}"}}]} if context else {}
     return out

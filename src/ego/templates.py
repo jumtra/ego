@@ -288,6 +288,10 @@ def _ego_binary() -> str:
     return shutil.which("ego") or "ego"
 
 
+# Fire on new, resumed and cleared sessions: the alter requirement applies to all; checkpoint resume itself stays clear-only (session.clear_resume).
+SESSION_START_MATCHER = "startup|resume|clear"
+
+
 def generated_files(cfg: Config) -> dict[str, str]:
     files: dict[str,str] = {}
     for name in SKILLS:
@@ -311,7 +315,7 @@ def generated_files(cfg: Config) -> dict[str, str]:
         if cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0:
             hooks["Stop"] = [{"hooks": [{"type": "command", "command": 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'}]}]
         if cfg.auto_resume:  # core: injects the saved checkpoint after /clear
-            hooks["SessionStart"] = [{"matcher": "clear", "hooks": [{"type": "command", "command": 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'}]}]
+            hooks["SessionStart"] = [{"matcher": SESSION_START_MATCHER, "hooks": [{"type": "command", "command": 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'}]}]
         settings: dict = {"hooks": hooks} if hooks else {}
         if cfg.usage_switch_percent > 0:
             # The status line input is the only place Claude Code reports the remaining usage limit;
@@ -325,7 +329,7 @@ def generated_files(cfg: Config) -> dict[str, str]:
         handlers = lambda event: [{"type": "command", "command": f"ego hook {event} --host codex --root .", "timeout": 30}]
         codex_hooks: dict[str, list] = {"Stop": [{"hooks": handlers("stop")}]} if session_hooks else {}
         if cfg.auto_resume:
-            codex_hooks["SessionStart"] = [{"matcher": "clear", "hooks": handlers("session-start")}]
+            codex_hooks["SessionStart"] = [{"matcher": SESSION_START_MATCHER, "hooks": handlers("session-start")}]
         files[".codex/hooks.json"] = json.dumps({"hooks": codex_hooks}, indent=2) + "\n"
     if "agy" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume):
         # AGY reports no usage limit, so only the context-limit and resume hooks apply to it.
@@ -365,7 +369,7 @@ def instruction_block(cfg: Config) -> str:
         else "Policy mode: strict (mutating remote/git push and sensitive config edits require manual user action).\n"
     )
     memory_note = (
-        "Memory: alter (alter skills/MCP: alter_task_context; auto-review stop/checkpoint or alter_record_conversation/alter_session_digest)."
+        "Memory: alter (alter skills/MCP, alter_task_context). MANDATORY: call `alter_bootstrap` (cwd = repo root) before planning or editing."
         if cfg.memory == "alter"
         else f"Memory: {cfg.memory}."
     )

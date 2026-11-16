@@ -330,7 +330,10 @@ def test_hooks_stand_down_inside_ego_run(project: Path, monkeypatch, capsys):
     assert arm_auto_resume(project, "feat") is False
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps({"source": "clear"})))
     assert main(["hook", "session-start", "--root", str(project)]) == 0
-    assert json.loads(capsys.readouterr().out) == {}
+    # The checkpoint is not resumed again; only the alter requirement (memory defaults to alter) remains.
+    from ego.session import ALTER_SESSION_MANDATE
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["additionalContext"] == ALTER_SESSION_MANDATE
 
 
 def test_run_refuses_without_a_threshold_or_a_terminal(project: Path, capsys):

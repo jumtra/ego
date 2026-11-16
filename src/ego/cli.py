@@ -534,7 +534,12 @@ def _cmd_hook(args):
                 if host=="codex":limits=codex_limits(Path(obj["transcript_path"]).expanduser()) if isinstance(obj.get("transcript_path"),str) else {}
                 elif host in ("opencode","agy"):limits={}
                 out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts,host=host,limits=limits) or ({} if wrapped else clear_advice(root,obj,cfg.clear_suggest_tokens,host=host,info=info))
-            else:out={} if os.environ.get("EGO_RUN") else clear_resume(root,obj)
+            else:
+                out={} if os.environ.get("EGO_RUN") else clear_resume(root,obj)
+                # Inside `ego run` the checkpoint resume stands down, but the alter requirement is not a resume: keep it.
+                if load_config(root).memory=="alter":
+                    from .session import with_alter_mandate
+                    out=with_alter_mandate(out)
             out=adapt_output(host,args.event,out,once=bool(info.get("once")))
         except (ValueError,OSError,EgoError,KeyError,TypeError):out={}
         print(json.dumps(out,ensure_ascii=False));return 0
