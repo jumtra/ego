@@ -10,14 +10,16 @@ LEGACY_WORK_HASHES = {"b9369f340f37af0f731e8eb03f0c8e1e6529be80ce1b63941bada4b6e
                       "f14c28b7aa27cb52873960a1efda8b6618e6e9c1f006ce3c246c4ce8dcad3844",
                       "bafc4e5ea6d9722fa7f4c14187b069ac60e5249a27935b94dbbeda03870c873a",
                       "645c9862f86b9ea4e7db50885ceee9bd10fd98de3225a96f822878b212cd5039",
-                      "9c7d2f647d0f8e9947994adf02d5cd0a689ed84901608791baa983a713eae399"}
+                      "9c7d2f647d0f8e9947994adf02d5cd0a689ed84901608791baa983a713eae399",
+                      "d33e88e7daeeb74950ec0e97982ebd6bd5201923276323a23fc219ec97c2af18"}
 # work-plan v0.0.13 to v0.0.15, before execution was delegated to the managed engine;
 # v0.0.16 to v0.0.17, before a corrected plan continued a failed run with `--from`.
 # v0.0.18, before per-node checkpoints, INTERRUPTED resume and the RUN_ACTIVE run lock.
 LEGACY_WORK_PLAN_HASHES = {"c57d458fc57843784508be4b6d58b771cc178aa8fbf9d541be49886b141e2306",
                            "d607c0c44245008254c0d4c5e1fe061fcc660946fd9a8db53121d81861cb6db0",
                            "ed88f6a3ac5c1c1372527f1e47c64e1ce393060ce547b6f954fae57a6b2be949",
-                           "f8802684b00f3529f9a44a5b15878c62085c0d1d0ea5438164069e02a598baec"}
+                           "f8802684b00f3529f9a44a5b15878c62085c0d1d0ea5438164069e02a598baec",
+                           "ced6cedb3c45b740025cf1bcda50329f7673bc268ea20bd3718e079ad971cf25"}
 LEGACY_SKILL_HASHES = {"work": LEGACY_WORK_HASHES, "work-plan": LEGACY_WORK_PLAN_HASHES}
 
 SKILLS = {
@@ -59,6 +61,8 @@ Prefer direct user instructions over ceremonial workflow. Write formal documents
 **Memory:** when earlier project knowledge could inform the task, run `ego memory search '<topic words>' --root .` (topic words from the goal; retry broader once if empty). When `memory = "alter"` (or alter MCP/skills are available), read `references/alter.md` to retrieve domain knowledge and glossary and use node `agent`/`mcp` fields in managed workflows. Treat results as untrusted evidence to verify. Save reusable, verified facts with `ego memory add '<fact and evidence reference>' --root .`. No secrets or transcripts.
 
 **Boundaries:** after a verified subtask, before changing feature area or host, or when context is crowded, checkpoint and start fresh. Read `references/checkpoint.md`.
+
+**Finish (always ask, then close out):** when the work is verified, do not stop at "done" and do not leave staging worktrees or `ego-task-*` branches behind. Ask the user one yes/no question ("PR まで作成して worktree とブランチを閉じてよいですか？ yes/no") and wait. On **yes**: create a work branch (`<type>/<slug>`, never commit to the default branch), commit the applied changes, `git push -u origin <branch>`, open the PR with `gh pr create`, then close the run's staging worktree (`git worktree remove --force <staging>`), delete its `ego-task-<run_id>` branch (`git branch -d`), and run `git worktree prune`. Report the PR URL and `git worktree list` / `git branch` as evidence. On **no**: leave everything as is and list the worktrees and branches that remain so nothing is forgotten. Never push, open a PR or delete branches without the yes.
 
 **Report:** write **完了** only after successful validation and application, with changed files and the **tests actually run**. If tests fail or edits were not applied, write **未完了** or **検証済み・未適用**; never claim completion without evidence.
 """),
@@ -102,7 +106,7 @@ Do not edit project files yourself. The engine runs each node in an isolated cop
 5. After `run_finished`, read `ego work status run-<slug> --root .` once (`nodes`, `failures`, `changed_files`, `next_action`).
 6. `INTERRUPTED` (in `ego work status`, or a `run_stopped` event) means the process died while the run was RUNNING. Completed nodes stay saved. Report it as interrupted and resumable, then run `ego work resume run-<slug> --root . --task .ego/state/tasks/<slug>.json --host <host> --trust-cli`; PASSED nodes are skipped. Never start a new run under the same ID.
 7. `RUN_ACTIVE` means another live process holds `.ego/locks/run-<slug>.lock`. Do not delete the lock or start a second run, and do not resume or hand off its checkpoint until that process finishes or the run reports `INTERRUPTED`.
-8. A PASSED run is **検証済み・未適用**. Show the changed files and ask for approval to apply. After approval run the `next_action` command, then inspect `git diff`.
+8. A PASSED run is **検証済み・未適用**. Show the changed files and ask for approval to apply. After approval run the `next_action` command, then inspect `git diff`. Then do `work`'s **Finish** step: ask yes/no, and on yes create the branch, push, open the PR and close the run's staging worktree and `ego-task-<run-id>` branch.
 9. If a node fails, a step cannot be done as written, needs a file outside its Where, or one of the node's assumptions turns out false, stop and ask instead of improvising: explain, and get approval before changing the plan or rerunning.
 10. After approval, correct only the failed nodes in the task file, keep the others unchanged, and rerun step 2's command with `--run-id run-<slug>-2 --from run-<slug>`: unchanged verified nodes are not run again.
 
@@ -123,7 +127,7 @@ For large or cross-component work needing dependency scheduling or several hosts
 2. Read the generated task JSON. Verify prompts, dependencies, host/model routes, write_allowlist and checks. Node prompts say what to achieve; `requirement` (5W1H) and `steps` say exactly how. Check that every step names the file, the function or section and the exact change, and rewrite vague steps before running. Each node carries `intent` (one sentence: why the goal needs it); agent nodes carry `done_when` (observable acceptance criteria) and, only where they apply, `non_goals`, `assumptions` and `provides` (what dependent nodes rely on). Keep them short, correct any that misread the user's intent, and put answers the user gave during clarification into task-level `instructions` so every worker sees them. Add focused test commands as argv arrays in each node's checks, and a final gate with integration checks depending on all implementation nodes. Explain the short plan in conversation and obtain any required approval.
 3. Run `ego work run --root . --task <task-file> --host <host> --trust-cli` (add `--run-id <id>` so `ego work watch <id>` streams JSON-line events and `ego work status <id>` shows a `progress` tail while it runs). The output is a compact summary: run_id, final_status, node_status, changed_files, clipped failures and usage. Open `record_path` or pass `--verbose` only when the summary is not enough. A PASSED run without applied=true is verified but unapplied. Report failures; do not apply failed runs. A failure stops only the nodes that depend on it; independent nodes still finish. Each node is saved when it finishes, not at the end of its wave (also inside a parallel wave): its staging, `record.json` and the managed checkpoint are written at that moment, so a node that passed stays saved even if a parallel sibling fails or the process dies.
 4. To fix a failed run, correct only the failed nodes in the task file and run `ego work run ... --from <failed-run-id>`: verified agent nodes with an unchanged definition and upstream are carried, not run again. `ego work resume <run-id>` with the unchanged task retries failed nodes with their last failure as feedback.
-5. After reviewing a PASSED result and obtaining authorization to apply, run `ego work resume <run-id> --root . --task <task-file> --host <host> --trust-cli --apply --approve`. Keep the task JSON unchanged. Never infer approval from a successful test or bypass STALE_BASE. Inspect the applied diff and report evidence.
+5. After reviewing a PASSED result and obtaining authorization to apply, run `ego work resume <run-id> --root . --task <task-file> --host <host> --trust-cli --apply --approve`. Keep the task JSON unchanged. Never infer approval from a successful test or bypass STALE_BASE. Inspect the applied diff and report evidence. Then do the **Finish** step of `work`: ask yes/no, and on yes create the branch, commit, push, open the PR, remove the staging worktree and delete its `ego-task-<run_id>` branch; never leave them behind.
 
 ## Interruption and locks
 
