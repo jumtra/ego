@@ -16,8 +16,8 @@ uv tool install git+https://github.com/jumtra/ego
 pipx install git+https://github.com/jumtra/ego
 
 # From a published release wheel (replace the version with the latest release)
-pipx install https://github.com/jumtra/ego/releases/download/v0.0.24/ego-0.0.24-py3-none-any.whl
-pip install https://github.com/jumtra/ego/releases/download/v0.0.24/ego-0.0.24-py3-none-any.whl   # inside a virtualenv
+pipx install https://github.com/jumtra/ego/releases/download/v0.0.25/ego-0.0.25-py3-none-any.whl
+pip install https://github.com/jumtra/ego/releases/download/v0.0.25/ego-0.0.25-py3-none-any.whl   # inside a virtualenv
 
 ego --version
 ```
@@ -62,10 +62,12 @@ In an interactive terminal, with none of the selection flags below given, a wiza
 | Profile | `minimal` / `balanced` / `full` | `balanced` |
 | Hosts (multiple) | `claude` / `codex` / `opencode` / `agy` | all four |
 | Code intelligence | `codegraph` / `graphify` / `none` | `none` |
-| Memory | `file` / `engram` / `alter` | `file` |
+| Memory | `file` / `engram` / `alter` | `alter` |
 | Default runtime | `native` / `managed` | `native` |
 | Detect test commands | yes / no (only when none are configured) | no |
 | Apply these changes? | yes / no, after the list of changed files | **no** |
+
+With memory `alter`, the managed block in CLAUDE.md / AGENTS.md (all hosts) requires calling `alter_bootstrap` (cwd = repo root) before planning or editing, and the SessionStart hook injects the same requirement (also inside `ego run`, where only the checkpoint resume stands down). Register each host's alter MCP against the same vault.
 
 Answer with a number or a name; hosts accept `1,2` or `all`. Enter keeps the current value, `q` cancels. On re-apply the existing `.ego/config.toml` supplies the defaults. Prompts are currently in Japanese.
 

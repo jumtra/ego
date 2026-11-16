@@ -12,7 +12,7 @@ profile = "balanced"
 policy_mode = "relaxed"
 hosts = ["claude", "codex", "opencode", "agy"]
 code_intelligence = "none"
-memory = "file"
+memory = "alter"
 runtime_mode = "native"
 max_parallel = 2
 max_attempts = 3
@@ -53,7 +53,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `hosts` | 4 つすべて | `claude`、`codex`、`opencode`、`agy` | ファイルを生成する CLI。ルーティングの設定ではありません。タスクを実行するホストはタスクごとに選ばれます |
 | `policy_mode` | `"relaxed"` | `strict`、`relaxed` | [ポリシーモード](#ポリシーモード) を参照 |
 | `code_intelligence` | `"none"` | `none`、`codegraph`、`graphify` | `ego code ...` の裏で動くプロバイダ。外部ツールを ego が導入することはありません。ない場合は組み込みのテキスト検索を使います |
-| `memory` | `"file"` | `file`、`engram`、`alter` | `ego memory ...` の裏で動くプロバイダ。[メモリ](#メモリ) を参照 |
+| `memory` | `"alter"` | `file`、`engram`、`alter` | `ego memory ...` の裏で動くプロバイダ。[メモリ](#メモリ) を参照 |
 | `runtime_mode` | `"native"` | `native`、`managed` | 記録される既定の作業方式。コマンドの動作は変えません。CLI 内の `/work` は native、`ego work run` は常に managed です |
 | `tests` | `[]` | argv 配列のリスト | `--detect-tests` が記録するテストコマンド。例: `[["pytest", "-q"]]` |
 

@@ -132,7 +132,7 @@ def test_hooks_are_generated_only_on_request_and_call_the_installed_command(proj
     assert ".claude/settings.json" not in generated_files(Config(clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     cfg = Config(); cfg.clear_suggest_tokens = 120000
     hooks = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
-    assert set(hooks) == {"Stop", "SessionStart"} and hooks["SessionStart"][0]["matcher"] == "clear"
+    assert set(hooks) == {"Stop", "SessionStart"} and hooks["SessionStart"][0]["matcher"] == "startup|resume|clear"
     assert hooks["Stop"][0]["hooks"][0]["command"] == 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'
     cfg.profile = "full"
     full = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
@@ -160,6 +160,17 @@ def test_hook_cli_never_fails_the_host_turn(tmp_path: Path, monkeypatch, capsys)
     monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
     assert main(["hook", "stop", "--root", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out) == {}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"source": "clear"})))
+    assert main(["hook", "session-start", "--root", str(tmp_path)]) == 0
+    # memory defaults to alter, so session start always carries the alter_bootstrap requirement.
+    out = json.loads(capsys.readouterr().out)
+    assert "alter_bootstrap" in out["hookSpecificOutput"]["additionalContext"]
+    # AGY gets the requirement as an injected step, without a "checkpoint was loaded" announcement.
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"source": "clear"})))
+    assert main(["hook", "session-start", "--host", "agy", "--root", str(tmp_path)]) == 0
+    step = json.loads(capsys.readouterr().out)["injectSteps"][0]["systemMessage"]["systemMessage"]
+    assert "alter_bootstrap" in step and "checkpoint was loaded" not in step
+    (tmp_path / ".ego/config.toml").write_text('memory = "file"\n')
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"source": "clear"})))
     assert main(["hook", "session-start", "--root", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out) == {}
@@ -415,7 +426,7 @@ def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path
     files = generated_files(cfg)
     codex = json.loads(files[".codex/hooks.json"])["hooks"]
     assert codex["Stop"][0]["hooks"][0]["command"] == "ego hook stop --host codex --root ."
-    assert codex["SessionStart"][0]["matcher"] == "clear"
+    assert codex["SessionStart"][0]["matcher"] == "startup|resume|clear"
     agy = json.loads(files[".agents/hooks.json"])["ego"]
     assert agy["Stop"][0]["command"] == "ego hook stop --host agy --root ." and agy["Stop"][0]["type"] == "command"
     assert "session.idle" in files[".opencode/plugins/ego.ts"] and "ego" in files[".opencode/plugins/ego.ts"]
@@ -459,3 +470,8 @@ def test_checkpoint_under_ego_run_records_the_run(tmp_path: Path, monkeypatch, c
     monkeypatch.setenv("EGO_RUN_ID", "r1")
     assert main(["session", "checkpoint", "--root", str(tmp_path), "--task-id", "t1", "--goal", "g"]) == 0
     assert read_json(tmp_path / ".ego/memory/handoffs/t1.json")["run"] == "r1"
+
+
+def test_clear_resume_ignores_non_clear_sources(tmp_path: Path):
+    for source in ("startup", "resume", "compact", None):
+        assert clear_resume(tmp_path, {"source": source} if source else {}) == {}

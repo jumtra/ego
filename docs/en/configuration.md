@@ -12,7 +12,7 @@ profile = "balanced"
 policy_mode = "relaxed"
 hosts = ["claude", "codex", "opencode", "agy"]
 code_intelligence = "none"
-memory = "file"
+memory = "alter"
 runtime_mode = "native"
 max_parallel = 2
 max_attempts = 3
@@ -53,7 +53,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `hosts` | all four | `claude`, `codex`, `opencode`, `agy` | CLIs to generate files for. This is not a routing choice: the host that runs a task is chosen per task |
 | `policy_mode` | `"relaxed"` | `strict`, `relaxed` | See [Policy mode](#policy-mode) |
 | `code_intelligence` | `"none"` | `none`, `codegraph`, `graphify` | Provider behind `ego code ...`. External tools are never installed by ego; without one, a built-in text search is used |
-| `memory` | `"file"` | `file`, `engram`, `alter` | Provider behind `ego memory ...`. See [Memory](#memory) |
+| `memory` | `"alter"` | `file`, `engram`, `alter` | Provider behind `ego memory ...`. See [Memory](#memory) |
 | `runtime_mode` | `"native"` | `native`, `managed` | Recorded default working style. It does not change command behavior: `/work` in the CLI is native, `ego work run` is always managed |
 | `tests` | `[]` | list of argv arrays | Test commands recorded by `--detect-tests`, e.g. `[["pytest", "-q"]]` |
 

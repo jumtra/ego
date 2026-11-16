@@ -18,8 +18,8 @@ uv tool install git+https://github.com/jumtra/ego
 pipx install git+https://github.com/jumtra/ego
 
 # 公開済みリリース wheel から（バージョンは最新リリースに置き換えてください）
-pipx install https://github.com/jumtra/ego/releases/download/v0.0.24/ego-0.0.24-py3-none-any.whl
-pip install https://github.com/jumtra/ego/releases/download/v0.0.24/ego-0.0.24-py3-none-any.whl   # 仮想環境内で
+pipx install https://github.com/jumtra/ego/releases/download/v0.0.25/ego-0.0.25-py3-none-any.whl
+pip install https://github.com/jumtra/ego/releases/download/v0.0.25/ego-0.0.25-py3-none-any.whl   # 仮想環境内で
 
 ego --version
 ```
@@ -64,10 +64,12 @@ ego apply
 | Profile | `minimal` / `balanced` / `full` | `balanced` |
 | Hosts（複数選択） | `claude` / `codex` / `opencode` / `agy` | 4 つすべて |
 | コード解析 | `codegraph` / `graphify` / `none` | `none` |
-| メモリ | `file` / `engram` / `alter` | `file` |
+| メモリ | `file` / `engram` / `alter` | `alter` |
 | 既定の実行方式 | `native` / `managed` | `native` |
 | テストコマンドを検出 | はい / いいえ（テストが未設定のときのみ） | いいえ |
 | この変更を適用しますか？ | はい / いいえ（変更ファイル一覧の後に表示） | **いいえ** |
+
+メモリに `alter` を選ぶと、全ホスト共通の CLAUDE.md / AGENTS.md 管理ブロックに「計画や編集の前に `alter_bootstrap`（cwd = リポジトリ直下）を呼ぶ」という必須ルールが入ります。SessionStart フックも同じ要求を注入します（`ego run` 内でも注入し、checkpoint の再開だけを止めます）。各ホストの alter MCP は同じ vault を向くように登録してください。
 
 番号か名前で答えます。Hosts は `1,2` や `all` と入力できます。Enter で現在の値を維持、`q` でキャンセルです。再適用時は既存の `.ego/config.toml` が既定値になります。プロンプトは現在日本語で表示されます。
 
