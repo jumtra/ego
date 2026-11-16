@@ -361,6 +361,8 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             extra_allow:list[str]|None=None,budget_usd:float|None=None,planner_usage:dict|None=None,
             task_file:str|None=None)->dict:
     root=root.resolve();cfg=load_config(root)
+    from .retention import prune_state
+    prune_state(root)  # bounded state: fail-open, before this run adds to it
     if cfg.memory == "alter":
         from .memory import ensure_alter_project_quietly
         ensure_alter_project_quietly(root)
