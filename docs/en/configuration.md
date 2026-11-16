@@ -21,7 +21,7 @@ max_turns = 30
 worker_context = "lean"
 worker_segment_turns = 10
 clear_suggest_tokens = 200000
-usage_switch_percent = 85
+usage_switch_percent = 99
 run_yolo = true
 models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}
 isolation = "copy"
@@ -77,7 +77,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | Key | Default | Range | Effect |
 |---|---|---|---|
 | `clear_suggest_tokens` | `200000` | `0` or 20000–2000000 | Context size at which a session is checkpointed and cleared. Used by the generated hooks of every CLI (see [Sessions](sessions.md)) and by `ego run` |
-| `usage_switch_percent` | `85` | `0` or 50–99 | Claude Code and Codex (the CLIs that report their usage limit): at this percentage of the 5-hour or 7-day usage limit, save a checkpoint and propose continuing in another CLI (`0` disables) |
+| `usage_switch_percent` | `99` | `0` or 50–99 | Claude Code and Codex (the CLIs that report their usage limit): at this percentage of the 5-hour or 7-day usage limit, save a checkpoint and propose continuing in another CLI (`0` disables) |
 | `run_yolo` | `true` | bool | `ego run` starts the CLI with its skip-permissions switch. `--yolo` / `--no-yolo` override per run |
 
 Details of all three: [Sessions](sessions.md).

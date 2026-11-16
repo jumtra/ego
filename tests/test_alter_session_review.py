@@ -339,3 +339,134 @@ def test_session_checkpoint_succeeds_when_alter_mcp_fails(
     checkpoints = list_checkpoints(proj)
     assert len(checkpoints) == 1
     assert checkpoints[0]["task_id"] == "feat-y"
+
+
+def test_select_mcp_servers_prefers_agy_config_for_agy_host(tmp_path: Path, monkeypatch):
+    from ego.hosts import select_mcp_servers
+
+    home = tmp_path / "home"
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (home / ".gemini" / "config").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    (home / ".claude.json").write_text(
+        json.dumps({"mcpServers": {"alter": {"command": "node", "args": ["claude-mcp.mjs"], "env": {"TOKEN": "c"}}}}),
+        encoding="utf-8",
+    )
+    (home / ".gemini" / "config" / "mcp_config.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "alter": {
+                        "command": "node",
+                        "args": ["agy-mcp.mjs", "--profile", "p1"],
+                        "env": {"TOKEN": "a"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert select_mcp_servers(proj, ["alter"], host="claude")["alter"]["args"] == ["claude-mcp.mjs"]
+    assert select_mcp_servers(proj, ["alter"], host="agy")["alter"]["args"] == ["agy-mcp.mjs", "--profile", "p1"]
+
+    (proj / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"alter": {"command": "node", "args": ["project-mcp.mjs"]}}}),
+        encoding="utf-8",
+    )
+    assert select_mcp_servers(proj, ["alter"], host="agy")["alter"]["args"] == ["project-mcp.mjs"]
+
+
+def test_select_mcp_servers_supports_codex_and_opencode(tmp_path: Path, monkeypatch):
+    from ego.hosts import select_mcp_servers
+
+    home = tmp_path / "home"
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (home / ".codex").mkdir(parents=True)
+    (home / ".config" / "opencode").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    (home / ".codex" / "config.toml").write_text(
+        '[mcp_servers.alter]\ncommand = "node"\nargs = ["codex-mcp.mjs"]\n[mcp_servers.alter.env]\nTOKEN = "cx"\n',
+        encoding="utf-8",
+    )
+    (home / ".config" / "opencode" / "opencode.json").write_text(
+        json.dumps(
+            {
+                "mcp": {
+                    "alter": {
+                        "type": "local",
+                        "command": ["node", "opencode-mcp.mjs"],
+                        "environment": {"TOKEN": "oc"},
+                        "enabled": True,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cx = select_mcp_servers(proj, ["alter"], host="codex")["alter"]
+    assert cx["command"] == "node" and cx["args"] == ["codex-mcp.mjs"] and cx["env"] == {"TOKEN": "cx"}
+
+    oc = select_mcp_servers(proj, ["alter"], host="opencode")["alter"]
+    assert oc["command"] == "node" and oc["args"] == ["opencode-mcp.mjs"] and oc["env"] == {"TOKEN": "oc"}
+
+
+def test_alter_mcp_spec_uses_active_host_and_env_detection(tmp_path: Path, monkeypatch):
+    from ego import memory
+
+    home = tmp_path / "home"
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (home / ".gemini" / "config").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("EGO_ALTER_MCP_COMMAND", raising=False)
+    for var in ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_CI", "OPENCODE", "ANTIGRAVITY_AGENT", "ANTIGRAVITY_CONVERSATION_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+    (home / ".claude.json").write_text(
+        json.dumps({"mcpServers": {"alter": {"command": "node", "args": ["claude-mcp.mjs"]}}}),
+        encoding="utf-8",
+    )
+    (home / ".gemini" / "config" / "mcp_config.json").write_text(
+        json.dumps({"mcpServers": {"alter": {"command": "node", "args": ["agy-mcp.mjs", "--profile", "p1"], "env": {"ALTER_DATA_DIR": "/tmp/d"}}}}),
+        encoding="utf-8",
+    )
+
+    assert memory._alter_mcp_spec(proj) == (["node", "claude-mcp.mjs"], None)
+    with memory.use_host("agy"):
+        assert memory._alter_mcp_spec(proj) == (["node", "agy-mcp.mjs", "--profile", "p1"], {"ALTER_DATA_DIR": "/tmp/d"})
+
+    monkeypatch.setenv("ANTIGRAVITY_AGENT", "1")
+    assert memory._alter_mcp_spec(proj) == (["node", "agy-mcp.mjs", "--profile", "p1"], {"ALTER_DATA_DIR": "/tmp/d"})
+
+
+def test_hook_session_end_records_conversation_and_skips_auto_clear(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    _, log_path = _setup_fake_alter_mcp(tmp_path, monkeypatch)
+    proj = tmp_path / "proj_end"
+    proj.mkdir()
+    save_config(proj, Config(memory="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    payload = _write_host_payload(tmp_path, "claude", proj)
+
+    # `ego run` rotates sessions itself (automatic clear): nothing is recorded
+    monkeypatch.setenv("EGO_RUN", "claude")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    assert main(["hook", "session-end", "--host", "claude", "--root", str(proj)]) == 0
+    capsys.readouterr()
+    assert _read_calls(log_path) == []
+
+    monkeypatch.delenv("EGO_RUN")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    assert main(["hook", "session-end", "--host", "claude", "--root", str(proj)]) == 0
+    capsys.readouterr()
+    calls = _read_calls(log_path)
+    assert len(calls) == 1 and calls[0]["name"] == "alter_record_conversation"
+    assert calls[0]["arguments"]["session_id"] == "sess-claude"

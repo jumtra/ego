@@ -164,7 +164,7 @@ ego apply --clear-suggest-tokens 120000     # または clear_suggest_tokens を
 ## 使用上限での切り替え（Claude Code と Codex）
 
 ```toml
-usage_switch_percent = 85    # その後: ego sync --apply
+usage_switch_percent = 99    # その後: ego sync --apply
 ```
 
 これにより、`.claude/settings.json` に `Stop` フックとステータスライン（`ego hook statusline`）が追加されます。

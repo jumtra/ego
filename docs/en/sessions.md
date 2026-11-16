@@ -164,7 +164,7 @@ Inside `ego run` these hooks stand down, as the Claude Code ones do. The Codex, 
 ## Usage-limit switch (Claude Code and Codex)
 
 ```toml
-usage_switch_percent = 85    # then: ego sync --apply
+usage_switch_percent = 99    # then: ego sync --apply
 ```
 
 This adds a `Stop` hook and a status line (`ego hook statusline`) to `.claude/settings.json`.

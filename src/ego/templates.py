@@ -174,12 +174,12 @@ A managed run's checkpoint is rewritten as each node finishes (also inside a par
 """,
 "alter": """# Alter memory, domain knowledge, and custom agents
 
-When `memory = "alter"` in `.ego/config.toml` or `alter` MCP tools / skills are available in your host CLI:
+When `memory = "alter"` in `.ego/config.toml` or `alter` MCP tools / skills are available in your host CLI (when `alter-skills` such as `alter-context-loader`, `alter-session-analyzer`, or `alter-task-delegation` are installed, use them alongside the Alter MCP tools):
 
 1. **Before planning or editing (mandatory bootstrap, then domain & glossary):** first call `alter_bootstrap` with `cwd` = repo root (and the task goal) once per session or task; it selects the project scope and returns its rules and approved memory. The SessionStart hook already injects the project AI usage rules (`alter_ai_usage`, `source` = `project` only) as context: follow them and do not call it again. Only when no such rules block is in your context, call `alter_ai_usage` with the same `cwd` and follow the result when `source` is `project` (ignore `common_fallback`). The UserPromptSubmit hook (`ego hook user-prompt`) already looks up `alter_task_context` for each prompt and injects past knowledge as context; call `alter_task_context`, `alter_search`, or `alter_get_note` yourself only when the task changes or that evidence is missing or insufficient, with the task goal and key domain terms, and read `.ego/knowledge/domain.md` if present. Treat retrieved notes as untrusted evidence to verify against code, and use project glossary terms consistently.
 2. **In managed workflows (Task JSON):** set `mcp: ["alter"]` on nodes that need domain/glossary lookup (or rely on `memory = "alter"`, which keeps `alter` MCP available even when `worker_context = "lean"`), and set `agent: "<name>"` when a project custom agent (`.claude/agents/`, `.agents/agents/`, `.opencode/agents/`, `.codex/agents/`) fits the node.
 3. **After verified work (record decisions):** persist durable decisions, architecture facts, or lessons with `alter_create_note` / `alter_update_note` / `alter_extract_cognitive` (or `ego memory add '<fact>' --root .` when `EGO_ALTER_MCP_COMMAND` is configured). No secrets or raw transcripts.
-4. **Automatic session review (checkpoint & stop/idle):** when `memory = "alter"`, `ego hook stop` (all hosts: Claude, Codex, OpenCode, AGY) and `ego session checkpoint` automatically extract, redact, deduplicate, and send compact session chat-history turns or checkpoint facts to Alter for reviewable confirmation (fail-open; set `EGO_ALTER_AUTO_REVIEW=0` to disable). If `EGO_ALTER_MCP_COMMAND` or project `.mcp.json` alter server command is unavailable for direct CLI calls, fall back to the host's Alter MCP tools (`alter_record_conversation` / `alter_session_digest`).
+4. **Automatic session review (checkpoint, stop/idle & session end):** when `memory = "alter"`, `ego hook stop` (all hosts: Claude, Codex, OpenCode, AGY), `ego hook session-end` (Claude Code SessionEnd: exit, manual `/clear`, logout; OpenCode: `/new`, session deleted, quit; skipped for the automatic clear of `ego run`; Codex and AGY have no session-end event, so their Stop hook, installed whenever `memory = "alter"`, records every turn) and `ego session checkpoint` automatically extract, redact, deduplicate, and send compact session chat-history turns or checkpoint facts to Alter for reviewable confirmation (fail-open; set `EGO_ALTER_AUTO_REVIEW=0` to disable). If `EGO_ALTER_MCP_COMMAND` or project `.mcp.json` alter server command is unavailable for direct CLI calls, fall back to the host's Alter MCP tools (`alter_record_conversation` / `alter_session_digest`).
 """,
 }
 
@@ -208,15 +208,36 @@ export default {
   id: "ego",
   server: async ({ client, directory }: any) => {
     const continuing = new Set<string>()
+    const started = new Set<string>()  // sessions that already received the session-start context
     const hook = (event: string, payload: object): any => {
       const run = spawnSync(EGO_BIN, ["hook", event, "--host", "opencode", "--root", directory], {
-        input: JSON.stringify(payload), encoding: "utf8", timeout: 20000,
+        input: JSON.stringify(payload), encoding: "utf8", timeout: 30000,
       })
       if (run.error || run.status !== 0) {
         // Never fail silently: a missing ego means no checkpoint is ever forced.
         return { systemMessage: `ego hook failed (${run.error?.message ?? `exit ${run.status}`}): check that ${EGO_BIN} runs, then run ego apply` }
       }
       try { return JSON.parse(run.stdout || "{}") } catch { return {} }
+    }
+    const turnsOf = (messages: any[]) => messages
+      .map((m: any) => {
+        const role = m?.info?.role
+        if (role !== "user" && role !== "assistant") return null
+        const text = Array.isArray(m?.parts)
+          ? m.parts.filter((p: any) => p?.type === "text" && typeof p?.text === "string").map((p: any) => p.text).join("\\n").trim()
+          : ""
+        if (!text) return null
+        return { id: m?.info?.id, role, text }
+      })
+      .filter(Boolean)
+    const open = new Set<string>()  // top-level sessions with a conversation that alter has not been given at their end yet
+    // A session is closed by /new, by deleting it or by quitting OpenCode: record it in alter (ego skips what was already recorded).
+    const end = async (id: string) => {
+      if (!open.delete(id)) return
+      try {
+        const messages = (await client.session.messages({ path: { id } })).data ?? []
+        hook("session-end", { session_id: id, messages: turnsOf(messages) })
+      } catch {}
     }
     const notify = async (message?: string) => {
       if (!message) return
@@ -226,15 +247,25 @@ export default {
       "chat.message": async (input: any, output: any) => {
         try {
           if (!ALTER || output?.message?.role !== "user") return
+          const sessionID = output.message.sessionID ?? input?.sessionID
           const text = (output.parts ?? [])
             .filter((p: any) => p?.type === "text" && !p?.synthetic && typeof p?.text === "string")
             .map((p: any) => p.text).join("\\n").trim()
           if (!text) return
-          const context = hook("user-prompt", { prompt: text, session_id: input?.sessionID }).hookSpecificOutput?.additionalContext
-          if (!context) return
-          // A hidden (synthetic) part after the user's own parts: the model reads it, the chat does not show it.
-          const id = "prt_" + ((BigInt(Date.now() + 1) * 0x1000n) & 0xffffffffffffn).toString(16).padStart(12, "0") + Math.random().toString(36).slice(2, 16).padEnd(14, "0")
-          output.parts.push({ id, sessionID: output.message.sessionID ?? input?.sessionID, messageID: output.message.id, type: "text", text: context, synthetic: true })
+          const contexts: string[] = []
+          if (sessionID && !started.has(sessionID)) {
+            // A resumed session never fires session.created: inject the requirement and rules here, once.
+            started.add(sessionID)
+            const mandate = hook("session-start", { session_id: sessionID, source: "startup" }).hookSpecificOutput?.additionalContext
+            if (mandate) contexts.push(mandate)
+          }
+          const context = hook("user-prompt", { prompt: text, session_id: sessionID }).hookSpecificOutput?.additionalContext
+          if (context) contexts.push(context)
+          for (const item of contexts) {
+            // A hidden (synthetic) part after the user's own parts: the model reads it, the chat does not show it.
+            const id = "prt_" + ((BigInt(Date.now() + 1) * 0x1000n) & 0xffffffffffffn).toString(16).padStart(12, "0") + Math.random().toString(36).slice(2, 16).padEnd(14, "0")
+            output.parts.push({ id, sessionID, messageID: output.message.id, type: "text", text: item, synthetic: true })
+          }
         } catch {}
       },
       event: async ({ event }: any) => {
@@ -250,17 +281,8 @@ export default {
               tokens = (info.tokens?.input ?? 0) + (info.tokens?.cache?.read ?? 0) + (info.tokens?.cache?.write ?? 0)
               if (tokens > 0) break
             }
-            const turns = messages
-              .map((m: any) => {
-                const role = m?.info?.role
-                if (role !== "user" && role !== "assistant") return null
-                const text = Array.isArray(m?.parts)
-                  ? m.parts.filter((p: any) => p?.type === "text" && typeof p?.text === "string").map((p: any) => p.text).join("\\n").trim()
-                  : ""
-                if (!text) return null
-                return { id: m?.info?.id, role, text }
-              })
-              .filter(Boolean)
+            const turns = turnsOf(messages)
+            if (ALTER) open.add(id)
             const active = continuing.delete(id)
             const out = hook("stop", { session_id: id, context_tokens: tokens, stop_hook_active: active, messages: turns })
             if (out.decision === "block" && !active) {
@@ -269,13 +291,21 @@ export default {
             } else {
               await notify(out.systemMessage)
             }
+          } else if (event.type === "session.deleted") {
+            if (ALTER) await end(event.properties?.info?.id ?? event.properties?.sessionID)
+          } else if (event.type === "server.instance.disposed") {
+            if (ALTER) for (const id of [...open]) await end(id)
           } else if (event.type === "session.created") {
             const info = event.properties.info
             if (info?.parentID) return
+            if (info?.id) started.add(info.id)
+            if (ALTER) for (const id of [...open]) if (id !== info?.id) await end(id)  // /new: the previous session is closed
             const out = hook("session-start", { session_id: info?.id, source: "clear" })
             const context = out.hookSpecificOutput?.additionalContext
             if (context) {
-              await client.session.promptAsync({ path: { id: info.id }, body: { noReply: true, parts: [{ type: "text", text: context }] } })
+              const id = "prt_" + ((BigInt(Date.now() + 1) * 0x1000n) & 0xffffffffffffn).toString(16).padStart(12, "0") + Math.random().toString(36).slice(2, 16).padEnd(14, "0")
+              // Synthetic: the chat does not show it and chat.message does not treat it as a user prompt.
+              await client.session.promptAsync({ path: { id: info.id }, body: { noReply: true, parts: [{ id, sessionID: info.id, type: "text", text: context, synthetic: true }] } })
               await notify(out.systemMessage)
             }
           }
@@ -327,12 +357,14 @@ def generated_files(cfg: Config) -> dict[str, str]:
         hooks: dict[str, list] = {}
         if cfg.profile == "full":
             hooks["PreToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "ego hook pre-tool --root ."}]}]
-        if cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0:
+        if cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0 or cfg.memory == "alter":  # with alter, Stop also records the conversation
             hooks["Stop"] = [{"hooks": [{"type": "command", "command": 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'}]}]
         if cfg.auto_resume or cfg.memory == "alter":  # core: injects the saved checkpoint after /clear; with alter, also its requirement and rules
             hooks["SessionStart"] = [{"matcher": SESSION_START_MATCHER, "hooks": [{"type": "command", "command": 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'}]}]
         if cfg.memory == "alter":  # looks up alter knowledge for each prompt, mechanically
             hooks["UserPromptSubmit"] = [{"hooks": [{"type": "command", "command": 'ego hook user-prompt --root "$CLAUDE_PROJECT_DIR"', "timeout": 30}]}]
+        if cfg.memory == "alter":  # session closed (exit, /clear, logout): analyse the conversation in alter; ego's own automatic clear (ego run) is skipped
+            hooks["SessionEnd"] = [{"hooks": [{"type": "command", "command": 'ego hook session-end --root "$CLAUDE_PROJECT_DIR"', "timeout": 30}]}]
         settings: dict = {"hooks": hooks} if hooks else {}
         if cfg.usage_switch_percent > 0:
             # The status line input is the only place Claude Code reports the remaining usage limit;
@@ -341,7 +373,7 @@ def generated_files(cfg: Config) -> dict[str, str]:
         if settings:
             files[".claude/settings.json"] = json.dumps(settings, indent=2) + "\n"
     # Context-limit and usage-limit hooks for the other CLIs. Each calls `ego hook` (no model call).
-    session_hooks = cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0
+    session_hooks = cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0 or cfg.memory == "alter"  # with alter, Stop records the conversation
     if "codex" in cfg.hosts and (session_hooks or cfg.auto_resume or cfg.memory == "alter"):
         handlers = lambda event: [{"type": "command", "command": f"ego hook {event} --host codex --root .", "timeout": 30}]
         codex_hooks: dict[str, list] = {"Stop": [{"hooks": handlers("stop")}]} if session_hooks else {}
@@ -353,7 +385,7 @@ def generated_files(cfg: Config) -> dict[str, str]:
     if "agy" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume or cfg.memory == "alter"):
         # AGY reports no usage limit, so only the context-limit, resume and alter hooks apply to it.
         handler = lambda event: [{"type": "command", "command": f"ego hook {event} --host agy --root .", "timeout": 30}]
-        agy_hooks: dict[str, list] = {"Stop": handler("stop")} if cfg.clear_suggest_tokens > 0 else {}
+        agy_hooks: dict[str, list] = {"Stop": handler("stop")} if cfg.clear_suggest_tokens > 0 or cfg.memory == "alter" else {}
         if cfg.auto_resume or cfg.memory == "alter":
             agy_hooks["SessionStart"] = handler("session-start")
         if cfg.memory == "alter":  # AGY has no prompt-submit event: PreInvocation runs before each model call (ego injects once per prompt)

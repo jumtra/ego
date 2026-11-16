@@ -1,5 +1,7 @@
 """File memory and optional MCP stdio adapter for Engram-like servers."""
 from __future__ import annotations
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import os
 from pathlib import Path
@@ -109,15 +111,50 @@ ALTER_SKILLS_SOURCE="github:jumtra/alter-skills"
 ALTER_SKILLS_CLIENTS=("claude","codex","opencode","agy")
 ALTER_SKILLS_MARKER="alter-context-loader"
 
-def alter_skills_installed(root: Path, home: Path | None = None) -> bool:
+def _client_skill_dirs(root: Path, home: Path, client: str) -> tuple[Path, ...]:
+    if client == "claude":
+        return (home / ".claude" / "skills", root / ".claude" / "skills")
+    if client == "codex":
+        return (home / ".codex" / "skills", root / ".agents" / "skills")
+    if client == "agy":
+        return (home / ".gemini" / "config" / "skills", root / ".agents" / "skills")
+    if client == "opencode":
+        return (home / ".config" / "opencode" / "skills", root / ".opencode" / "skills")
+    return ()
+
+
+def alter_skills_installed(
+    root: Path,
+    home: Path | None = None,
+    *,
+    clients: list[str] | tuple[str, ...] | None = None,
+) -> bool:
     """Return True if alter-skills appears installed in global or project skill dirs."""
     home = home or Path.home()
+    if clients is not None:
+        selected = [c.strip().lower() for c in clients if isinstance(c, str) and c.strip() in ALTER_SKILLS_CLIENTS]
+        if selected:
+            return all(
+                any((d / ALTER_SKILLS_MARKER).exists() for d in _client_skill_dirs(root, home, client))
+                for client in selected
+            )
     dirs = (
         home/".claude"/"skills", home/".codex"/"skills",
         home/".gemini"/"config"/"skills", home/".config"/"opencode"/"skills",
         root/".claude"/"skills", root/".agents"/"skills", root/".opencode"/"skills",
     )
     return any((d/ALTER_SKILLS_MARKER).exists() for d in dirs)
+
+def _cached_alter_skills_script() -> Path | None:
+    """Locate alter-skills bin/install.mjs in npm's _npx cache (workaround for symlink entrypoint check)."""
+    npx_cache = Path.home() / ".npm" / "_npx"
+    if not npx_cache.is_dir():
+        return None
+    candidates = [p for p in npx_cache.glob("*/node_modules/alter-skills/bin/install.mjs") if p.is_file()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
 
 def install_alter_skills(root: Path, *, clients: list[str]|tuple[str,...]|None=None, scope: str="global",
                          agents: bool=True, dry_run: bool=False) -> dict[str, Any]:
@@ -141,6 +178,11 @@ def install_alter_skills(root: Path, *, clients: list[str]|tuple[str,...]|None=N
         return {"status": "DRY_RUN", "source": ALTER_SKILLS_SOURCE, "scope": scope,
                 "clients": selected, "agents": agents, "command": argv, "output": ""}
     proc = subprocess.run(argv, cwd=str(root), capture_output=True, text=True, timeout=120)
+    if proc.returncode == 0 and not dry_run and not (proc.stdout or "").strip():
+        node = shutil.which("node")
+        script = _cached_alter_skills_script()
+        if node and script is not None:
+            proc = subprocess.run([node, str(script), *argv[3:]], cwd=str(root), capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
         raise EgoError("ALTER_SKILLS_INSTALL_FAILED", detail[:500], 5)
@@ -148,8 +190,42 @@ def install_alter_skills(root: Path, *, clients: list[str]|tuple[str,...]|None=N
             "scope": scope, "clients": selected, "agents": agents, "command": argv,
             "output": (proc.stdout or "").strip()}
 
+
+def ensure_alter_skills_quietly(root: Path, *, clients: list[str]|tuple[str,...]|None=None) -> dict[str, Any]:
+    """Install alter-skills globally when memory='alter' and skills are not yet installed (fail-open)."""
+    if os.environ.get("EGO_ALTER_AUTO_INSTALL_SKILLS", "1").strip().lower() in ("0", "false", "off", "no"):
+        return {"status": "skipped", "reason": "disabled"}
+    if alter_skills_installed(root, clients=clients):
+        return {"status": "already_installed"}
+    try:
+        return install_alter_skills(root, clients=clients, scope="global")
+    except (EgoError, OSError, subprocess.SubprocessError) as exc:
+        return {"status": "skipped" if getattr(exc, "code", "") == "NPX_MISSING" else "error", "reason": str(exc)}
+
 def _alter_registry_path() -> Path:
     return Path(os.environ.get("EGO_HOME") or Path.home() / ".config" / "ego") / "alter_projects.json"
+
+
+_ACTIVE_HOST: ContextVar[str | None] = ContextVar("ego_active_host", default=None)
+
+
+@contextmanager
+def use_host(host: str | None):
+    """Temporarily bind the active host CLI name for MCP server resolution."""
+    norm = host.strip().lower() if isinstance(host, str) and host.strip() else None
+    token = _ACTIVE_HOST.set(norm)
+    try:
+        yield
+    finally:
+        _ACTIVE_HOST.reset(token)
+
+
+def _resolve_host() -> str | None:
+    active = _ACTIVE_HOST.get()
+    if active:
+        return active
+    from .session import detect_host
+    return detect_host()
 
 
 def _alter_mcp_spec(root: Path) -> tuple[list[str], dict[str, str] | None] | None:
@@ -157,7 +233,7 @@ def _alter_mcp_spec(root: Path) -> tuple[list[str], dict[str, str] | None] | Non
     if raw:
         return shlex.split(raw), None
     from .hosts import select_mcp_servers
-    cfg = select_mcp_servers(root, ["alter"]).get("alter")
+    cfg = select_mcp_servers(root, ["alter"], host=_resolve_host()).get("alter")
     if isinstance(cfg, dict) and isinstance(cfg.get("command"), str) and cfg["command"].strip():
         cmd = [cfg["command"], *[str(a) for a in (cfg.get("args") or [])]]
         env = cfg.get("env") if isinstance(cfg.get("env"), dict) else None
@@ -431,7 +507,8 @@ def submit_alter_session_review(
         if isinstance(prev, dict) and prev.get("sha256") == digest and prev.get("count") == len(extracted):
             return {"status": "skipped", "reason": "unchanged", "session_id": sid, "count": len(extracted)}
 
-        spec = _alter_mcp_spec(root)
+        with use_host(host):
+            spec = _alter_mcp_spec(root)
         if spec is None:
             return {"status": "skipped", "reason": "alter MCP not configured", "session_id": sid}
         cmd, env = spec
@@ -507,7 +584,9 @@ def submit_alter_checkpoint_review(
         if not add:
             return {"status": "skipped", "reason": "empty", "session_id": sid}
 
-        spec = _alter_mcp_spec(root)
+        cp_host = checkpoint.get("host") if isinstance(checkpoint.get("host"), str) else None
+        with use_host(cp_host or _ACTIVE_HOST.get()):
+            spec = _alter_mcp_spec(root)
         if spec is None:
             return {"status": "skipped", "reason": "alter MCP not configured", "session_id": sid}
         cmd, env = spec

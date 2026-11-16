@@ -137,8 +137,9 @@ def apply_install(root: Path, cfg: Config) -> dict:
     register_quietly(root)
     out = {"status": "APPLIED", "snapshot_id": snapshot_id, "changes": [x for x in plan["changes"] if x["action"] != "unchanged"]}
     if cfg.memory == "alter":
-        from .memory import ensure_alter_project_quietly
+        from .memory import ensure_alter_project_quietly, ensure_alter_skills_quietly
         out["alter_project"] = ensure_alter_project_quietly(root, force=True)
+        out["alter_skills"] = ensure_alter_skills_quietly(root, clients=cfg.hosts)
     return out
 
 

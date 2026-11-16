@@ -87,7 +87,7 @@ def test_recommended_defaults_and_sync_fallback(tmp_path):
     root.mkdir()
     apply_install(root, Config())
     loaded = load_config(root)
-    assert loaded.usage_switch_percent == 85
+    assert loaded.usage_switch_percent == 99
     assert loaded.run_yolo is True
     assert set(loaded.models) == {"claude", "codex", "opencode", "agy"}
     for role in ("coder", "tester", "judge"):
@@ -100,7 +100,7 @@ def test_recommended_defaults_and_sync_fallback(tmp_path):
     (partial / ".ego" / "config.toml").write_text('schema_version = 1\nprofile = "balanced"\n', encoding="utf-8")
     assert main(["sync", "--root", str(partial), "--apply"]) == 0
     synced = load_config(partial)
-    assert synced.usage_switch_percent == 85
+    assert synced.usage_switch_percent == 99
     assert synced.run_yolo is True
     assert "agy" in synced.models
     assert "agy" in synced.roles["coder"]
