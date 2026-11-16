@@ -120,8 +120,6 @@ The summary adds `nodes` (status, attempts and check results per node) and, for 
 
 ### Task JSON
 
-Complete example: [`examples/multihost/task.json`](../../examples/multihost/task.json).
-
 ```json
 {
   "schema_version": 1,
@@ -246,8 +244,3 @@ For a small goal that fits in one interactive Claude Code session, the CLI's own
 |---|---|
 | `ego memory add '<fact>' --evidence <ref>` / `ego memory search '<words>'` | Store and recall verified project facts |
 | `ego code search <query>` / `symbol` / `impact` / `affected` | Code lookup through the configured provider, with a text-search fallback |
-| `ego context audit` | Measure always-loaded and on-demand context against budgets (exit 5 when exceeded; token counts are estimates) |
-| `ego events tail -n 20` | Recent harness events |
-| `ego pr create --title ... --body ... --approve` / `ego pr reviews <n>` | Pull requests through `gh` |
-
-Improving the skills and prompts themselves (`ego eval`, `ego author`, `ego evolve`, `ego optimize`) is covered in the [Command reference](commands.md#skill-and-prompt-improvement).

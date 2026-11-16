@@ -8,7 +8,7 @@
 
 - **Project root:** every command acts on the current directory unless `--root <path>` is given. `--root` may appear after the command or after a nested action (`ego work run --root /tmp/app ...`).
 - **Output:** JSON on stdout. Errors are JSON on stderr: `{"status": "ERROR", "reason_code": "...", "message": "..."}`.
-- **Dry run by default:** commands that write project files (`init`, `sync`, `modules scaffold`, `optimize configure`) only preview unless `--apply` is given. `ego apply` asks for confirmation instead.
+- **Dry run by default:** commands that write project files (`init`, `sync`) only preview unless `--apply` is given. `ego apply` asks for confirmation instead.
 - **Hosts:** `claude`, `codex`, `opencode`, `agy`, plus the offline `mock` host for runs and evaluations.
 
 | Exit code | Meaning |
@@ -33,10 +33,9 @@ Details: [Setup](setup.md).
 | `ego init [--apply]` | Non-interactive preview/creation with project detection. Flags: `--profile`, `--hosts`, `--graph`, `--memory`, `--detect-tests`. Used by the `/harness-init` skill |
 | `ego projects list` / `scan <dir> [--depth N]` / `add <path>...` / `remove <path>...` | The registry of applied projects |
 | `ego update [--check] [--yes] [--sync] [--sync-all]` | Update ego itself; in a terminal, asks whether to apply pending project configs (this project's diff / all projects / none). Offline: `--wheel <file> --sha256 <digest>` |
-| `ego doctor` | Host CLIs, code intelligence, memory, sandbox, skill lint, modules |
+| `ego doctor` | Host CLIs, code intelligence, memory, sandbox, skill lint |
 | `ego hosts inspect` / `refresh [--host <cli>]` | Installed CLI versions and detected flags (cached) |
 | `ego models list [--host <cli>] [--no-refresh]` / `refresh [--host <cli>]` | Model catalogs per host |
-| `ego migrate plan` / `remove-legacy --hashes <file> --approve` / `restore-legacy <snapshot> --approve` / `rollback <snapshot>` | Find and remove files of older harness versions |
 
 ## Work
 
@@ -69,7 +68,7 @@ Details: [Sessions](sessions.md).
 | `ego session resume [task_id] [--host <cli>] [--from <cli>]` | Clear instructions and resume prompt; `--from` continues another CLI's checkpoint without clearing |
 | `ego session handoff [task_id] --to <cli> [--from <cli>] [--launch]` | Start command for continuing in another CLI |
 
-## Memory, code and context
+## Memory and code
 
 | Command | Purpose |
 |---|---|
@@ -80,40 +79,10 @@ Details: [Sessions](sessions.md).
 | `ego code search <query>` / `symbol <name>` | Search; falls back to built-in text search |
 | `ego code impact <name>` / `affected <files>...` | Impact and affected tests (needs a provider) |
 | `ego code index [--execute]` | Show, or with `--execute` run, the provider's indexing command |
-| `ego context audit` | Estimated always-on and on-demand context against budgets; exit 5 when exceeded |
-| `ego events tail [-n N]` | Recent events (default 20) |
-
-## Skill and prompt improvement
-
-These change the generated skills and prompts, always behind evaluation and explicit approval. Normal development never starts them.
-
-| Command | Purpose |
-|---|---|
-| `ego eval run --suite <file> [--host <h>] [--trials N] [--model <id>] [--split <name>] [--timeout S]` | Run an evaluation suite; exit 5 unless all cases pass |
-| `ego eval compare <baseline> <candidate>` | Compare two results; exit 5 unless promotable |
-| `ego author lint` | Validate skill files |
-| `ego author plan --goal <text> [--skill work] [--field skill.description]` | Plan a skill edit |
-| `ego author candidate --replacement-file <file> --goal <text>` | Record a candidate change |
-| `ego author gate --candidate <file> --suite <file> [--host <h>] [--model <id>] [--out <file>]` | Evaluate a candidate against a suite |
-| `ego author promote --candidate <file> --gate <file> --approval-ref <ref> --approve` | Adopt a gated candidate |
-| `ego author rollback <promotion_id>` | Undo a promotion |
-| `ego evolve observe <message> [--outcome FAIL] [--task-class <c>] [--evidence <ref>]...` | Record an observation |
-| `ego evolve propose <observation_id> [--replacement-file <file>]` | Turn an observation into a candidate |
-| `ego evolve lesson <summary> --evidence <ref>...` | Record a lesson with evidence |
-| `ego optimize status` / `doctor` | State of the opt-in optimizer |
-| `ego optimize configure [--mode ...] [--profile ...] [--cost-policy ...] [limits] [--apply]` / `disable [--apply]` | Change `.ego/optimization.toml` ([settings](configuration.md#optimization-settings)) |
-| `ego optimize plan --fixture <file>` / `propose <exp>` / `run <exp>` / `report <exp>` / `promote <exp> --approval-ref <ref> --suite <file> --approve` / `full --fixture <file>` | Run an experiment. Model calls need `--execute` and, when unmetered, `--spend-approval`; without a verified sandbox they also need `--trusted-local` |
-
-`--allow-mock-test` on `author gate` / `promote` permits the offline `mock` host for testing the pipeline; a mock result is not evidence about a real model.
 
 ## Extension and internals
 
 | Command | Purpose |
 |---|---|
-| `ego modules list` / `resolve <a,b,...>` / `scaffold <name> [--apply]` | Built-in and project modules (`.ego/modules/<name>/module.toml`), dependency resolution |
-| `ego tool list` / `call <name> '<json args>' [--approve-external]` | Deterministic tools, and tools declared by modules |
-| `ego prompt register <name> <file> [--role worker]` / `show <name> [--version V]` / `extract <file> [--contract json\|reply]` | Versioned prompts and output-contract parsing |
-| `ego pr create --title <t> --body <b> [--base main] --approve` / `reviews <number>` | Pull requests through the `gh` CLI |
 | `ego hook <pre-tool\|stop\|session-start\|statusline\|context-probe>` | Entry points for generated host hooks; they read the hook payload on stdin. `--host claude|codex|opencode|agy` (default `claude`) selects the payload and output format. Not meant to be run by hand |
-| `ego bench [--trials N]` | Measures ego's own CLI dispatch time |
 | `ego --version` | Version |

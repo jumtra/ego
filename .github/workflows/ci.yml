@@ -20,5 +20,4 @@ jobs:
       - name: CLI smoke
         run: |
           ego --version
-          ego modules list
-          ego optimize status --root examples/demo_project
+          ego status --root .

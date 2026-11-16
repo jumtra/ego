@@ -133,22 +133,6 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 
 チェックポイントはメモリ項目とは別に、常に `.ego/memory/handoffs/` に保存されます。
 
-## 最適化の設定
-
-`ego optimize`（オプトインの prompt・skill 実験）は、`ego optimize configure ... --apply` が書き出す `.ego/optimization.toml` を読みます。既定ではオフで、通常のコマンドは読み込みません。
-
-| キー | 既定値 | 範囲 |
-|---|---|---|
-| `mode` | `"off"` | `off`、`analyze`、`shadow`、`assisted` |
-| `profile` | `"lite"` | `lite`、`full` |
-| `cost_policy` | `"manual_consent"` | `manual_consent`、`require_metered` |
-| `max_candidates` | `1` | 1〜8 |
-| `max_rounds` | `1` | 1〜5 |
-| `max_probe_runs` | `2` | 0〜40 |
-| `max_wall_seconds` | `900` | 30〜7200 |
-| `max_candidate_bytes` | `8192` | 100〜32768 |
-| `require_human_approval` | `true` | `true` のまま変更不可 |
-
 ## 環境変数
 
 | 変数 | 用途 |

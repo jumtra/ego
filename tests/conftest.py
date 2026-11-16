@@ -1,7 +1,7 @@
 from pathlib import Path
 import pytest
-from ego.config import Config
-from ego.install import apply_install
+from ego.domain.config import Config
+from ego.usecases.install import apply_install
 
 @pytest.fixture(autouse=True)
 def _isolated_ego_home(tmp_path_factory, monkeypatch):
