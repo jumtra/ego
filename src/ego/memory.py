@@ -539,8 +539,15 @@ class AlterMemory:
         return {"provider":"alter","result":self.mcp.call_tool(tool,{"content":text,"tags":kw.get("tags",[])})}
     def search(self,query:str,limit:int=10)->list[dict]:
         if self.mcp is None: return [self._host_guidance()]
-        tool=os.environ.get("EGO_ALTER_SEARCH_TOOL","alter_search")
-        return [{"provider":"alter","result":self.mcp.call_tool(tool,{"query":query,"limit":limit})}]
+        # Default to alter_task_context with cwd: it is project-scoped, while alter_search
+        # ignores scope and can return notes from other projects. EGO_ALTER_SEARCH_TOOL overrides.
+        tool=os.environ.get("EGO_ALTER_SEARCH_TOOL")
+        if tool:
+            args={"query":query,"limit":limit}
+        else:
+            tool="alter_task_context"
+            args={"task":query,"cwd":str(self.root)}
+        return [{"provider":"alter","result":self.mcp.call_tool(tool,args)}]
 
 def memory_provider(root:Path, name:str):
     if name == "file": return FileMemory(root)
