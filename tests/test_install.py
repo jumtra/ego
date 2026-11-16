@@ -39,7 +39,7 @@ from ego.usecases.install import apply_install
 from ego.usecases.install import apply_install, installation_plan, rollback
 from ego.usecases.install import apply_install, uninstall_project, uninstall_cli
 from ego.usecases.planner import plan_work
-from ego.usecases.projects import list_projects, project_info, registry_path, scan, sync_all, unregister
+from ego.usecases.projects import list_projects, project_info, registry_path, scan, sync_all, sync_project, unregister
 from ego.usecases.work import execute, validate_task
 
 
@@ -1025,3 +1025,26 @@ def test_core_command_is_registered_and_shows_help(command, capsys):
 def test_removed_peripheral_command_fails_with_exit_2(command, capsys):
     assert _exit_code([command]) == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_sync_moves_file_memory_to_alter_when_alter_mcp_is_configured(tmp_path: Path, monkeypatch):
+    root = _apply(tmp_path / "a", memory="file", hosts=["claude"])
+    assert "SessionEnd" not in (root / ".claude/settings.json").read_text() if (root / ".claude/settings.json").exists() else True
+    monkeypatch.setenv("EGO_ALTER_MCP_COMMAND", "true")
+    monkeypatch.setenv("EGO_ALTER_AUTO_REGISTER", "0")
+    assert project_info(root.resolve())["status"] == "CHANGES_PENDING"
+    row = sync_project(root.resolve(), apply=True)
+    assert row["status"] == "APPLIED" and row["memory_migrated"] == "file -> alter"
+    assert load_config(root).memory == "alter"
+    assert "SessionEnd" in (root / ".claude/settings.json").read_text()
+    assert project_info(root.resolve())["status"] == "UP_TO_DATE"
+
+
+def test_sync_keeps_file_memory_without_alter_mcp_or_when_opted_out(tmp_path: Path, monkeypatch):
+    root = _apply(tmp_path / "a", memory="file", hosts=["claude"])
+    monkeypatch.delenv("EGO_ALTER_MCP_COMMAND", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
+    assert project_info(root.resolve())["status"] == "UP_TO_DATE"
+    monkeypatch.setenv("EGO_ALTER_MCP_COMMAND", "true")
+    monkeypatch.setenv("EGO_SYNC_KEEP_MEMORY", "1")
+    assert project_info(root.resolve())["status"] == "UP_TO_DATE"

@@ -4,10 +4,11 @@ The registry is one small user-level JSON file (paths only). Each project's own
 `.ego/config.toml` stays the source of its settings, so a re-sync inherits them.
 """
 from __future__ import annotations
+import os
 from pathlib import Path
 from typing import Any
 from .. import __version__
-from ..domain.config import load_config
+from ..domain.config import Config, load_config
 from ..shared.util import EgoError, now, read_json
 # Registry basics live in .install (no cycle); re-exported here for callers.
 from .install import (OWNERSHIP, apply_install, installation_plan, registry_path, register,
@@ -18,6 +19,24 @@ __all__ = ["OWNERSHIP", "apply_install", "installation_plan", "registry_path", "
 
 SCAN_SKIP = {"node_modules", ".git", ".venv", "venv", "__pycache__", "Library", ".cache", ".Trash"}
 MAX_SCAN_DEPTH = 6
+
+
+def synced_config(root: Path) -> tuple[Config, bool]:
+    """The saved config as a sync would apply it: `memory = "file"` moves to "alter" once an alter MCP server
+    is configured, so the session hooks that record conversations come with the update. Opt out with
+    EGO_SYNC_KEEP_MEMORY=1. Returns (config, migrated); nothing is written here."""
+    cfg = load_config(root)
+    if cfg.memory != "file" or os.environ.get("EGO_SYNC_KEEP_MEMORY", "").lower() in ("1", "true", "yes", "on"):
+        return cfg, False
+    from ..adapters.memory import _alter_mcp_spec
+    try:
+        available = _alter_mcp_spec(root) is not None
+    except Exception:
+        available = False
+    if not available:
+        return cfg, False
+    cfg.memory = "alter"
+    return cfg, True
 
 
 def project_info(root: Path) -> dict[str, Any]:
@@ -33,12 +52,12 @@ def project_info(root: Path) -> dict[str, Any]:
     info["installed_version"] = installed
     info["version_differs"] = installed != __version__
     try:
-        cfg = load_config(root)
+        cfg, migrated = synced_config(root)
         plan = installation_plan(root, cfg)
     except (EgoError, OSError, ValueError) as exc:
         return {**info, "status": "ERROR", "message": str(exc)}
     changes = [c for c in plan["changes"] if c["action"] != "unchanged"]
-    info.update(status="BLOCKED" if plan["conflicts"] else "CHANGES_PENDING" if changes else "UP_TO_DATE",
+    info.update(status="BLOCKED" if plan["conflicts"] else "CHANGES_PENDING" if changes or migrated else "UP_TO_DATE",
                 changed_count=len(changes), profile=cfg.profile, hosts=cfg.hosts,
                 clear_suggest_tokens=cfg.clear_suggest_tokens)
     if plan["conflicts"]:
@@ -84,11 +103,13 @@ def sync_project(root: Path, *, apply: bool) -> dict[str, Any]:
     if before["status"] in ("MISSING", "NOT_APPLIED", "ERROR", "BLOCKED") or not apply or before["status"] == "UP_TO_DATE":
         return before
     try:
-        result = apply_install(root, load_config(root))
+        cfg, migrated = synced_config(root)
+        result = apply_install(root, cfg)
     except (EgoError, OSError, ValueError) as exc:
         return {**before, "status": "ERROR", "message": str(exc)}
     return {**project_info(root), "status": "APPLIED", "previous_version": before["installed_version"],
-            "snapshot_id": result["snapshot_id"], "changed": [c["path"] for c in result["changes"]]}
+            "snapshot_id": result["snapshot_id"], "changed": [c["path"] for c in result["changes"]],
+            **({"memory_migrated": "file -> alter"} if migrated else {})}
 
 
 def sync_all(*, apply: bool) -> dict[str, Any]:
