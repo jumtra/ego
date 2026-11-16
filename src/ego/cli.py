@@ -419,16 +419,23 @@ def _cmd_session(args):
                           detect_host, list_checkpoints, resolve_task, handoff, pickup, RUN_ID_ENV)
     root = _root(args)
     if args.action == "checkpoint":
-        result = save_checkpoint(
+        saved_record = save_checkpoint(
             root, args.task_id, goal=args.goal, completed=args.completed,
             next_steps=args.next_steps, decisions=args.decision,
             blockers=args.blocker, evidence=args.evidence,
             status=args.status, source="interactive", host=args.host or detect_host(),
             run=os.environ.get(RUN_ID_ENV),
         )
+        try:
+            from .config import load_config
+            if load_config(root).memory == "alter":
+                from .memory import submit_alter_checkpoint_review
+                submit_alter_checkpoint_review(root, saved_record)
+        except Exception:
+            pass
         # Acknowledge only: the caller just supplied these notes, echoing them back costs context twice.
-        result = {"task_id": result["task_id"], "status": result["status"], "revision": result["revision"],
-                  "path": result["path"], "auto_resume_after_clear": arm_auto_resume(root, args.task_id, args.status)}
+        result = {"task_id": saved_record["task_id"], "status": saved_record["status"], "revision": saved_record["revision"],
+                  "path": saved_record["path"], "auto_resume_after_clear": arm_auto_resume(root, args.task_id, args.status)}
     elif args.action == "list":
         result = list_checkpoints(root, include_completed=args.all)
     elif args.action == "status":
@@ -506,6 +513,18 @@ def _cmd_hook(args):
             info={}
             if args.event=="stop":
                 cfg=load_config(root)
+                if cfg.memory == "alter":
+                    try:
+                        from .memory import submit_alter_session_review
+                        submit_alter_session_review(
+                            root,
+                            session_id=str(obj.get("session_id") or ""),
+                            host=host,
+                            transcript=obj.get("transcript_path") if isinstance(obj.get("transcript_path"), str) else None,
+                            messages=obj.get("messages") if isinstance(obj.get("messages"), list) else None,
+                        )
+                    except Exception:
+                        pass
                 # A nearly spent usage limit outranks a large context: there may be no later turn to save in.
                 # Under `ego run` the wrapper saves, clears and resumes: the hooks must not ask for the same again.
                 wrapped=bool(os.environ.get("EGO_RUN"))
