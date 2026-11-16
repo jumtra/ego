@@ -35,6 +35,8 @@ ego update --yes --sync-all     # update, then re-render every registered projec
 ego update --yes --sync --root /path/to/project   # update, then re-render one project
 ```
 
+In a terminal, `ego update` without `--sync`/`--sync-all` lists the projects whose config is out of date and asks: apply the diff to this project only, apply to all registered projects (projects with a user-edited conflict are skipped), or apply nothing (the default).
+
 `ego update` detects how ego was installed:
 
 | Install type | What `ego update` does |

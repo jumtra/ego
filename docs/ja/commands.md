@@ -32,7 +32,7 @@
 | `ego uninstall [-y] [--cli]` | プロジェクトから ego を削除、または CLI のシンボリックリンクを削除 |
 | `ego init [--apply]` | プロジェクト検出を伴う、非対話のプレビュー / 作成。フラグ: `--profile`、`--hosts`、`--graph`、`--memory`、`--detect-tests`。`/harness-init` skill が使用 |
 | `ego projects list` / `scan <dir> [--depth N]` / `add <path>...` / `remove <path>...` | 適用済みプロジェクトのレジストリ |
-| `ego update [--check] [--yes] [--sync] [--sync-all]` | ego 自体を更新。オフライン: `--wheel <file> --sha256 <digest>` |
+| `ego update [--check] [--yes] [--sync] [--sync-all]` | ego 自体を更新。ターミナルでは適用待ちのプロジェクト設定を適用するか尋ねる（このプロジェクトの差分 / 全プロジェクト / 適用しない）。オフライン: `--wheel <file> --sha256 <digest>` |
 | `ego doctor` | ホスト CLI、コード解析、メモリ、サンドボックス、skill の lint、modules |
 | `ego hosts inspect` / `refresh [--host <cli>]` | インストール済み CLI のバージョンと検出されたフラグ（キャッシュ） |
 | `ego models list [--host <cli>] [--no-refresh]` / `refresh [--host <cli>]` | ホストごとのモデルカタログ |

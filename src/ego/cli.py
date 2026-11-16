@@ -618,23 +618,65 @@ def _cmd_update(args):
         if args.sha256:
             raise EgoError("INVALID_UPDATE","--sha256 requires --wheel",2)
         result=self_update(__version__,apply=not args.check,yes=args.yes)
-    if (args.sync or args.sync_all) and not args.check:
+    mode="all" if args.sync_all else "project" if args.sync else None
+    if mode is None and not args.check and sys.stdin.isatty() and sys.stdout.isatty():
+        # Interactive: ask which pending project configs to re-render. Read by the code now on disk.
+        pending=_pending_projects(self_argv())
+        if pending:
+            mode=_ask_config_sync(project,pending)
+            if mode=="none":mode=None
+    if mode and not args.check:
         import subprocess
         # Projects are synced whether or not a newer version was just installed: they may lag the CLI.
         # A new process runs the code now on disk; no stale templates.
-        target=["--all"] if args.sync_all else ["--root",str(project)]
+        target=["--all"] if mode=="all" else ["--root",str(project)]
         p=subprocess.run([*self_argv(),"sync",*target,"--apply"],capture_output=True,text=True,timeout=300)
         try:synced=json.loads(p.stdout)
         except ValueError:synced=None
-        if synced is None or (p.returncode and not args.sync_all):
+        if synced is None or (p.returncode and mode!="all"):
             raise EgoError("PROJECT_SYNC_FAILED",p.stderr[-1600:] or p.stdout[-1600:],3)
-        if args.sync_all:result["projects_sync"]=synced
+        if mode=="all":result["projects_sync"]=synced
         else:
             synced.pop("wanted",None);result["project_sync"]=synced
         _print(result)
         return 5 if p.returncode else 0
     _print(result)
     return 0
+
+
+def _pending_projects(argv: list[str]) -> list[dict]:
+    """Registered projects whose generated config is out of date (or blocked by a user edit)."""
+    import subprocess
+    p=subprocess.run([*argv,"projects","list"],capture_output=True,text=True,timeout=120)
+    try:rows=json.loads(p.stdout)["projects"]
+    except (ValueError,KeyError,TypeError):return []
+    return [r for r in rows if isinstance(r,dict) and r.get("status") in ("CHANGES_PENDING","BLOCKED")]
+
+
+def _ask_config_sync(root: Path, pending: list[dict], *, read=None) -> str:
+    """Choose the scope of the config re-render after an update: 'project', 'all' or 'none' (default)."""
+    read=read or sys.stdin.readline
+    here=str(root.resolve())
+    options=[]
+    current=[r for r in pending if r.get("root")==here and r.get("status")=="CHANGES_PENDING"]
+    if current:
+        options.append(("project",f"差分だけ適用: このプロジェクトのみ ({here})。変更されたファイルだけ書き換えます"))
+    options.append(("all",f"全て適用: 登録済みの {len(pending)} 件すべて。競合のあるプロジェクトは変更せずスキップします"))
+    options.append(("none","適用しない: 後で `ego sync --all --apply` で適用できます"))
+    sys.stderr.write("\n=== ego 設定の適用 ===\n適用待ちのプロジェクト:\n")
+    for r in pending:
+        conflicts=r.get("conflicts") or []
+        note=f" 競合: {', '.join(conflicts)}" if conflicts else ""
+        sys.stderr.write(f"  - {r.get('root')} [{r.get('status')}] 変更 {r.get('changed_count',0)} 件{note}\n")
+    for index,(_,label) in enumerate(options,1):sys.stderr.write(f"  {index}. {label}\n")
+    default=len(options)
+    while True:
+        sys.stderr.write(f"番号を入力 [Enter: {default} 適用しない]: ");sys.stderr.flush()
+        try:answer=read().strip()
+        except (OSError,ValueError):return "none"
+        if not answer or answer.lower() in ("q","quit"):return "none"
+        if answer.isdecimal() and 1<=int(answer)<=len(options):return options[int(answer)-1][0]
+        sys.stderr.write("無効な選択です。\n")
 
 
 def build_parser()->argparse.ArgumentParser:

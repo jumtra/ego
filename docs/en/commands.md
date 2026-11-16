@@ -32,7 +32,7 @@ Details: [Setup](setup.md).
 | `ego uninstall [-y] [--cli]` | Remove ego from the project, or the CLI symlinks |
 | `ego init [--apply]` | Non-interactive preview/creation with project detection. Flags: `--profile`, `--hosts`, `--graph`, `--memory`, `--detect-tests`. Used by the `/harness-init` skill |
 | `ego projects list` / `scan <dir> [--depth N]` / `add <path>...` / `remove <path>...` | The registry of applied projects |
-| `ego update [--check] [--yes] [--sync] [--sync-all]` | Update ego itself. Offline: `--wheel <file> --sha256 <digest>` |
+| `ego update [--check] [--yes] [--sync] [--sync-all]` | Update ego itself; in a terminal, asks whether to apply pending project configs (this project's diff / all projects / none). Offline: `--wheel <file> --sha256 <digest>` |
 | `ego doctor` | Host CLIs, code intelligence, memory, sandbox, skill lint, modules |
 | `ego hosts inspect` / `refresh [--host <cli>]` | Installed CLI versions and detected flags (cached) |
 | `ego models list [--host <cli>] [--no-refresh]` / `refresh [--host <cli>]` | Model catalogs per host |
