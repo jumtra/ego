@@ -494,7 +494,8 @@ def test_alter_project_rules_are_injected_at_session_start(tmp_path: Path, monke
     _fake_alter_usage(monkeypatch, {"scope": "project/x", "source": "project",
                                     "text": "- 日本語: 日本語で回答する\n- 検証: テストを先に確認する\n-  \nnot a rule"})
     context = session.with_alter_mandate({}, tmp_path)["hookSpecificOutput"]["additionalContext"]
-    assert context.startswith(session.ALTER_SESSION_MANDATE)
+    assert context.startswith(session.ALTER_SESSION_MANDATE_INJECTED)
+    assert "call `alter_ai_usage`" not in context
     assert "- 日本語: 日本語で回答する" in context and "- 検証: テストを先に確認する" in context
     assert "not a rule" not in context
 

@@ -776,6 +776,14 @@ ALTER_SESSION_MANDATE = (
 )
 
 
+# Used when the hook already injected the project rules: the model need not call `alter_ai_usage` again.
+ALTER_SESSION_MANDATE_INJECTED = (
+    "ego: memory = \"alter\" is required on this host. Before planning or editing, call `alter_bootstrap` "
+    "with cwd set to the repo root; use `alter_task_context` / `alter_search` for domain terms. "
+    "The project AI usage rules from `alter_ai_usage` are already injected below; do not call it again."
+)
+
+
 def alter_project_rules(root: Path, timeout: int = 8) -> list[str]:
     """This project's own AI usage rules from alter (`alter_ai_usage`), as plain lines.
 
@@ -815,6 +823,7 @@ def with_alter_mandate(out: dict[str, Any], root: Path | None = None) -> dict[st
     mandate = ALTER_SESSION_MANDATE
     rules = alter_project_rules(root) if root is not None else []
     if rules:
+        mandate = ALTER_SESSION_MANDATE_INJECTED
         mandate += "\nPJ AI利用ルール（alter 管理。必ず適用する）:\n" + "\n".join(f"- {rule}" for rule in rules)
     hook["additionalContext"] = f"{previous}\n{mandate}" if previous else mandate
     merged["hookSpecificOutput"] = hook
@@ -833,6 +842,6 @@ def adapt_output(host: str, event: str, out: dict[str, Any], once: bool = False)
         context = (out.get("hookSpecificOutput") or {}).get("additionalContext")
         # Only a restored checkpoint is worth announcing; the alter requirement alone is silent context.
         # The mandate comes first only when there is no checkpoint advice before it (see with_alter_mandate).
-        note = "" if (context or "").startswith(ALTER_SESSION_MANDATE) else "\nTell the user briefly that this checkpoint was loaded."
+        note = "" if (context or "").startswith((ALTER_SESSION_MANDATE, ALTER_SESSION_MANDATE_INJECTED)) else "\nTell the user briefly that this checkpoint was loaded."
         return {"injectSteps": [{"systemMessage": {"systemMessage": f"{context}{note}"}}]} if context else {}
     return out
