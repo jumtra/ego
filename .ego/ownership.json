@@ -46,10 +46,10 @@
     ".opencode/agents/implementer.md": "59c52f6931e48dc865226690e91b83c6920ebc0a8ce376a1a381eb9390d14c00",
     ".opencode/agents/reviewer.md": "a6bc0b2232980b388d066620a61f5fcea8e3b0311b3d83ea0b5432396a8b6b52",
     ".opencode/plugins/ego.ts": "2b6ef4dbd562df80219c18b17d4debe9b7f641547e9b9476994859d230af0627",
-    "AGENTS.md": "9cfe3a03d3dfb424efd341461670433e5d661597e32260f5211c34f9b5ecffae",
-    "CLAUDE.md": "9cfe3a03d3dfb424efd341461670433e5d661597e32260f5211c34f9b5ecffae"
+    "AGENTS.md": "9bd285e045bc46f666fb90485390f81453608a5dcb0ed42b1796c2d079cdc610",
+    "CLAUDE.md": "9bd285e045bc46f666fb90485390f81453608a5dcb0ed42b1796c2d079cdc610"
   },
-  "installed_version": "0.0.28",
-  "last_snapshot_id": "snapshot-9ec78c33fa57",
+  "installed_version": "0.0.30",
+  "last_snapshot_id": "snapshot-ffb2bfe43370",
   "schema_version": 1
 }
