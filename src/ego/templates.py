@@ -395,15 +395,6 @@ def instruction_block(cfg: Config) -> str:
         else f"Memory: {cfg.memory}."
     )
     return (f"{MARK_BEGIN}\n"
-            "## Self-Evolve Harness (short contract)\n"
-            "Prefer direct changes and focused tests; do NOT create requirements/design/plan docs for every small task. "
-            "Checkpoint compact facts (`ego session checkpoint`) at verified boundaries, then start fresh/resume if needed. "
-            "When asked to continue another CLI's work (\"continue from codex\", 「codexの続きから」), run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt`. "
-            "State completion explicitly, never claim unverified or unapplied work is done. "
-            "Keep edits scoped/approved; use eval/author gates for Skill/prompt changes. "
-            "Plan as ego's node graph (`work-plan`), not with external brainstorming/planning skills such as superpowers:brainstorming; this overrides them. "
-            "Run `ego optimize` only on explicit request. "
-            "Use `ego doctor` for diagnostics; don't assume unsupported tools.\n"
             f"{policy_note}"
             f"Configured code intelligence: {cfg.code_intelligence}. {memory_note}\n"
             f"{MARK_END}\n")

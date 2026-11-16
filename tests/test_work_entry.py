@@ -143,10 +143,9 @@ def test_work_plan_executes_through_managed_with_progress():
     assert 'ego work watch <id>' in WORK_REFERENCES['managed']
 
 
-def test_instruction_block_overrides_external_planning():
-    from ego.templates import instruction_block
-    block = instruction_block(Config())
-    assert 'superpowers:brainstorming' in block and 'overrides them' in block
+def test_work_skills_forbid_external_planning():
+    plan = skill_md('work-plan')
+    assert 'Do not invoke external brainstorming or planning skills' in plan
 
 
 def test_v0012_work_skill_refreshes():

@@ -138,9 +138,9 @@ def test_templates_progressively_load_short_rules_and_skip_docs():
     assert 'ego session checkpoint' in checkpoint and 'ego session resume' in checkpoint
     assert '完了' in work and '未完了' in work
     basic=instruction_block(Config())
-    assert 'do NOT create requirements/design/plan docs' in basic
-    assert len(basic)<1300
-    assert 'ego optimize' in basic
+    assert 'Self-Evolve' not in basic and 'do NOT create requirements' not in basic
+    assert 'Memory: alter' in basic and 'Policy mode' in basic
+    assert len(basic)<600
 
 
 def test_deterministic_managed_checkpoint_ignores_agent_output(tmp_path: Path):
@@ -349,7 +349,7 @@ def test_continue_another_clis_work_inside_the_open_cli(tmp_path: Path, monkeypa
     # Plain resume (clearing this CLI) uses the detected host's own instructions.
     assert main(["session", "resume", "feat-7", "--root", root]) == 0
     assert json.loads(capsys.readouterr().out)["clear_command"] == "/clear"
-    assert "session resume --from" in instruction_block(Config())
+    assert "session resume --from" not in instruction_block(Config())
 
 
 def _managed(root: Path, run_id: str) -> None:
