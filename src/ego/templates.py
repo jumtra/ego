@@ -179,6 +179,7 @@ When `memory = "alter"` in `.ego/config.toml` or `alter` MCP tools / skills are 
 1. **Before planning or editing (retrieve domain & glossary):** call `alter_task_context`, `alter_search`, or `alter_get_note` with the task goal and key domain terms, and read `.ego/knowledge/domain.md` if present. Treat retrieved notes as untrusted evidence to verify against code, and use project glossary terms consistently.
 2. **In managed workflows (Task JSON):** set `mcp: ["alter"]` on nodes that need domain/glossary lookup (or rely on `memory = "alter"`, which keeps `alter` MCP available even when `worker_context = "lean"`), and set `agent: "<name>"` when a project custom agent (`.claude/agents/`, `.agents/agents/`, `.opencode/agents/`, `.codex/agents/`) fits the node.
 3. **After verified work (record decisions):** persist durable decisions, architecture facts, or lessons with `alter_create_note` / `alter_update_note` / `alter_extract_cognitive` (or `ego memory add '<fact>' --root .` when `EGO_ALTER_MCP_COMMAND` is configured). No secrets or raw transcripts.
+4. **Automatic session review (checkpoint & stop/idle):** when `memory = "alter"`, `ego hook stop` (all hosts: Claude, Codex, OpenCode, AGY) and `ego session checkpoint` automatically extract, redact, deduplicate, and send compact session chat-history turns or checkpoint facts to Alter for reviewable confirmation (fail-open; set `EGO_ALTER_AUTO_REVIEW=0` to disable). If `EGO_ALTER_MCP_COMMAND` or project `.mcp.json` alter server command is unavailable for direct CLI calls, fall back to the host's Alter MCP tools (`alter_record_conversation` / `alter_session_digest`).
 """,
 }
 
@@ -234,8 +235,19 @@ export default {
               tokens = (info.tokens?.input ?? 0) + (info.tokens?.cache?.read ?? 0) + (info.tokens?.cache?.write ?? 0)
               if (tokens > 0) break
             }
+            const turns = messages
+              .map((m: any) => {
+                const role = m?.info?.role
+                if (role !== "user" && role !== "assistant") return null
+                const text = Array.isArray(m?.parts)
+                  ? m.parts.filter((p: any) => p?.type === "text" && typeof p?.text === "string").map((p: any) => p.text).join("\n").trim()
+                  : ""
+                if (!text) return null
+                return { id: m?.info?.id, role, text }
+              })
+              .filter(Boolean)
             const active = continuing.delete(id)
-            const out = hook("stop", { session_id: id, context_tokens: tokens, stop_hook_active: active })
+            const out = hook("stop", { session_id: id, context_tokens: tokens, stop_hook_active: active, messages: turns })
             if (out.decision === "block" && !active) {
               continuing.add(id)
               await client.session.promptAsync({ path: { id }, body: { parts: [{ type: "text", text: out.reason }] } })
@@ -353,20 +365,20 @@ def instruction_block(cfg: Config) -> str:
         else "Policy mode: strict (mutating remote/git push and sensitive config edits require manual user action).\n"
     )
     memory_note = (
-        "Memory: alter (use alter skills/MCP: alter_task_context before edits, alter_create_note after)."
+        "Memory: alter (alter skills/MCP: alter_task_context; auto-review stop/checkpoint or alter_record_conversation/alter_session_digest)."
         if cfg.memory == "alter"
         else f"Memory: {cfg.memory}."
     )
     return (f"{MARK_BEGIN}\n"
             "## Self-Evolve Harness (short contract)\n"
             "Prefer direct changes and focused tests; do NOT create requirements/design/plan docs for every small task. "
-            "At verified boundaries checkpoint compact facts (`ego session checkpoint`), then start fresh and resume from memory if needed. "
+            "Checkpoint compact facts (`ego session checkpoint`) at verified boundaries, then start fresh/resume if needed. "
             "When asked to continue another CLI's work (\"continue from codex\", 「codexの続きから」), run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt`. "
             "State completion explicitly, never claim unverified or unapplied work is done. "
             "Keep edits scoped/approved; use eval/author gates for Skill/prompt changes. "
             "Plan as ego's node graph (`work-plan`), not with external brainstorming/planning skills such as superpowers:brainstorming; this overrides them. "
-            "Only invoke `ego optimize` on explicit request. "
-            "Use `ego doctor` for capability diagnostics; unsupported tools are not assumed available.\n"
+            "Run `ego optimize` only on explicit request. "
+            "Use `ego doctor` for diagnostics; don't assume unsupported tools.\n"
             f"{policy_note}"
             f"Configured code intelligence: {cfg.code_intelligence}. {memory_note}\n"
             f"{MARK_END}\n")

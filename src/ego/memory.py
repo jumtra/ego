@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import time
 from typing import Any
-from .util import EgoError, ident, now, read_json, write_json, exclusive_lock
+from .util import EgoError, ident, now, read_json, write_json, exclusive_lock, redact, sha256
 
 class FileMemory:
     def __init__(self, root: Path):
@@ -192,6 +192,335 @@ def ensure_alter_project(root: Path, *, force: bool = False, timeout: int = 10) 
 def ensure_alter_project_quietly(root: Path, *, force: bool = False, timeout: int = 10) -> dict[str, Any]:
     try:
         return ensure_alter_project(root, force=force, timeout=timeout)
+    except Exception as exc:
+        return {"status": "error", "reason": str(exc)}
+
+
+_TEXT_BLOCK_TYPES = frozenset({"text", "input_text", "output_text"})
+
+
+def _extract_text_blocks(content: Any) -> str:
+    """Extract only explicit text blocks, excluding thinking, reasoning, and tool blocks."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            if block.strip():
+                parts.append(block)
+        elif isinstance(block, dict):
+            btype = str(block.get("type") or "").strip().lower()
+            if btype in _TEXT_BLOCK_TYPES or (not btype and isinstance(block.get("text"), str)):
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text)
+    return "\n".join(parts)
+
+
+def _make_turn(
+    role: str,
+    raw_text: str,
+    *,
+    turn_id: Any = None,
+    sequence: Any = None,
+    at: Any = None,
+) -> dict[str, Any] | None:
+    cleaned = redact(raw_text).strip()
+    if not cleaned:
+        return None
+    turn: dict[str, Any] = {"role": role, "text": cleaned}
+    if isinstance(turn_id, str) and turn_id.strip():
+        turn["id"] = turn_id.strip()
+    if isinstance(sequence, int) and not isinstance(sequence, bool):
+        turn["sequence"] = sequence
+    if isinstance(at, str) and at.strip():
+        turn["at"] = at.strip()
+    elif isinstance(at, (int, float)) and not isinstance(at, bool):
+        turn["at"] = str(at)
+    return turn
+
+
+def _extract_turn_from_obj(obj: dict[str, Any], host: str) -> dict[str, Any] | None:
+    """Normalize a single Claude/Codex/AGY/OpenCode record into a user/assistant turn."""
+    # AGY transcript format: USER_INPUT (non-SYSTEM) / PLANNER_RESPONSE (MODEL)
+    otype = obj.get("type")
+    source = obj.get("source")
+    if otype in ("USER_INPUT", "PLANNER_RESPONSE"):
+        if source == "SYSTEM":
+            return None
+        role = "user" if otype == "USER_INPUT" else "assistant"
+        if otype == "PLANNER_RESPONSE" and source not in (None, "MODEL"):
+            return None
+        content = obj.get("content")
+        text = content if isinstance(content, str) else _extract_text_blocks(content)
+        return _make_turn(
+            role,
+            text,
+            turn_id=obj.get("id"),
+            sequence=obj.get("step_index"),
+            at=obj.get("created_at"),
+        )
+
+    # Codex rollout event_msg: user_message / agent_message
+    if otype == "event_msg" and isinstance(obj.get("payload"), dict):
+        payload = obj["payload"]
+        ptype = payload.get("type")
+        if ptype in ("user_message", "agent_message"):
+            role = "user" if ptype == "user_message" else "assistant"
+            raw = payload.get("message") if isinstance(payload.get("message"), str) else payload.get("text", "")
+            return _make_turn(
+                role,
+                raw if isinstance(raw, str) else "",
+                turn_id=payload.get("id") or obj.get("id"),
+                sequence=obj.get("sequence"),
+                at=obj.get("timestamp") or obj.get("at"),
+            )
+        return None
+
+    # Codex rollout response_item: payload.type == "message"
+    if otype == "response_item" and isinstance(obj.get("payload"), dict):
+        payload = obj["payload"]
+        if payload.get("type") != "message":
+            return None
+        role = str(payload.get("role") or "").strip().lower()
+        if role not in ("user", "assistant"):
+            return None
+        text = _extract_text_blocks(payload.get("content"))
+        return _make_turn(
+            role,
+            text,
+            turn_id=payload.get("id") or obj.get("id"),
+            sequence=obj.get("sequence"),
+            at=obj.get("timestamp") or obj.get("at"),
+        )
+
+    # Claude Code JSONL: type in ("user", "assistant"), message: {role, content}
+    if otype in ("user", "assistant") and isinstance(obj.get("message"), dict):
+        if obj.get("isMeta"):
+            return None
+        msg = obj["message"]
+        role = str(msg.get("role") or otype).strip().lower()
+        if role not in ("user", "assistant"):
+            return None
+        text = _extract_text_blocks(msg.get("content"))
+        return _make_turn(
+            role,
+            text,
+            turn_id=msg.get("id") or obj.get("uuid"),
+            sequence=obj.get("sequence"),
+            at=obj.get("timestamp") or obj.get("at"),
+        )
+
+    # OpenCode SDK message shape: {"info": {"id", "role", "time": {"created"}}, "parts": [...]}
+    if isinstance(obj.get("info"), dict) and "parts" in obj:
+        info = obj["info"]
+        role = str(info.get("role") or "").strip().lower()
+        if role not in ("user", "assistant"):
+            return None
+        text = _extract_text_blocks(obj.get("parts"))
+        time_info = info.get("time") if isinstance(info.get("time"), dict) else {}
+        return _make_turn(
+            role,
+            text,
+            turn_id=info.get("id"),
+            sequence=info.get("sequence") or obj.get("sequence"),
+            at=time_info.get("created") or info.get("at"),
+        )
+
+    # Generic / OpenCode flat message: {"role": "user"|"assistant", "text"|"content"|"parts": ...}
+    role = str(obj.get("role") or "").strip().lower()
+    if role in ("user", "assistant") and not obj.get("isMeta"):
+        if "text" in obj and isinstance(obj.get("text"), str):
+            text = obj["text"]
+        elif "parts" in obj:
+            text = _extract_text_blocks(obj.get("parts"))
+        else:
+            text = _extract_text_blocks(obj.get("content"))
+        return _make_turn(
+            role,
+            text,
+            turn_id=obj.get("id"),
+            sequence=obj.get("sequence"),
+            at=obj.get("at") or obj.get("timestamp") or obj.get("created_at"),
+        )
+
+    return None
+
+
+def extract_session_messages(
+    transcript: Path | str | None = None,
+    *,
+    host: str = "claude",
+    messages: list[dict[str, Any]] | None = None,
+    max_turns: int = 80,
+) -> list[dict[str, Any]]:
+    """Extract chronological user/assistant text turns from Claude/Codex/AGY JSONL or OpenCode messages."""
+    if max_turns <= 0:
+        return []
+    norm_host = (host or "claude").strip().lower()
+    turns: list[dict[str, Any]] = []
+
+    if messages is not None:
+        for item in messages:
+            if isinstance(item, dict):
+                turn = _extract_turn_from_obj(item, norm_host)
+                if turn is not None:
+                    turns.append(turn)
+
+    if transcript is not None:
+        path = Path(transcript).expanduser()
+        if path.is_file():
+            try:
+                raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                raw_lines = []
+            for line in raw_lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict):
+                    turn = _extract_turn_from_obj(obj, norm_host)
+                    if turn is not None:
+                        turns.append(turn)
+
+    if len(turns) > max_turns:
+        turns = turns[-max_turns:]
+    return turns
+
+
+def _alter_session_state_path(root: Path) -> Path:
+    return root.resolve() / ".ego" / "state" / "alter_sessions.json"
+
+
+def _alter_auto_review_enabled() -> bool:
+    return os.environ.get("EGO_ALTER_AUTO_REVIEW", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
+def submit_alter_session_review(
+    root: Path,
+    *,
+    session_id: str,
+    host: str,
+    transcript: Path | str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    title: str | None = None,
+    timeout: int = 10,
+) -> dict[str, Any]:
+    """Extract, redact, deduplicate, and submit session turns to Alter fail-open."""
+    if not _alter_auto_review_enabled():
+        return {"status": "skipped", "reason": "disabled"}
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"status": "skipped", "reason": "missing session_id"}
+    try:
+        extracted = extract_session_messages(transcript, host=host, messages=messages)
+        if not extracted:
+            return {"status": "skipped", "reason": "empty", "session_id": sid}
+
+        digest = sha256(json.dumps(extracted, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+        state_path = _alter_session_state_path(root)
+        state = read_json(state_path, {})
+        sessions = state.get("sessions") if isinstance(state, dict) and isinstance(state.get("sessions"), dict) else {}
+        prev = sessions.get(sid)
+        if isinstance(prev, dict) and prev.get("sha256") == digest and prev.get("count") == len(extracted):
+            return {"status": "skipped", "reason": "unchanged", "session_id": sid, "count": len(extracted)}
+
+        spec = _alter_mcp_spec(root)
+        if spec is None:
+            return {"status": "skipped", "reason": "alter MCP not configured", "session_id": sid}
+        cmd, env = spec
+
+        args: dict[str, Any] = {
+            "cwd": str(root.resolve()),
+            "session_id": sid,
+            "messages": extracted,
+            "capture": "important",
+        }
+        if title and str(title).strip():
+            args["title"] = redact(str(title).strip())
+
+        result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_record_conversation", args)
+
+        updated_sessions = dict(sessions)
+        updated_sessions[sid] = {
+            "count": len(extracted),
+            "sha256": digest,
+            "host": host,
+            "updated_at": now(),
+        }
+        write_json(state_path, {"schema_version": 1, "sessions": updated_sessions})
+        return {"status": "submitted", "session_id": sid, "count": len(extracted), "result": result}
+    except Exception as exc:
+        return {"status": "error", "reason": str(exc), "session_id": sid}
+
+
+def submit_alter_checkpoint_review(
+    root: Path,
+    checkpoint: dict[str, Any],
+    *,
+    timeout: int = 10,
+) -> dict[str, Any]:
+    """Submit compact checkpoint facts to Alter via alter_session_digest(action='patch') fail-open."""
+    if not _alter_auto_review_enabled():
+        return {"status": "skipped", "reason": "disabled"}
+    if not isinstance(checkpoint, dict):
+        return {"status": "skipped", "reason": "invalid checkpoint"}
+    try:
+        task_id = str(checkpoint.get("task_id") or "").strip()
+        sid = str(checkpoint.get("session_id") or (f"checkpoint-{task_id}" if task_id else "")).strip()
+        if not sid:
+            return {"status": "skipped", "reason": "missing session_id"}
+
+        goal = str(checkpoint.get("goal") or "").strip()
+        status = str(checkpoint.get("status") or "IN_PROGRESS").strip()
+        title = redact(goal or task_id or sid)[:120]
+
+        add: list[dict[str, str]] = []
+        for item in (checkpoint.get("decisions") or [])[:8]:
+            text = redact(str(item)).strip()
+            if text:
+                add.append({"kind": "decision", "text": text})
+        for item in (checkpoint.get("blockers") or [])[:5]:
+            text = redact(str(item)).strip()
+            if text:
+                add.append({"kind": "blocker", "text": text})
+        for item in (checkpoint.get("completed") or [])[:5]:
+            text = redact(str(item)).strip()
+            if text:
+                add.append({"kind": "fact", "text": f"Completed: {text}"})
+        for item in (checkpoint.get("evidence") or [])[:5]:
+            text = redact(str(item)).strip()
+            if text:
+                add.append({"kind": "evidence", "text": text})
+        for item in (checkpoint.get("next_steps") or [])[:5]:
+            text = redact(str(item)).strip()
+            if text:
+                add.append({"kind": "next", "text": text})
+        if not add and goal:
+            add.append({"kind": "goal", "text": redact(f"[{status}] {goal}")})
+        if not add:
+            return {"status": "skipped", "reason": "empty", "session_id": sid}
+
+        spec = _alter_mcp_spec(root)
+        if spec is None:
+            return {"status": "skipped", "reason": "alter MCP not configured", "session_id": sid}
+        cmd, env = spec
+
+        args = {
+            "action": "patch",
+            "cwd": str(root.resolve()),
+            "session_id": sid,
+            "title": title,
+            "add": add,
+        }
+        result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_session_digest", args)
+        return {"status": "submitted", "session_id": sid, "count": len(add), "result": result}
     except Exception as exc:
         return {"status": "error", "reason": str(exc)}
 
