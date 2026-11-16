@@ -127,8 +127,8 @@ ego apply --interactive --dry-run  # 書き込まずに選択を試す
 | `.claude/skills/`、`.claude/agents/`、`.claude/rules/` | `/work` と `/harness-init` の skill、agent 4 種、rule 2 種 | ホスト `claude` |
 | `.claude/settings.json` | フック / ステータスライン | ホスト `claude` かつ、Profile `full`、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
 | `.codex/hooks.json` | フック | ホスト `codex` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
-| `.agents/hooks.json` | フック | ホスト `agy` かつ、`auto_resume`（既定で有効）または `clear_suggest_tokens > 0` |
-| `.opencode/plugins/ego.ts` | プラグイン（フック） | ホスト `opencode` かつ、`auto_resume`（既定で有効）または `clear_suggest_tokens > 0`。プラグインは `ego apply` 時の `ego` の絶対パスを固定します |
+| `.agents/hooks.json` | フック | ホスト `agy` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0` または `memory = "alter"` |
+| `.opencode/plugins/ego.ts` | プラグイン（フック） | ホスト `opencode` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0` または `memory = "alter"`。プラグインは `ego apply` 時の `ego` の絶対パスを固定します |
 | `AGENTS.md` | 管理対象の指示ブロック | ホスト `codex`、`opencode`、`agy` |
 | `.agents/skills/` | skill | ホスト `codex`、`opencode`、`agy` |
 | `.codex/agents/*.toml` | agent 4 種 | ホスト `codex` |

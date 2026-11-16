@@ -8,6 +8,7 @@ non-interactive CLI.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -851,6 +852,32 @@ def alter_prompt_context(root: Path, prompt: str, timeout: int = 8) -> str:
     return "alter: 過去ナレッジ（このプロンプトに関連。未検証の根拠として扱い、コードで確認する）:\n" + "\n".join(lines)
 
 
+def new_transcript_prompt(root: Path, payload: dict[str, Any], host: str = "agy") -> str:
+    """The latest user prompt in the host transcript, once; "" when it was already handed out or cannot be read.
+
+    AGY has no prompt-submit event and its payload carries no prompt text: the `PreInvocation` hook fires before
+    every model call (also between tool calls), so the prompt is read from the transcript and each one is
+    returned a single time per session."""
+    transcript, sid = payload.get("transcript_path"), str(payload.get("session_id") or "")
+    if not isinstance(transcript, str) or not sid:
+        return ""
+    from .memory import _extract_turn_from_obj
+    turn = next((t for t in (_extract_turn_from_obj(o, host) for o in reversed(_tail_objects(Path(transcript).expanduser(), 256 * 1024)))
+                 if t and t.get("role") == "user"), None)
+    if turn is None:
+        return ""
+    key = str(turn.get("id") or turn.get("sequence") or hashlib.sha1(turn["text"].encode("utf8")).hexdigest())
+    path = root.resolve() / ".ego" / "state" / "alter_prompts.json"
+    seen = read_json(path, {})
+    seen = seen if isinstance(seen, dict) else {}
+    if seen.get(sid) == key:
+        return ""
+    seen.pop(sid, None)
+    seen[sid] = key
+    write_json(path, dict(list(seen.items())[-50:]))  # bounded: the latest sessions only
+    return str(turn["text"])
+
+
 def with_alter_mandate(out: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
     """Add the alter-first requirement (and alter-managed project rules) to a session-start output, keeping any checkpoint advice already there."""
     merged = dict(out or {})
@@ -868,7 +895,10 @@ def with_alter_mandate(out: dict[str, Any], root: Path | None = None) -> dict[st
 
 
 def adapt_output(host: str, event: str, out: dict[str, Any], once: bool = False) -> dict[str, Any]:
-    """The advice in the output format `host` reads for `event` (`stop` or `session-start`)."""
+    """The advice in the output format `host` reads for `event` (`stop`, `session-start` or `user-prompt`)."""
+    if host == "agy" and event == "user-prompt":  # PreInvocation: a persistent system message before the model call
+        context = (out.get("hookSpecificOutput") or {}).get("additionalContext")
+        return {"injectSteps": [{"systemMessage": {"systemMessage": context}}]} if context else {}
     if host == "agy":
         if event == "stop":
             if out.get("decision") == "block":

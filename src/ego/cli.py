@@ -505,12 +505,15 @@ def _cmd_hook(args):
     if args.event=="user-prompt":
         # Looks up alter knowledge for the prompt; any problem means "say nothing".
         try:
-            from .session import alter_prompt_context,normalize_payload,project_root
+            from .session import adapt_output,alter_prompt_context,new_transcript_prompt,normalize_payload,project_root
             obj=normalize_payload(args.host,json.loads(raw))
             root=project_root(root,obj.get("cwd"))
-            text=alter_prompt_context(root,str(obj.get("prompt") or "")) if load_config(root).memory=="alter" else ""
+            prompt=str(obj.get("prompt") or "")
+            if args.host=="agy":prompt=new_transcript_prompt(root,obj)  # AGY sends no prompt: read it from the transcript, once
+            text=alter_prompt_context(root,prompt) if load_config(root).memory=="alter" else ""
         except (ValueError,OSError,EgoError,KeyError,TypeError):text=""
-        print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":text}} if text else {},ensure_ascii=False));return 0
+        out={"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":text}} if text else {}
+        print(json.dumps(adapt_output(args.host,"user-prompt",out),ensure_ascii=False));return 0
     if args.event in ("stop","session-start"):
         # Advisory hooks never fail the host turn: any problem means "say nothing".
         host=args.host
@@ -544,7 +547,7 @@ def _cmd_hook(args):
                 elif host in ("opencode","agy"):limits={}
                 out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts,host=host,limits=limits) or ({} if wrapped else clear_advice(root,obj,cfg.clear_suggest_tokens,host=host,info=info))
             else:
-                out={} if os.environ.get("EGO_RUN") else clear_resume(root,obj)
+                out={} if os.environ.get("EGO_RUN") or not load_config(root).auto_resume else clear_resume(root,obj)  # the hook is also installed for alter alone
                 # Inside `ego run` the checkpoint resume stands down, but the alter requirement is not a resume: keep it.
                 if load_config(root).memory=="alter":
                     from .session import with_alter_mandate

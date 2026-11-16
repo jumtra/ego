@@ -156,8 +156,8 @@ ego apply --clear-suggest-tokens 120000     # または clear_suggest_tokens を
 | CLI | 生成ファイル | コンテキストの計測元 | 補足 |
 |---|---|---|---|
 | Codex | `.codex/hooks.json`（`Stop`、`clear` 時の `SessionStart`） | セッション記録（`transcript_path`）内の `token_count` イベント | プロジェクトのフックは、初回に確認と信頼（`/hooks`）が必要です |
-| AGY | `.agents/hooks.json`（`Stop`、`SessionStart`） | 会話トランスクリプト内の最新のプランナー応答 | AGY にはクリアの目印がないため、保留中のチェックポイントは次のセッション開始時に注入されます |
-| OpenCode | `.opencode/plugins/ego.ts`（プラグイン） | セッションの最新のアシスタントメッセージ（プラグインが読み取り） | 追撃のプロンプトはプラグイン自身が送ります。再開コンテキストは返信なしで追加されます |
+| AGY | `.agents/hooks.json`（`Stop`、`SessionStart`、`memory = "alter"` のとき `PreInvocation`） | 会話トランスクリプト内の最新のプランナー応答 | AGY にはクリアの目印がないため、保留中のチェックポイントは次のセッション開始時に注入されます。AGY にはプロンプト送信イベントがないため、`memory = "alter"` のときは `PreInvocation` フックが最新のユーザー入力をトランスクリプトから読み、プロンプトごとに1回だけ alter を検索します |
+| OpenCode | `.opencode/plugins/ego.ts`（プラグイン） | セッションの最新のアシスタントメッセージ（プラグインが読み取り） | 追撃のプロンプトはプラグイン自身が送ります。再開コンテキストは返信なしで追加されます。`memory = "alter"` のときはユーザーメッセージごとに alter の知識も検索します（`chat.message`） |
 
 `ego run` の中では、Claude Code のフックと同様にこれらのフックも動作を止めます。Codex・AGY・OpenCode のフックは、各 CLI の公開されているフックの仕様に沿って作られています。AGY と OpenCode はインストール済みの CLI で動作を確認しましたが、Codex の Stop のペイロードは端から端までは実行していません。
 

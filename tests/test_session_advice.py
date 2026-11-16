@@ -578,3 +578,78 @@ def test_alter_memory_installs_the_user_prompt_hook(tmp_path: Path):
     assert "ego hook user-prompt" in files[".claude/settings.json"] and "ego hook user-prompt" in files[".codex/hooks.json"]
     plain = render_files(Config(memory="file", hosts=["claude"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
     assert ".claude/settings.json" not in plain
+
+
+def test_alter_memory_installs_the_same_hooks_on_every_host(tmp_path: Path):
+    from ego.config import Config
+    from ego.templates import generated_files as render_files
+
+    files = render_files(Config(memory="alter", hosts=["claude", "codex", "opencode", "agy"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    claude = json.loads(files[".claude/settings.json"])["hooks"]
+    codex = json.loads(files[".codex/hooks.json"])["hooks"]
+    agy = json.loads(files[".agents/hooks.json"])["ego"]
+    assert "SessionStart" in claude and "UserPromptSubmit" in claude  # the requirement and rules, then the per-prompt lookup
+    assert "SessionStart" in codex and "UserPromptSubmit" in codex
+    assert "session-start --host agy" in agy["SessionStart"][0]["command"]
+    assert agy["PreInvocation"][0]["command"] == "ego hook user-prompt --host agy --root ."
+    plugin = files[".opencode/plugins/ego.ts"]
+    assert "const ALTER = true" in plugin and '"chat.message"' in plugin and '"user-prompt"' in plugin
+    off = render_files(Config(memory="file", hosts=["opencode"], auto_resume=True, clear_suggest_tokens=0, usage_switch_percent=0))
+    assert "const ALTER = false" in off[".opencode/plugins/ego.ts"]
+    assert "PreInvocation" not in render_files(Config(memory="file", hosts=["agy"], auto_resume=True))[".agents/hooks.json"]
+
+
+def test_opencode_plugin_is_valid_typescript_text():
+    from ego.config import Config
+    from ego.templates import generated_files as render_files
+
+    plugin = render_files(Config(memory="alter", hosts=["opencode"]))[".opencode/plugins/ego.ts"]
+    for line in plugin.splitlines():  # a string literal must never be split across lines
+        assert line.count('"') % 2 == 0, line
+
+
+def test_session_start_for_alter_alone_does_not_resume_a_checkpoint(tmp_path: Path, monkeypatch, capsys):
+    from ego import session
+
+    apply_install(tmp_path, Config(memory="alter", auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    monkeypatch.setattr(session, "clear_resume", lambda root, obj: (_ for _ in ()).throw(AssertionError("resume must stay off")))
+    out = _hook(monkeypatch, capsys, tmp_path, "session-start", "claude", {"source": "clear", "cwd": str(tmp_path)})
+    assert "alter_bootstrap" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def _agy_prompts(path: Path, *prompts: str) -> None:
+    rows = []
+    for i, text in enumerate(prompts):
+        rows.append({"type": "USER_INPUT", "source": "USER_EXPLICIT", "content": text, "step_index": i * 2})
+        rows.append({"type": "PLANNER_RESPONSE", "source": "MODEL", "content": "ok", "step_index": i * 2 + 1})
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf8")
+
+
+def test_agy_prompt_is_handed_out_once_per_user_message(tmp_path: Path):
+    from ego import session
+
+    (tmp_path / ".ego").mkdir()
+    transcript = tmp_path / "t.jsonl"
+    payload = {"session_id": "c1", "transcript_path": str(transcript)}
+    assert session.new_transcript_prompt(tmp_path, payload) == ""  # nothing written yet
+    _agy_prompts(transcript, "最初の依頼です")
+    assert session.new_transcript_prompt(tmp_path, payload) == "最初の依頼です"
+    assert session.new_transcript_prompt(tmp_path, payload) == ""  # PreInvocation fires again between tool calls
+    _agy_prompts(transcript, "最初の依頼です", "次の依頼です")
+    assert session.new_transcript_prompt(tmp_path, payload) == "次の依頼です"
+    assert session.new_transcript_prompt(tmp_path, {"session_id": "c2", "transcript_path": str(transcript)}) == "次の依頼です"  # per session
+    assert session.new_transcript_prompt(tmp_path, {"transcript_path": str(transcript)}) == ""
+
+
+def test_agy_user_prompt_hook_injects_alter_evidence_as_a_system_message(tmp_path: Path, monkeypatch, capsys):
+    apply_install(tmp_path, Config(memory="alter", clear_suggest_tokens=0, usage_switch_percent=0))
+    transcript = tmp_path / "t.jsonl"
+    _agy_prompts(transcript, "過去の決定を探したい")
+    _fake_alter_context(monkeypatch, {"evidence": [{"title": "決定A", "excerpt": "理由", "source_ref": "note:1@r1"}]})
+    payload = ({"conversationId": "c9", "transcriptPath": str(transcript), "cwd": str(tmp_path)})
+    for expect in (True, False):  # the second model call of the same prompt adds nothing
+        out = _hook(monkeypatch, capsys, tmp_path, "user-prompt", "agy", payload)
+        if expect:
+            assert "決定A" in out["injectSteps"][0]["systemMessage"]["systemMessage"]
+        else:
+            assert out == {}
