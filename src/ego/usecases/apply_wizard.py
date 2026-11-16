@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from ..domain.config import Config, HOSTS, PROVIDERS, MEMORY
+from ..domain.config import Config, HOSTS, PROVIDERS, KNOWLEDGE
 
 
 class WizardCancelled(Exception):
@@ -22,7 +22,7 @@ def should_prompt(args) -> bool:
         return False
     # Explicit selections are a complete non-interactive invocation by default.
     if any(getattr(args, key, None) is not None for key in
-           ("profile", "hosts", "graph", "memory", "runtime")) or args.detect_tests:
+           ("profile", "hosts", "graph", "knowledge", "runtime")) or args.detect_tests:
         return False
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -106,8 +106,8 @@ def select_options(cfg: Config, args, root: Path) -> bool:
         cfg.hosts = _multiple("設定を生成するHost（複数選択可）", HOSTS, cfg.hosts)
     if args.graph is None:
         cfg.code_intelligence = _choose("コード解析Provider（外部Providerは別途セットアップが必要）", PROVIDERS, cfg.code_intelligence)
-    if args.memory is None:
-        cfg.memory = _choose("Memory（alterはHostのalter-mcp/skills、fileはローカルの .ego/memory）", MEMORY, cfg.memory)
+    if args.knowledge is None:
+        cfg.knowledge = _choose("Knowledge（alterはHostのalter-mcp/skills、fileはローカルの .ego/knowledge）", KNOWLEDGE, cfg.knowledge)
     if args.runtime is None:
         cfg.runtime_mode = _choose("既定の実行方式（managedはRunnerと適切な実行環境が必要）", ("native", "managed"), cfg.runtime_mode)
     detect_tests = False
@@ -124,7 +124,7 @@ def confirm_apply(cfg: Config, changes: list[dict], root: Path) -> bool:
         by_action[change["action"]] = by_action.get(change["action"], 0) + 1
     _write("\n=== 変更内容の確認 ===")
     _write(f"対象: {root}")
-    _write(f"設定: profile={cfg.profile}; policy={cfg.policy_mode}; hosts={','.join(cfg.hosts)}; graph={cfg.code_intelligence}; memory={cfg.memory}; runtime={cfg.runtime_mode}")
+    _write(f"設定: profile={cfg.profile}; policy={cfg.policy_mode}; hosts={','.join(cfg.hosts)}; graph={cfg.code_intelligence}; knowledge={cfg.knowledge}; runtime={cfg.runtime_mode}")
     _write("変更件数: " + ", ".join(f"{name}={count}" for name, count in sorted(by_action.items())))
     for change in changes:
         _write(f"  {change['action']}: {change['path']}")

@@ -91,6 +91,8 @@ def installation_plan(root: Path, cfg: Config) -> dict:
             current_hash = filehash(path)
             if current_hash is None:
                 continue
+            if rel == ".ego/knowledge/domain.md" and current_hash != old_digest:
+                continue  # an edited single-file knowledge note of earlier versions is the project's own: keep it, no conflict
             changes.append({"path": rel, "action": "remove_owned" if current_hash == old_digest else "conflict_orphan", "previous_sha256": current_hash, "desired_sha256": None})
     return {"root": str(root), "changes": changes, "conflicts": [x for x in changes if x["action"].startswith("conflict")], "wanted": wanted}
 
@@ -137,7 +139,7 @@ def apply_install(root: Path, cfg: Config) -> dict:
             raise
     register_quietly(root)
     out = {"status": "APPLIED", "snapshot_id": snapshot_id, "changes": [x for x in plan["changes"] if x["action"] != "unchanged"]}
-    if cfg.memory == "alter":
+    if cfg.knowledge == "alter":
         from ..adapters.memory import ensure_alter_project_quietly, ensure_alter_skills_quietly
         out["alter_project"] = ensure_alter_project_quietly(root, force=True)
         out["alter_skills"] = ensure_alter_skills_quietly(root, clients=cfg.hosts)

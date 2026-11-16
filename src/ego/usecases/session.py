@@ -735,61 +735,69 @@ ALTER_SESSION_MANDATE_INJECTED = (
 )
 
 
-def alter_project_rules(root: Path, timeout: int = 8) -> list[str]:
-    """This project's own AI usage rules from alter (`alter_ai_usage`), as plain lines.
+ALTER_UNREACHABLE = ("ego ERROR: alter に接続できません（{reason}）。knowledge = \"alter\" ですが、ナレッジと AI 利用ルールを取得できていません。"
+                     "最初にこのエラーをユーザーへ伝え、alter MCP の設定（ホストの MCP 設定または EGO_ALTER_MCP_COMMAND）を確認してもらってください。")
 
-    Only `source == "project"` counts: alter falls back to the common list when a project has none, and
-    common rules must not be applied here. Fail-open: any missing MCP config, timeout or malformed reply yields []."""
-    if os.environ.get("EGO_ALTER_SESSION_RULES", "1").lower() in ("0", "false", "off", "no"):
-        return []
+
+def _alter_call(root: Path, tool: str, args: dict[str, Any], timeout: int) -> tuple[Any, str]:
+    """(payload, error): error is "" on success; no MCP configured, a timeout or a bad reply is a non-empty reason."""
     try:
         from ..adapters.memory import MCPStdio, _alter_mcp_spec
         spec = _alter_mcp_spec(root)
         if spec is None:
-            return []
+            return None, "alter MCP server is not configured for this host"
         cmd, env = spec
-        result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_ai_usage", {"cwd": str(root)})
+        result = MCPStdio(cmd, timeout=timeout, env=env).call_tool(tool, args)
         payload: Any = result
         if isinstance(result, dict) and isinstance(result.get("content"), list):
             payload = json.loads(result["content"][0]["text"])
-        if not isinstance(payload, dict) or payload.get("source") != "project":
-            return []
-        text = payload.get("text")
-    except Exception:
-        return []
+        return payload, ""
+    except Exception as exc:
+        return None, f"{tool}: {str(exc)[:160] or type(exc).__name__}"
+
+
+def alter_status(root: Path, timeout: int = 8) -> tuple[list[str], str]:
+    """(rules, error) for this project from alter (`alter_ai_usage`).
+
+    Rules are only the project's own (`source == "project"`): alter falls back to the common list when a project has none,
+    and common rules must not be applied here. `error` is non-empty when alter cannot be reached, so a hook can say so."""
+    if os.environ.get("EGO_ALTER_SESSION_RULES", "1").lower() in ("0", "false", "off", "no"):
+        return [], ""
+    payload, error = _alter_call(root, "alter_ai_usage", {"cwd": str(root)}, timeout)
+    if error:
+        return [], error
+    if not isinstance(payload, dict) or payload.get("source") != "project":
+        return [], ""
     rules: list[str] = []
+    text = payload.get("text")
     for line in text.splitlines() if isinstance(text, str) else []:
         line = line.strip()
         if line.startswith("- ") and line[2:].strip():
             rules.append(" ".join(line[2:].split())[:500])
-    return rules[:20]
+    return rules[:20], ""
 
 
-def alter_prompt_context(root: Path, prompt: str, timeout: int = 8) -> str:
-    """Evidence from alter (`alter_task_context`) for the user's prompt, as one context block; "" when none.
+def alter_project_rules(root: Path, timeout: int = 8) -> list[str]:
+    """This project's own AI usage rules from alter, as plain lines ([] when none or alter is unreachable)."""
+    return alter_status(root, timeout)[0]
 
-    Runs mechanically on every prompt so past knowledge is looked up without the model having to ask.
-    Fail-open: no MCP config, a timeout, a short prompt or a malformed reply yield ""."""
+
+def alter_prompt_status(root: Path, prompt: str, timeout: int = 8) -> tuple[str, str]:
+    """(context, error) from alter (`alter_task_context`) for the user's prompt.
+
+    Runs mechanically on every prompt so knowledge is looked up without the model having to ask. `context` is "" when
+    there is nothing to add; `error` is non-empty only when alter could not be reached."""
     if os.environ.get("EGO_ALTER_PROMPT_CONTEXT", "1").lower() in ("0", "false", "off", "no"):
-        return ""
+        return "", ""
     task = " ".join(prompt.split())
     if task.startswith("/"):  # a slash command: search for its arguments, not its name
         task = task.partition(" ")[2].strip()
     if len(task) < 6:
-        return ""
-    try:
-        from ..adapters.memory import MCPStdio, _alter_mcp_spec
-        spec = _alter_mcp_spec(root)
-        if spec is None:
-            return ""
-        cmd, env = spec
-        result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_task_context", {"task": task[:500], "cwd": str(root)})
-        payload: Any = result
-        if isinstance(result, dict) and isinstance(result.get("content"), list):
-            payload = json.loads(result["content"][0]["text"])
-        evidence = payload.get("evidence") if isinstance(payload, dict) else None
-    except Exception:
-        return ""
+        return "", ""
+    payload, error = _alter_call(root, "alter_task_context", {"task": task[:500], "cwd": str(root)}, timeout)
+    if error:
+        return "", error
+    evidence = payload.get("evidence") if isinstance(payload, dict) else None
     lines: list[str] = []
     for item in evidence[:5] if isinstance(evidence, list) else []:
         if not isinstance(item, dict) or not item.get("title"):
@@ -798,8 +806,13 @@ def alter_prompt_context(root: Path, prompt: str, timeout: int = 8) -> str:
         ref = str(item.get("source_ref") or item.get("id") or "")[:80]
         lines.append(f"- {item['title']}: {excerpt} [{ref}]")
     if not lines:
-        return ""
-    return "alter: 過去ナレッジ（このプロンプトに関連。未検証の根拠として扱い、コードで確認する）:\n" + "\n".join(lines)
+        return "", ""
+    return "alter: 過去ナレッジ（このプロンプトに関連。未検証の根拠として扱い、コードで確認する）:\n" + "\n".join(lines), ""
+
+
+def alter_prompt_context(root: Path, prompt: str, timeout: int = 8) -> str:
+    """The alter context block for the prompt; "" when none or alter is unreachable."""
+    return alter_prompt_status(root, prompt, timeout)[0]
 
 
 def new_transcript_prompt(root: Path, payload: dict[str, Any], host: str = "agy") -> str:
@@ -835,10 +848,14 @@ def with_alter_mandate(out: dict[str, Any], root: Path | None = None) -> dict[st
     hook.setdefault("hookEventName", "SessionStart")
     previous = hook.get("additionalContext") or ""
     mandate = ALTER_SESSION_MANDATE
-    rules = alter_project_rules(root) if root is not None else []
+    rules, error = alter_status(root) if root is not None else ([], "")
     if rules:
         mandate = ALTER_SESSION_MANDATE_INJECTED
         mandate += "\nPJ AI利用ルール（alter 管理。必ず適用する）:\n" + "\n".join(f"- {rule}" for rule in rules)
+    if error:  # alter is the knowledge source here: say it is down, to the user and to the model
+        message = ALTER_UNREACHABLE.format(reason=error)
+        mandate += "\n" + message
+        merged["systemMessage"] = message
     hook["additionalContext"] = f"{previous}\n{mandate}" if previous else mandate
     merged["hookSpecificOutput"] = hook
     return merged
@@ -859,7 +876,8 @@ def adapt_output(host: str, event: str, out: dict[str, Any], once: bool = False)
         context = (out.get("hookSpecificOutput") or {}).get("additionalContext")
         # Only a restored checkpoint is worth announcing; the alter requirement alone is silent context.
         # The mandate comes first only when there is no checkpoint advice before it (see with_alter_mandate).
-        note = "" if (context or "").startswith((ALTER_SESSION_MANDATE, ALTER_SESSION_MANDATE_INJECTED)) else "\nTell the user briefly that this checkpoint was loaded."
+        has_error = "ego ERROR:" in (context or "")  # an alter error carries its own "tell the user" instruction
+        note = "" if has_error or (context or "").startswith((ALTER_SESSION_MANDATE, ALTER_SESSION_MANDATE_INJECTED)) else "\nTell the user briefly that this checkpoint was loaded."
         return {"injectSteps": [{"systemMessage": {"systemMessage": f"{context}{note}"}}]} if context else {}
     return out
 

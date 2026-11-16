@@ -1,4 +1,4 @@
-"""File memory and the alter MCP stdio adapter."""
+"""Process memory (file store), the alter MCP stdio adapter and the alter session/checkpoint recording."""
 from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -91,7 +91,7 @@ class MCPStdio:
             try:p.wait(timeout=2)
             except subprocess.TimeoutExpired:p.kill();p.wait()
 
-ALTER_HOST_HINT="Use host alter MCP tools (alter_task_context / alter_search / alter_get_note) or set EGO_ALTER_MCP_COMMAND"
+ALTER_HOST_HINT="Add the alter MCP server to the host (alter_task_context / alter_ai_usage) or set EGO_ALTER_MCP_COMMAND"
 ALTER_SKILLS_SOURCE="github:jumtra/alter-skills"
 ALTER_SKILLS_CLIENTS=("claude","codex","opencode","agy")
 ALTER_SKILLS_MARKER="alter-context-loader"
@@ -591,47 +591,23 @@ def submit_alter_checkpoint_review(
         return {"status": "error", "reason": str(exc)}
 
 
-class AlterMemory:
-    """alter-mcp provider. Host-configured alter MCP is the default; EGO_ALTER_MCP_COMMAND enables direct CLI calls."""
-    def __init__(self, root: Path):
-        self.root = root
-        # EGO_ALTER_MCP_COMMAND wins; otherwise the alter server the host already configures
-        # (~/.claude.json or .mcp.json) is spawned directly, so no manual setup is needed.
-        spec=_alter_mcp_spec(root)
-        self.mcp=MCPStdio(spec[0],env=spec[1]) if spec else None
-    def _host_guidance(self) -> dict:
-        return {"provider":"alter","mode":"host-mcp","hint":ALTER_HOST_HINT}
-    def add(self,text:str,**kw)->dict:
-        if self.mcp is None: return self._host_guidance()
-        tool=os.environ.get("EGO_ALTER_WRITE_TOOL","alter_create_note")
-        return {"provider":"alter","result":self.mcp.call_tool(tool,{"content":text,"tags":kw.get("tags",[])})}
-    def search(self,query:str,limit:int=10)->list[dict]:
-        if self.mcp is None: return [self._host_guidance()]
-        # Default to alter_task_context with cwd: it is project-scoped, while alter_search
-        # ignores scope and can return notes from other projects. EGO_ALTER_SEARCH_TOOL overrides.
-        tool=os.environ.get("EGO_ALTER_SEARCH_TOOL")
-        if tool:
-            args={"query":query,"limit":limit}
-        else:
-            tool="alter_task_context"
-            args={"task":query,"cwd":str(self.root)}
-        return [{"provider":"alter","result":self.mcp.call_tool(tool,args)}]
+def memory_health(root: Path) -> dict:
+    """Process memory (`ego memory`): always the local file store."""
+    fm = FileMemory(root)
+    return {"provider": "file", "status": "ok", "path": str(fm.path), "items": len(fm.list())}
 
-def memory_provider(root:Path, name:str):
-    if name == "file": return FileMemory(root)
-    if name == "alter": return AlterMemory(root)
-    raise EgoError("UNKNOWN_MEMORY",name,2)
 
-def memory_health(root:Path, name:str) -> dict:
-    """Read-only provider status for ego doctor. Never starts an MCP server."""
+def knowledge_health(root: Path, name: str) -> dict:
+    """Read-only status of where project knowledge lives. Never starts an MCP server."""
     if name == "file":
-        fm=FileMemory(root)
-        return {"provider":"file","status":"ok","path":str(fm.path),"items":len(fm.list())}
+        from .knowledge import KnowledgeStore
+        store = KnowledgeStore(root)
+        return {"provider": "file", "status": "ok", "index": str(store.index_path), "topics": len(store.entries())}
     if name == "alter":
-        configured=bool(os.environ.get("EGO_ALTER_MCP_COMMAND"))
-        resolved=configured or _alter_mcp_spec(root) is not None  # resolved from host config only; no server is started
-        return {"provider":"alter","status":"ok" if resolved else "host-managed",
-                "mode":"mcp-cli" if resolved else "host-mcp","command_configured":configured,"mcp_resolved":resolved,
-                "skills_installed":alter_skills_installed(root),
-                "hint":None if configured else ALTER_HOST_HINT}
-    raise EgoError("UNKNOWN_MEMORY",name,2)
+        configured = bool(os.environ.get("EGO_ALTER_MCP_COMMAND"))
+        resolved = configured or _alter_mcp_spec(root) is not None  # resolved from host config only; no server is started
+        return {"provider": "alter", "status": "ok" if resolved else "host-managed",
+                "mode": "mcp-cli" if resolved else "host-mcp", "command_configured": configured, "mcp_resolved": resolved,
+                "skills_installed": alter_skills_installed(root),
+                "hint": None if configured else ALTER_HOST_HINT}
+    raise EgoError("UNKNOWN_KNOWLEDGE", name, 2)

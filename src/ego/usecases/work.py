@@ -189,7 +189,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     raise EgoError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
                 prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff)
                 mcp_servers=list(node.get("mcp") or [])
-                if cfg.memory=="alter" and "alter" not in mcp_servers:
+                if cfg.knowledge=="alter" and "alter" not in mcp_servers:
                     mcp_servers.append("alter")
                 try:
                     r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,threshold=cfg.clear_suggest_tokens,
@@ -363,7 +363,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
     root=root.resolve();cfg=load_config(root)
     from ..domain.retention import prune_state
     prune_state(root)  # bounded state: fail-open, before this run adds to it
-    if cfg.memory == "alter":
+    if cfg.knowledge == "alter":
         from ..adapters.memory import ensure_alter_project_quietly
         ensure_alter_project_quietly(root)
     use_worktree = worktree if worktree is not None else (cfg.isolation == "worktree")
@@ -488,8 +488,8 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                 progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
             write_json(record_path,record)
             edit_owners={}
-            # Prompt-only memory hint; record['spec'] stays the user's spec so resume comparisons are unchanged.
-            prompt_spec=({**spec,'memory':'alter'} if cfg.memory=='alter' and 'memory' not in spec else spec)
+            # Prompt-only knowledge hint; record['spec'] stays the user's spec so resume comparisons are unchanged.
+            prompt_spec=({**spec,'knowledge':cfg.knowledge} if 'knowledge' not in spec else spec)
             with ThreadPoolExecutor(max_workers=len(wave)) as pool:
                 futures={pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress):n["id"] for n in wave}
                 # Each node is persisted as soon as it finishes: a crash or cancel loses only the unfinished nodes.

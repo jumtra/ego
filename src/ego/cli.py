@@ -27,7 +27,7 @@ def _cmd_apply(args):
     if args.hosts is not None: cfg.hosts = [h.strip() for h in args.hosts.split(",") if h.strip()]
     if args.profile is not None: cfg.profile = args.profile
     if args.graph is not None: cfg.code_intelligence = args.graph
-    if args.memory is not None: cfg.memory = args.memory
+    if args.knowledge is not None: cfg.knowledge = args.knowledge
     if args.runtime is not None: cfg.runtime_mode = args.runtime
     if getattr(args, "policy", None) is not None: cfg.policy_mode = args.policy
     if getattr(args, "clear_suggest_tokens", None) is not None: cfg.clear_suggest_tokens = args.clear_suggest_tokens
@@ -64,7 +64,7 @@ def _cmd_apply(args):
     status = "BLOCKED" if plan["conflicts"] else "UP_TO_DATE" if not changes else "CHANGES_PENDING"
     summary = {"status": status, "root": str(root), "harness_version": __version__,
                "profile": cfg.profile, "policy_mode": cfg.policy_mode, "hosts": cfg.hosts, "models": cfg.models, "roles": cfg.roles,
-               "code_intelligence": cfg.code_intelligence, "memory": cfg.memory,
+               "code_intelligence": cfg.code_intelligence, "knowledge": cfg.knowledge,
                "runtime_mode": cfg.runtime_mode, "tests_detected": bool(detect_tests),
                "changes": changes, "conflicts": plan["conflicts"],
                "changed_count": len(changes)}
@@ -170,7 +170,7 @@ def _cmd_init(args):
     if args.profile:cfg.profile=args.profile
     if args.hosts:cfg.hosts=args.hosts.split(",")
     if args.graph:cfg.code_intelligence=args.graph
-    if args.memory:cfg.memory=args.memory
+    if args.knowledge:cfg.knowledge=args.knowledge
     cfg.validate()
     from .adapters.detect import detect
     detection=detect(_root(args))
@@ -214,13 +214,13 @@ def _cmd_doctor(args):
     from .domain.config import load_config
     from .adapters.hosts import capability
     from .adapters.codeintel import health
-    from .adapters.memory import memory_health
+    from .adapters.memory import memory_health, knowledge_health
     from .domain.policy import sandbox_diagnostics
     cfg=load_config(_root(args))
     results={"version":__version__,"hosts":{x:capability(x).__dict__ for x in cfg.hosts},
-             "code_intelligence":health(cfg.code_intelligence),"memory":cfg.memory,
+             "code_intelligence":health(cfg.code_intelligence),"knowledge":cfg.knowledge,
              "sandbox":sandbox_diagnostics(),
-             "memory_health":memory_health(_root(args),cfg.memory)}
+             "memory_health":memory_health(_root(args)),"knowledge_health":knowledge_health(_root(args),cfg.knowledge)}
     _print(results);return 0
 
 
@@ -309,13 +309,13 @@ def _cmd_state(args):
 
 def _cmd_memory(args):
     from .domain.config import load_config
-    from .adapters.memory import memory_provider, install_alter_skills
+    from .adapters.memory import FileMemory, install_alter_skills
     root=_root(args);cfg=load_config(root)
     if args.action=="install-skills":
         clients=[c.strip() for c in args.clients.split(",") if c.strip()] if args.clients else cfg.hosts
         _print(install_alter_skills(root,clients=clients,scope=args.scope,agents=not args.no_agents,dry_run=args.dry_run))
         return 0
-    p=memory_provider(root,cfg.memory)
+    p=FileMemory(root)  # process memory (facts about the work itself) is always local; project knowledge is `ego knowledge`
     if args.action=="add":_print(p.add(args.text,tags=args.tags or [],evidence=args.evidence or []));return 0
     if args.action=="search":_print(p.search(args.query));return 0
     if args.action=="list":
@@ -324,6 +324,19 @@ def _cmd_memory(args):
     if args.action=="delete":
         if not hasattr(p,"delete"):raise EgoError("UNSUPPORTED","Memory provider does not support delete")
         _print({"deleted":p.delete(args.id)});return 0
+
+def _cmd_knowledge(args):
+    """Project knowledge for `knowledge = "file"`: an index plus one file per topic. With alter the knowledge lives there."""
+    from .domain.config import load_config
+    from .adapters.knowledge import KnowledgeStore
+    root=_root(args)
+    if load_config(root).knowledge=="alter":
+        raise EgoError("KNOWLEDGE_IS_ALTER","knowledge = \"alter\": project knowledge lives in alter. Use the alter MCP tools (alter_task_context / alter_search / alter_get_note); set knowledge = \"file\" to use .ego/knowledge",2)
+    store=KnowledgeStore(root)
+    if args.action=="index":print(store.index_text(),end="");return 0
+    if args.action=="search":_print(store.search(" ".join(args.query),limit=args.limit));return 0
+    if args.action=="get":_print([store.get(slug) for slug in args.slug]);return 0
+    if args.action=="add":_print(store.add(args.text,topic=args.topic,summary=args.summary,keywords=args.keyword));return 0
 
 def _cmd_session(args):
     from .usecases.session import (save_checkpoint, load_checkpoint, rotation_instructions, arm_auto_resume,
@@ -339,9 +352,12 @@ def _cmd_session(args):
         )
         try:
             from .domain.config import load_config
-            if load_config(root).memory == "alter":
+            if load_config(root).knowledge == "alter":
                 from .adapters.memory import submit_alter_checkpoint_review
                 submit_alter_checkpoint_review(root, saved_record)
+            else:
+                from .adapters.knowledge import record_checkpoint_decisions
+                record_checkpoint_decisions(root, saved_record)
         except Exception:
             pass
         # Acknowledge only: the caller just supplied these notes, echoing them back costs context twice.
@@ -413,15 +429,18 @@ def _cmd_hook(args):
         # Looks up alter knowledge for the prompt; any problem means "say nothing".
         try:
             from .adapters.memory import use_host
-            from .usecases.session import adapt_output,alter_prompt_context,new_transcript_prompt,normalize_payload,project_root
+            from .usecases.session import ALTER_UNREACHABLE,adapt_output,alter_prompt_status,new_transcript_prompt,normalize_payload,project_root
             obj=normalize_payload(args.host,json.loads(raw))
             root=project_root(root,obj.get("cwd"))
             prompt=str(obj.get("prompt") or "")
             if args.host=="agy":prompt=new_transcript_prompt(root,obj)  # AGY sends no prompt: read it from the transcript, once
+            error=""
             with use_host(args.host):
-                text=alter_prompt_context(root,prompt) if load_config(root).memory=="alter" else ""
-        except (ValueError,OSError,EgoError,KeyError,TypeError):text=""
+                text,error=alter_prompt_status(root,prompt) if load_config(root).knowledge=="alter" else ("","")
+            if error:text=ALTER_UNREACHABLE.format(reason=error)  # alter is the knowledge source: an unreachable alter is an error, not silence
+        except (ValueError,OSError,EgoError,KeyError,TypeError):text="";error=""
         out={"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":text}} if text else {}
+        if error:out["systemMessage"]=text
         print(json.dumps(adapt_output(args.host,"user-prompt",out),ensure_ascii=False));return 0
     if args.event=="session-end":
         # The session is closing (exit, /clear, logout): record the conversation in alter. Never fails the host.
@@ -431,7 +450,7 @@ def _cmd_hook(args):
             from .usecases.session import normalize_payload,project_root
             obj=normalize_payload(args.host,json.loads(raw))
             root=project_root(root,obj.get("cwd"))
-            if not os.environ.get("EGO_RUN") and load_config(root).memory=="alter":
+            if not os.environ.get("EGO_RUN") and load_config(root).knowledge=="alter":
                 submit_alter_session_review(root,session_id=str(obj.get("session_id") or ""),host=args.host,
                     transcript=obj.get("transcript_path") if isinstance(obj.get("transcript_path"),str) else None,
                     messages=obj.get("messages") if isinstance(obj.get("messages"),list) else None,timeout=25)
@@ -448,7 +467,7 @@ def _cmd_hook(args):
             info={}
             if args.event=="stop":
                 cfg=load_config(root)
-                if cfg.memory == "alter":
+                if cfg.knowledge == "alter":
                     try:
                         from .adapters.memory import submit_alter_session_review
                         submit_alter_session_review(
@@ -472,7 +491,7 @@ def _cmd_hook(args):
             else:
                 out={} if os.environ.get("EGO_RUN") or not load_config(root).auto_resume else clear_resume(root,obj)  # the hook is also installed for alter alone
                 # Inside `ego run` the checkpoint resume stands down, but the alter requirement is not a resume: keep it.
-                if load_config(root).memory=="alter":
+                if load_config(root).knowledge=="alter":
                     from .adapters.memory import use_host
                     from .usecases.session import with_alter_mandate
                     with use_host(host):
@@ -600,7 +619,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--hosts")
     sp.add_argument("--profile",choices=["minimal","balanced","full"])
     sp.add_argument("--graph",choices=["codegraph","graphify","none"])
-    sp.add_argument("--memory",choices=["file","alter"])
+    sp.add_argument("--knowledge","--memory",dest="knowledge",choices=["file","alter"],help="Where project knowledge lives: file (.ego/knowledge) or alter (alter MCP); --memory is a deprecated alias")
     sp.add_argument("--install-alter-skills",action="store_true",help="Install external alter-skills from github:jumtra/alter-skills")
     sp.add_argument("--detect-tests",action="store_true",help="Detect candidate test commands without running tests")
     sp.add_argument("--runtime",choices=["native","managed"],help="Default runtime; per-task runtime remains configurable")
@@ -628,7 +647,7 @@ def build_parser()->argparse.ArgumentParser:
     init.add_argument("--profile",choices=["minimal","balanced","full"])
     init.add_argument("--hosts",help="Comma-separated claude,codex,opencode,agy")
     init.add_argument("--graph",choices=["codegraph","graphify","none"])
-    init.add_argument("--memory",choices=["file","alter"])
+    init.add_argument("--knowledge","--memory",dest="knowledge",choices=["file","alter"],help="Where project knowledge lives: file (.ego/knowledge) or alter (alter MCP); --memory is a deprecated alias")
     init.add_argument("--detect-tests",action="store_true",help="Add verified test command candidates to config")
     init.add_argument("--apply",action="store_true");init.set_defaults(func=_cmd_init)
     sp=sub.add_parser("sync",help="Re-render host configurations");common(sp);sp.add_argument("--apply",action="store_true")
@@ -705,6 +724,14 @@ def build_parser()->argparse.ArgumentParser:
     r.add_argument("--no-agents",action="store_true",help="Skip installing agent definitions")
     r.add_argument("--dry-run",action="store_true")
     sp.set_defaults(func=_cmd_memory)
+    sp=sub.add_parser("knowledge",help="Project knowledge (knowledge = \"file\"): an index plus one file per topic");common(sp);s=sp.add_subparsers(dest="action",required=True)
+    s.add_parser("index",help="Print .ego/knowledge/index.md: read it first, then open only the topics you need")
+    r=s.add_parser("search",help="Topics whose summary or keywords match the words");r.add_argument("query",nargs="+");r.add_argument("--limit",type=int,default=5)
+    r=s.add_parser("get",help="Print the topic files");r.add_argument("slug",nargs="+")
+    r=s.add_parser("add",help="Record verified knowledge: merged into the matching topic when the index shows one, else a new topic file")
+    r.add_argument("text");r.add_argument("--topic",help="Force this topic (slug); created when it does not exist");r.add_argument("--summary",help="One-line topic summary for the index")
+    r.add_argument("--keyword",action="append",help="Index keyword for the topic (repeatable)")
+    sp.set_defaults(func=_cmd_knowledge)
     sp=sub.add_parser("session",help="Small durable task checkpoints and manual interactive session rotation");common(sp)
     s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("checkpoint",help="Save a compact handoff at a verified task boundary")

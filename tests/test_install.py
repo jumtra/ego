@@ -397,7 +397,7 @@ def test_force_wizard_options_and_confirm(tmp_path):
     assert cfg.profile == "minimal"
     assert cfg.hosts == ["claude", "opencode"]
     assert cfg.code_intelligence == "none"
-    assert cfg.memory == "file"
+    assert cfg.knowledge == "file"
     assert cfg.runtime_mode == "managed"
     assert cfg.tests
     assert (project / ".claude/skills/work/SKILL.md").exists()
@@ -845,7 +845,7 @@ auto_promote = false
     assert cfg.profile=='balanced'
     assert cfg.hosts==['claude','codex','opencode','agy']
     assert cfg.code_intelligence=='none'
-    assert cfg.memory=='file'
+    assert cfg.knowledge=='file'
 
 
 def test_codex_approve_for_me_and_agy_models_parsing(monkeypatch,tmp_path):
@@ -976,7 +976,7 @@ def test_project_detection(tmp_path):
 
 def test_cli_root_after_action(project):
     from ego.domain.config import Config, save_config
-    save_config(project, Config(memory="file"))
+    save_config(project, Config(knowledge="file"))
     cmd=[sys.executable,"-m","ego","memory","add","some note","--root",str(project)]
     env={**os.environ,"PYTHONPATH":str(Path(__file__).resolve().parents[1]/"src")}
     res=subprocess.run(cmd,capture_output=True,text=True,env=env,timeout=20)
@@ -1028,20 +1028,20 @@ def test_removed_peripheral_command_fails_with_exit_2(command, capsys):
 
 
 def test_sync_moves_file_memory_to_alter_when_alter_mcp_is_configured(tmp_path: Path, monkeypatch):
-    root = _apply(tmp_path / "a", memory="file", hosts=["claude"])
+    root = _apply(tmp_path / "a", knowledge="file", hosts=["claude"])
     assert "SessionEnd" not in (root / ".claude/settings.json").read_text() if (root / ".claude/settings.json").exists() else True
     monkeypatch.setenv("EGO_ALTER_MCP_COMMAND", "true")
     monkeypatch.setenv("EGO_ALTER_AUTO_REGISTER", "0")
     assert project_info(root.resolve())["status"] == "CHANGES_PENDING"
     row = sync_project(root.resolve(), apply=True)
-    assert row["status"] == "APPLIED" and row["memory_migrated"] == "file -> alter"
-    assert load_config(root).memory == "alter"
+    assert row["status"] == "APPLIED" and row["knowledge_migrated"] == "file -> alter"
+    assert load_config(root).knowledge == "alter"
     assert "SessionEnd" in (root / ".claude/settings.json").read_text()
     assert project_info(root.resolve())["status"] == "UP_TO_DATE"
 
 
 def test_sync_keeps_file_memory_without_alter_mcp_or_when_opted_out(tmp_path: Path, monkeypatch):
-    root = _apply(tmp_path / "a", memory="file", hosts=["claude"])
+    root = _apply(tmp_path / "a", knowledge="file", hosts=["claude"])
     monkeypatch.delenv("EGO_ALTER_MCP_COMMAND", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
     assert project_info(root.resolve())["status"] == "UP_TO_DATE"
