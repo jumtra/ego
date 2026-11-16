@@ -64,7 +64,7 @@ In an interactive terminal, with none of the selection flags below given, a wiza
 | Profile | `minimal` / `balanced` / `full` | `balanced` |
 | Hosts (multiple) | `claude` / `codex` / `opencode` / `agy` | all four |
 | Code intelligence | `codegraph` / `graphify` / `none` | `none` |
-| Memory | `file` / `engram` / `alter` | `alter` |
+| Memory | `file` / `alter` | `alter` |
 | Default runtime | `native` / `managed` | `native` |
 | Detect test commands | yes / no (only when none are configured) | no |
 | Apply these changes? | yes / no, after the list of changed files | **no** |
@@ -84,7 +84,7 @@ The wizard does not ask for the policy mode, default models or session threshold
 | `--policy <mode>` | `relaxed` (default) or `strict`. See [Configuration](configuration.md#policy-mode) |
 | `--models <json>` | Default model per host, e.g. `'{"claude":"sonnet","codex":"auto"}'` |
 | `--graph <provider>` | `none`, `codegraph` or `graphify` |
-| `--memory <provider>` | `file`, `engram` or `alter` |
+| `--memory <provider>` | `file` or `alter` |
 | `--runtime <mode>` | `native` or `managed` (recorded default) |
 | `--clear-suggest-tokens <N>` | Context size at which the session is checkpointed and cleared; `0` = off. See [Sessions](sessions.md) |
 | `--detect-tests` | Detect candidate test commands and store them in the config (nothing is executed) |

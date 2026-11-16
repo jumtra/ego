@@ -1,4 +1,4 @@
-"""File memory and optional MCP stdio adapter for Engram-like servers."""
+"""File memory and the alter MCP stdio adapter."""
 from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -90,21 +90,6 @@ class MCPStdio:
             p.terminate()
             try:p.wait(timeout=2)
             except subprocess.TimeoutExpired:p.kill();p.wait()
-
-class EngramMemory:
-    """Optional configured Engram MCP. No silent fallback to a separate memory truth."""
-    def __init__(self):
-        raw=os.environ.get("EGO_ENGRAM_MCP_COMMAND", "")
-        if not raw: raise EgoError("ENGRAM_UNAVAILABLE","Set EGO_ENGRAM_MCP_COMMAND and tool names",3)
-        self.mcp=MCPStdio(shlex.split(raw))
-    def add(self,text:str,**kw)->dict:
-        tool=os.environ.get("EGO_ENGRAM_WRITE_TOOL")
-        if not tool: raise EgoError("ENGRAM_CONFIG", "EGO_ENGRAM_WRITE_TOOL is required",3)
-        return {"provider":"engram","result":self.mcp.call_tool(tool,{"content":text,"tags":kw.get("tags",[])})}
-    def search(self,query:str,limit:int=10)->list[dict]:
-        tool=os.environ.get("EGO_ENGRAM_SEARCH_TOOL")
-        if not tool: raise EgoError("ENGRAM_CONFIG", "EGO_ENGRAM_SEARCH_TOOL is required",3)
-        return [{"provider":"engram","result":self.mcp.call_tool(tool,{"query":query,"limit":limit})}]
 
 ALTER_HOST_HINT="Use host alter MCP tools (alter_task_context / alter_search / alter_get_note) or set EGO_ALTER_MCP_COMMAND"
 ALTER_SKILLS_SOURCE="github:jumtra/alter-skills"
@@ -632,7 +617,6 @@ class AlterMemory:
 
 def memory_provider(root:Path, name:str):
     if name == "file": return FileMemory(root)
-    if name == "engram": return EngramMemory()
     if name == "alter": return AlterMemory(root)
     raise EgoError("UNKNOWN_MEMORY",name,2)
 
@@ -641,11 +625,6 @@ def memory_health(root:Path, name:str) -> dict:
     if name == "file":
         fm=FileMemory(root)
         return {"provider":"file","status":"ok","path":str(fm.path),"items":len(fm.list())}
-    if name == "engram":
-        configured=bool(os.environ.get("EGO_ENGRAM_MCP_COMMAND"))
-        tools_ok=bool(os.environ.get("EGO_ENGRAM_SEARCH_TOOL")) and bool(os.environ.get("EGO_ENGRAM_WRITE_TOOL"))
-        return {"provider":"engram","status":"ok" if configured and tools_ok else "unconfigured",
-                "command_configured":configured,"tools_configured":tools_ok}
     if name == "alter":
         configured=bool(os.environ.get("EGO_ALTER_MCP_COMMAND"))
         resolved=configured or _alter_mcp_spec(root) is not None  # resolved from host config only; no server is started

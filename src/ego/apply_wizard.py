@@ -107,7 +107,7 @@ def select_options(cfg: Config, args, root: Path) -> bool:
     if args.graph is None:
         cfg.code_intelligence = _choose("コード解析Provider（外部Providerは別途セットアップが必要）", PROVIDERS, cfg.code_intelligence)
     if args.memory is None:
-        cfg.memory = _choose("Memory（alterはHostのalter-mcp/skills、engramは外部接続を使用）", MEMORY, cfg.memory)
+        cfg.memory = _choose("Memory（alterはHostのalter-mcp/skills、fileはローカルの .ego/memory）", MEMORY, cfg.memory)
     if args.runtime is None:
         cfg.runtime_mode = _choose("既定の実行方式（managedはRunnerと適切な実行環境が必要）", ("native", "managed"), cfg.runtime_mode)
     detect_tests = False

@@ -31,8 +31,7 @@
 
 ## External tools
 
-- AI CLIs, CodeGraph, Graphify and Engram are never installed by ego. `ego code index --execute` runs the provider's documented indexing command and may write a local index.
-- Engram is started from `EGO_ENGRAM_MCP_COMMAND`, a command you configure and trust. Its compatibility is not assumed until a real server responds.
+- AI CLIs, CodeGraph and Graphify are never installed by ego. `ego code index --execute` runs the provider's documented indexing command and may write a local index.
 - CLI flag support is detected by running only the vendor's `--version` / `--help`, cached per executable. A required flag that is missing fails closed.
 
 ## Recommendations
@@ -41,4 +40,4 @@ For important repositories, run managed work in an external sandbox or disposabl
 
 ## What is verified
 
-The test suite runs offline with the `mock` host. It covers configuration, installation and rollback, task routing, the run and loop engines, checkpoints, hooks, the `ego run` wrapper logic and the updater's verification. Behavior of the real vendor CLIs is reached through adapters that are checked against each CLI's reported flags, not exercised end to end in the tests. The Engram, CodeGraph, Graphify and `gh` integrations are adapters that depend on the external tool. Confirm these on your machine with `ego doctor` and a small trial run.
+The test suite runs offline with the `mock` host. It covers configuration, installation and rollback, task routing, the run and loop engines, checkpoints, hooks, the `ego run` wrapper logic and the updater's verification. Behavior of the real vendor CLIs is reached through adapters that are checked against each CLI's reported flags, not exercised end to end in the tests. The CodeGraph, Graphify and `gh` integrations are adapters that depend on the external tool. Confirm these on your machine with `ego doctor` and a small trial run.
