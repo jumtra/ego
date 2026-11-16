@@ -213,3 +213,13 @@ def test_user_prompt_hook_reports_an_unreachable_alter(tmp_path: Path, monkeypat
 def test_user_prompt_hook_is_silent_in_file_mode(project: Path, monkeypatch, capsys):
     out = _hook(monkeypatch, capsys, project, "user-prompt", {"prompt": "過去の決定を探したい", "cwd": str(project)})
     assert out == {}
+
+
+def test_rules_are_generated_for_every_host_and_agents_md_points_at_them():
+    from ego.domain.templates import root_instructions
+    files = generated_files(Config(hosts=["claude", "codex", "opencode", "agy"]))
+    for name in ("engineering", "testing"):
+        assert files[f".agents/rules/{name}.md"] == files[f".claude/rules/{name}.md"]
+    blocks = root_instructions(Config(hosts=["claude", "codex"]))
+    assert "`.agents/rules/`" in blocks["AGENTS.md"] and "read every file" not in blocks["CLAUDE.md"]
+    assert not any(p.startswith(".agents/rules") for p in generated_files(Config(hosts=["claude"])))
