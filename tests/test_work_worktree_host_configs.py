@@ -45,3 +45,36 @@ def test_worktree_run_receives_gitignored_project_state(tmp_path):
     assert (staging / ".claude" / "node_modules" / "junk.js").exists()
     assert not (staging / ".ego" / "state" / "runs" / "old").exists()
     assert not (staging / "__pycache__").exists()
+
+
+def test_worktree_run_excludes_state_when_ego_dir_ignored_wholesale(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    _git(root, "init")
+    _git(root, "config", "user.name", "Test")
+    _git(root, "config", "user.email", "test@example.com")
+    (root / ".gitignore").write_text(".ego/\n")
+    (root / "hello.txt").write_text("initial\n")
+    (root / "noop.py").write_text("pass\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "init")
+
+    (root / ".ego" / "memory").mkdir(parents=True)
+    (root / ".ego" / "memory" / "fact.md").write_text("fact\n")
+    (root / ".ego" / "state" / "runs" / "old").mkdir(parents=True)
+    (root / ".ego" / "state" / "runs" / "old" / "record.json").write_text("{}\n")
+    (root / ".ego" / "locks").mkdir(parents=True)
+    (root / ".ego" / "locks" / "x.lock").write_text("lock\n")
+    (root / ".ego" / "backups").mkdir(parents=True)
+    (root / ".ego" / "backups" / "b.txt").write_text("backup\n")
+
+    task = {"nodes": [{"id": "write", "kind": "code", "argv": ["python3", "noop.py"],
+                       "write_allowlist": ["result.txt"]}]}
+    result = execute(root, task, worktree=True, cleanup_worktree=False, run_id="wholesale")
+
+    staging = root / ".ego" / "state" / "runs" / "wholesale" / "staging"
+    assert result["worktree"] is True
+    assert (staging / ".ego" / "memory" / "fact.md").read_text() == "fact\n"
+    assert not (staging / ".ego" / "state" / "runs" / "old").exists()
+    assert not (staging / ".ego" / "locks").exists()
+    assert not (staging / ".ego" / "backups").exists()

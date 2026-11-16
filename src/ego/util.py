@@ -222,9 +222,17 @@ def copy_ignored_files(root: Path, dst: Path) -> None:
         if src.is_symlink():
             continue
         target = dst / rel.rstrip("/")
+        def _ignore(d: str, names: list[str]) -> list[str]:
+            base = Path(d).relative_to(root).as_posix()
+            skipped = []
+            for n in names:
+                rel_n = (n if base == "." else f"{base}/{n}") + "/"
+                if n in IGNORED_COPY_SKIP_PARTS or n.endswith(".egg-info") or rel_n in IGNORED_COPY_EXCLUDES:
+                    skipped.append(n)
+            return skipped
+
         if src.is_dir():
-            shutil.copytree(src, target, dirs_exist_ok=True, symlinks=False,
-                            ignore=lambda d, names: [n for n in names if n in IGNORED_COPY_SKIP_PARTS or n.endswith(".egg-info")])
+            shutil.copytree(src, target, dirs_exist_ok=True, symlinks=False, ignore=_ignore)
         elif src.is_file():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, target)
