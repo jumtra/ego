@@ -196,7 +196,7 @@ def test_custom_agent_discovery_task_routing_and_non_lean_alter(tmp_path: Path, 
 
     # build_task_prompt embeds custom agent definition and alter/MCP retrieval instructions
     prompt = build_task_prompt(
-        {'goal': 'Add alter support', 'memory': 'alter'},
+        {'goal': 'Add alter support', 'knowledge': 'alter'},
         {'id': 'n1', 'prompt': 'Implement feature', 'agent': 'domain-expert', 'mcp': ['alter']},
         tmp_path,
     )
@@ -205,8 +205,8 @@ def test_custom_agent_discovery_task_routing_and_non_lean_alter(tmp_path: Path, 
     assert '## Required MCP / Knowledge context' in prompt
     assert 'alter_task_context' in prompt
 
-    # work.execute passes lean=True and mcp_servers=['alter'] when cfg.memory == 'alter'
-    save_config(tmp_path, Config(memory='alter', worker_context='lean'))
+    # work.execute passes lean=True and mcp_servers=['alter'] when cfg.knowledge == 'alter'
+    save_config(tmp_path, Config(knowledge='alter', worker_context='lean'))
     captured_lean = []
     captured_mcp = []
 
@@ -221,7 +221,7 @@ def test_custom_agent_discovery_task_routing_and_non_lean_alter(tmp_path: Path, 
     assert captured_lean == [True]
     assert captured_mcp == [['alter']]
 
-    # planner.plan_work passes lean=True, mcp_servers=['alter'], and includes custom agents when cfg.memory == 'alter'
+    # planner.plan_work passes lean=True, mcp_servers=['alter'], and includes custom agents when cfg.knowledge == 'alter'
     captured_plan = {}
 
     def fake_plan_agent(host, p, cwd, timeout=180, **kw):

@@ -72,22 +72,6 @@ def test_orphan_run_lock_removed(tmp_path):
     assert (locks / "install.lock").exists()
 
 
-def test_candidates_keep_newest_and_promoted(tmp_path):
-    cands = tmp_path / ".ego" / "state" / "candidates"
-    cands.mkdir(parents=True)
-    for i in range(retention.CANDIDATES_KEEP + 3):
-        p = cands / f"cand-{i:04d}.json"
-        p.write_text("{}")
-        _touch_old(p, 10000 + i)
-    # Larger index = older (see _touch_old). The oldest three are 202, 201, 200.
-    promoted = cands / "cand-0202.json"  # among the oldest, but referenced by a promotion
-    (tmp_path / ".ego" / "state" / "promotions.json").write_text(json.dumps([{"candidate_id": "cand-0202"}]))
-    report = retention.prune_state(tmp_path)
-    assert report["candidates"] == 2
-    assert promoted.exists()
-    assert not (cands / "cand-0200.json").exists() and not (cands / "cand-0201.json").exists()
-
-
 def test_alter_sessions_bounded(tmp_path):
     path = tmp_path / ".ego" / "state" / "alter_sessions.json"
     path.parent.mkdir(parents=True)
@@ -138,7 +122,7 @@ def test_symlink_escape_and_command_policy(project,tmp_path):
 
 def test_config_manual_toml_is_authoritative(project):
     cfg=load_config(project)
-    cfg.memory="file";cfg.profile="minimal";save_config(project,cfg)
+    cfg.knowledge="file";cfg.profile="minimal";save_config(project,cfg)
     from ego.usecases.install import installation_plan,apply_install
     diff=installation_plan(project,cfg)
     assert all(z["action"]!="conflict" for z in diff["changes"])
@@ -430,3 +414,20 @@ def test_no_circular_imports_across_src_ego():
         if state.get(module) is None:
             visit(module, [])
     assert not cycles, "import cycles:\n" + "\n".join(sorted(set(cycles)))
+
+
+def test_node_knowledge_source_follows_knowledge_mode(tmp_path):
+    node = {"id": "n1", "prompt": "Change the parser", "mcp": ["alter"]}
+    alter_prompt = build_task_prompt({"knowledge": "alter"}, node, tmp_path)
+    file_prompt = build_task_prompt({"knowledge": "file"}, node, tmp_path)
+    assert "from alter" in alter_prompt and ".ego/knowledge" not in alter_prompt
+    assert ".ego/knowledge/index.md" in file_prompt and "only the topic files" in file_prompt
+    assert "domain.md" not in file_prompt
+
+
+def test_file_knowledge_without_mcp_points_at_the_index_only_when_it_exists(tmp_path):
+    node = {"id": "n1", "prompt": "Change the parser"}
+    assert "Knowledge context" not in build_task_prompt({"knowledge": "file"}, node, tmp_path)
+    (tmp_path / ".ego" / "knowledge").mkdir(parents=True)
+    (tmp_path / ".ego" / "knowledge" / "index.md").write_text("# Knowledge index\n")
+    assert ".ego/knowledge/index.md" in build_task_prompt({"knowledge": "file"}, node, tmp_path)

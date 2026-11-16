@@ -64,12 +64,12 @@ In an interactive terminal, with none of the selection flags below given, a wiza
 | Profile | `minimal` / `balanced` / `full` | `balanced` |
 | Hosts (multiple) | `claude` / `codex` / `opencode` / `agy` | all four |
 | Code intelligence | `codegraph` / `graphify` / `none` | `none` |
-| Memory | `file` / `alter` | `alter` |
+| Knowledge | `file` / `alter` | `alter` |
 | Default runtime | `native` / `managed` | `native` |
 | Detect test commands | yes / no (only when none are configured) | no |
 | Apply these changes? | yes / no, after the list of changed files | **no** |
 
-With memory `alter`, the managed block in CLAUDE.md / AGENTS.md (all hosts) requires calling `alter_bootstrap` (cwd = repo root) before planning or editing, and the SessionStart hook injects the same requirement (also inside `ego run`, where only the checkpoint resume stands down). Register each host's alter MCP against the same vault.
+With knowledge `alter`, the managed block in CLAUDE.md / AGENTS.md (all hosts) requires calling `alter_bootstrap` (cwd = repo root) before planning or editing, and the SessionStart hook injects the same requirement (also inside `ego run`, where only the checkpoint resume stands down). Register each host's alter MCP against the same vault.
 
 Answer with a number or a name; hosts accept `1,2` or `all`. Enter keeps the current value, `q` cancels. On re-apply the existing `.ego/config.toml` supplies the defaults. Prompts are currently in Japanese.
 
@@ -84,7 +84,7 @@ The wizard does not ask for the policy mode, default models or session threshold
 | `--policy <mode>` | `relaxed` (default) or `strict`. See [Configuration](configuration.md#policy-mode) |
 | `--models <json>` | Default model per host, e.g. `'{"claude":"sonnet","codex":"auto"}'` |
 | `--graph <provider>` | `none`, `codegraph` or `graphify` |
-| `--memory <provider>` | `file` or `alter` |
+| `--knowledge <provider>` | `file` or `alter` (`--memory` is an alias) |
 | `--runtime <mode>` | `native` or `managed` (recorded default) |
 | `--clear-suggest-tokens <N>` | Context size at which the session is checkpointed and cleared; `0` = off. See [Sessions](sessions.md) |
 | `--detect-tests` | Detect candidate test commands and store them in the config (nothing is executed) |
@@ -95,7 +95,7 @@ The wizard does not ask for the policy mode, default models or session threshold
 | `--non-interactive` | Never prompt |
 | `--root <path>` | Project to apply to (default: current directory) |
 
-Passing `--hosts`, `--profile`, `--graph`, `--memory`, `--runtime` or `--detect-tests` skips the wizard and applies directly. `--policy`, `--models` and `--clear-suggest-tokens` alone do not, so add `--non-interactive` in scripts.
+Passing `--hosts`, `--profile`, `--graph`, `--knowledge`, `--runtime` or `--detect-tests` skips the wizard and applies directly. `--policy`, `--models` and `--clear-suggest-tokens` alone do not, so add `--non-interactive` in scripts.
 
 ```bash
 ego apply --hosts claude,codex --policy relaxed --models '{"claude":"sonnet"}' --profile balanced
@@ -120,13 +120,14 @@ ego apply --interactive --dry-run  # try different choices without writing
 | `.ego/config.toml` | Project settings | always |
 | `.ego/ownership.json` | Hashes of the files ego owns, installed version | always |
 | `.ego/spec/skills/{work,harness-init}/` | Canonical skills (source for the host copies) | always |
-| `.ego/spec/prompts/tool-guide.md`, `.ego/knowledge/domain.md` | Tool guidance, project knowledge stub | always |
+| `.ego/spec/prompts/tool-guide.md` | Tool guidance | always |
+| `.ego/knowledge/index.md`, `.ego/knowledge/topics/*.md` | Project knowledge: an index and one file per topic. Created by `ego knowledge add`, not by `ego apply` | `knowledge = "file"`, on first write |
 | `CLAUDE.md` | Managed instruction block | host `claude` |
 | `.claude/skills/`, `.claude/agents/`, `.claude/rules/` | `/work` and `/harness-init` skills, 4 agents, 2 rules | host `claude` |
 | `.claude/settings.json` | Hooks / status line | host `claude`, and any of: profile `full`, `auto_resume` (default on), `clear_suggest_tokens > 0`, `usage_switch_percent > 0` |
 | `.codex/hooks.json` | Hooks | host `codex`, and any of: `auto_resume` (default on), `clear_suggest_tokens > 0`, `usage_switch_percent > 0` |
-| `.agents/hooks.json` | Hooks | host `agy`, and `auto_resume` (default on), `clear_suggest_tokens > 0` or `memory = "alter"` |
-| `.opencode/plugins/ego.ts` | Plugin (hooks) | host `opencode`, and `auto_resume` (default on), `clear_suggest_tokens > 0` or `memory = "alter"`. The plugin pins the absolute `ego` path at `ego apply` time |
+| `.agents/hooks.json` | Hooks | host `agy`, and `auto_resume` (default on), `clear_suggest_tokens > 0` or `knowledge = "alter"` |
+| `.opencode/plugins/ego.ts` | Plugin (hooks) | host `opencode`, and `auto_resume` (default on), `clear_suggest_tokens > 0` or `knowledge = "alter"`. The plugin pins the absolute `ego` path at `ego apply` time |
 | `AGENTS.md` | Managed instruction block | host `codex`, `opencode` or `agy` |
 | `.agents/skills/` | Skills | host `codex`, `opencode` or `agy` |
 | `.codex/agents/*.toml` | 4 agents | host `codex` |

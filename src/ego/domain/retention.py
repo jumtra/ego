@@ -2,8 +2,7 @@
 
 Every category keeps only its newest entries. Pruning is fail-open: an error in one
 category is recorded and never stops a run. Unfinished work is never removed: a run
-whose record is still RUNNING (resumable), a run whose lock is held, and a candidate
-referenced by a promotion are all kept.
+whose record is still RUNNING (resumable) and a run whose lock is held are both kept.
 """
 from __future__ import annotations
 
@@ -16,7 +15,6 @@ from typing import Any
 from ..shared.util import EgoError, exclusive_lock, read_json, write_json
 
 RUNS_KEEP = 30               # run directories (including their staging copies)
-CANDIDATES_KEEP = 200        # candidate and gate records
 ALTER_SESSIONS_KEEP = 200    # per-session ALTER submission digests
 EVENTS_KEEP_LINES = 5000     # lines of the append-only event journal
 BACKUPS_KEEP = 20            # install snapshots under .ego/backups
@@ -78,21 +76,6 @@ def _prune_run_locks(root: Path) -> int:
     return removed
 
 
-def _prune_candidates(root: Path) -> int:
-    base = root / ".ego" / "state" / "candidates"
-    if not base.is_dir():
-        return 0
-    promoted = {str(p.get("candidate_id")) for p in (read_json(root / ".ego" / "state" / "promotions.json", []) or [])
-                if isinstance(p, dict)}
-    removed = 0
-    for path in _newest_first([p for p in base.glob("*.json") if p.is_file()])[CANDIDATES_KEEP:]:
-        if any(cid and cid in path.stem for cid in promoted):
-            continue  # a promotion refers to it: keep for rollback and audit
-        path.unlink(missing_ok=True)
-        removed += 1
-    return removed
-
-
 def _prune_alter_sessions(root: Path) -> int:
     path = root / ".ego" / "state" / "alter_sessions.json"
     state = read_json(path, {})
@@ -133,7 +116,7 @@ def prune_state(root: Path) -> dict[str, Any]:
     """Enforce every retention limit once. Returns the number removed per category."""
     root = Path(root).resolve()
     report: dict[str, Any] = {}
-    for name, step in (("runs", _prune_runs), ("run_locks", _prune_run_locks), ("candidates", _prune_candidates),
+    for name, step in (("runs", _prune_runs), ("run_locks", _prune_run_locks),
                        ("alter_sessions", _prune_alter_sessions), ("events", _prune_events),
                        ("backups", _prune_backups)):
         try:

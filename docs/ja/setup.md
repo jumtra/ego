@@ -66,12 +66,12 @@ ego apply
 | Profile | `minimal` / `balanced` / `full` | `balanced` |
 | Hosts（複数選択） | `claude` / `codex` / `opencode` / `agy` | 4 つすべて |
 | コード解析 | `codegraph` / `graphify` / `none` | `none` |
-| メモリ | `file` / `alter` | `alter` |
+| ナレッジ | `file` / `alter` | `alter` |
 | 既定の実行方式 | `native` / `managed` | `native` |
 | テストコマンドを検出 | はい / いいえ（テストが未設定のときのみ） | いいえ |
 | この変更を適用しますか？ | はい / いいえ（変更ファイル一覧の後に表示） | **いいえ** |
 
-メモリに `alter` を選ぶと、全ホスト共通の CLAUDE.md / AGENTS.md 管理ブロックに「計画や編集の前に `alter_bootstrap`（cwd = リポジトリ直下）を呼ぶ」という必須ルールが入ります。SessionStart フックも同じ要求を注入します（`ego run` 内でも注入し、checkpoint の再開だけを止めます）。各ホストの alter MCP は同じ vault を向くように登録してください。
+ナレッジに `alter` を選ぶと、全ホスト共通の CLAUDE.md / AGENTS.md 管理ブロックに「計画や編集の前に `alter_bootstrap`（cwd = リポジトリ直下）を呼ぶ」という必須ルールが入ります。SessionStart フックも同じ要求を注入します（`ego run` 内でも注入し、checkpoint の再開だけを止めます）。各ホストの alter MCP は同じ vault を向くように登録してください。
 
 番号か名前で答えます。Hosts は `1,2` や `all` と入力できます。Enter で現在の値を維持、`q` でキャンセルです。再適用時は既存の `.ego/config.toml` が既定値になります。プロンプトは現在日本語で表示されます。
 
@@ -86,7 +86,7 @@ ego apply
 | `--policy <mode>` | `relaxed`（既定）または `strict`。[設定](configuration.md#ポリシーモード) を参照 |
 | `--models <json>` | ホストごとの既定モデル。例: `'{"claude":"sonnet","codex":"auto"}'` |
 | `--graph <provider>` | `none`、`codegraph`、`graphify` |
-| `--memory <provider>` | `file` または `alter` |
+| `--knowledge <provider>` | `file` または `alter`（`--memory` は別名） |
 | `--runtime <mode>` | `native` または `managed`（記録される既定値） |
 | `--clear-suggest-tokens <N>` | セッションをチェックポイント保存してクリアするコンテキストサイズ。`0` で無効。[セッション](sessions.md) を参照 |
 | `--detect-tests` | テストコマンド候補を検出して設定に保存（実行はしません） |
@@ -97,7 +97,7 @@ ego apply
 | `--non-interactive` | 一切プロンプトを出さない |
 | `--root <path>` | 適用先のプロジェクト（既定: カレントディレクトリ） |
 
-`--hosts`、`--profile`、`--graph`、`--memory`、`--runtime`、`--detect-tests` のいずれかを指定するとウィザードを省略して直接適用します。`--policy`、`--models`、`--clear-suggest-tokens` だけではウィザードは省略されないため、スクリプトでは `--non-interactive` を付けてください。
+`--hosts`、`--profile`、`--graph`、`--knowledge`、`--runtime`、`--detect-tests` のいずれかを指定するとウィザードを省略して直接適用します。`--policy`、`--models`、`--clear-suggest-tokens` だけではウィザードは省略されないため、スクリプトでは `--non-interactive` を付けてください。
 
 ```bash
 ego apply --hosts claude,codex --policy relaxed --models '{"claude":"sonnet"}' --profile balanced
@@ -122,13 +122,14 @@ ego apply --interactive --dry-run  # 書き込まずに選択を試す
 | `.ego/config.toml` | プロジェクト設定 | 常に |
 | `.ego/ownership.json` | ego が管理するファイルのハッシュ、導入済みバージョン | 常に |
 | `.ego/spec/skills/{work,harness-init}/` | 正本の skill（ホスト向けコピーの元） | 常に |
-| `.ego/spec/prompts/tool-guide.md`、`.ego/knowledge/domain.md` | ツールガイド、プロジェクト知識のひな形 | 常に |
+| `.ego/spec/prompts/tool-guide.md` | ツールガイド | 常に |
+| `.ego/knowledge/index.md`、`.ego/knowledge/topics/*.md` | プロジェクトのナレッジ（index とトピックごとのファイル）。`ego apply` ではなく `ego knowledge add` が作成 | `knowledge = "file"` で、最初の書き込み時 |
 | `CLAUDE.md` | 管理対象の指示ブロック | ホスト `claude` |
 | `.claude/skills/`、`.claude/agents/`、`.claude/rules/` | `/work` と `/harness-init` の skill、agent 4 種、rule 2 種 | ホスト `claude` |
 | `.claude/settings.json` | フック / ステータスライン | ホスト `claude` かつ、Profile `full`、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
 | `.codex/hooks.json` | フック | ホスト `codex` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
-| `.agents/hooks.json` | フック | ホスト `agy` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0` または `memory = "alter"` |
-| `.opencode/plugins/ego.ts` | プラグイン（フック） | ホスト `opencode` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0` または `memory = "alter"`。プラグインは `ego apply` 時の `ego` の絶対パスを固定します |
+| `.agents/hooks.json` | フック | ホスト `agy` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0` または `knowledge = "alter"` |
+| `.opencode/plugins/ego.ts` | プラグイン（フック） | ホスト `opencode` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0` または `knowledge = "alter"`。プラグインは `ego apply` 時の `ego` の絶対パスを固定します |
 | `AGENTS.md` | 管理対象の指示ブロック | ホスト `codex`、`opencode`、`agy` |
 | `.agents/skills/` | skill | ホスト `codex`、`opencode`、`agy` |
 | `.codex/agents/*.toml` | agent 4 種 | ホスト `codex` |

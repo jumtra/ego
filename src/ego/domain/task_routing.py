@@ -263,14 +263,21 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
     req = node.get("requirement") or {}
     if req:
         parts.append("## Requirement (5W1H)\n" + "\n".join(f"- {k.title()}: {req[k].strip()}" for k in REQUIREMENT_KEYS if k in req))
-    if node.get("mcp") or spec.get("memory") == "alter":
+    knowledge = spec.get("knowledge")
+    index_here = (cwd / ".ego" / "knowledge" / "index.md").exists()
+    if node.get("mcp") or knowledge == "alter" or (knowledge == "file" and index_here):
         servers = [str(s).strip() for s in node.get("mcp", [])]
-        if spec.get("memory") == "alter" and "alter" not in servers: servers.insert(0, "alter")
+        if knowledge == "alter" and "alter" not in servers: servers.insert(0, "alter")
+        alter_lookup = "use alter skills or call alter_task_context (or alter_search / alter_get_note) with this stage's goal"
+        if knowledge == "alter":  # the domain knowledge and glossary come only from alter
+            how = f"Before editing, retrieve the project's domain knowledge and glossary from alter: {alter_lookup}."
+        else:  # file knowledge: the index says which topic files matter; open only those
+            how = ("Before editing, retrieve the project's domain knowledge and glossary: read .ego/knowledge/index.md if it exists "
+                   "and open only the topic files this stage needs (`ego knowledge search <words>` finds them)"
+                   + (f"; also {alter_lookup}" if servers else "") + ".")
         parts.append("## Required MCP / Knowledge context\n"
                      + (("Required MCP servers: " + ", ".join(servers) + "\n") if servers else "")
-                     + "Before editing, retrieve the project's domain knowledge and glossary: use alter skills or call alter_task_context "
-                       "(or alter_search / alter_get_note) with this stage's goal, and read .ego/knowledge/domain.md if it exists. "
-                       "Use retrieved terms exactly as defined there; if they conflict with the requirement, stop and report.")
+                     + how + " Use retrieved terms exactly as defined there; if they conflict with the requirement, stop and report.")
     if node.get("steps"):
         parts.append("## Implementation steps (follow in order, exactly as written; if a step cannot be done as written, "
                      "stop and report instead of improvising)\n" + "\n".join(f"{i}. {s.strip()}" for i, s in enumerate(node["steps"], 1)))

@@ -26,7 +26,7 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
     else:
         if not execute:raise EgoError("EXPLICIT_EXECUTION_REQUIRED","Planning via model requires --execute")
         cfg=load_config(root)
-        if cfg.memory == "alter":
+        if cfg.knowledge == "alter":
             from ..adapters.memory import ensure_alter_project_quietly
             ensure_alter_project_quietly(root)
         ctx=search(workdir,goal,cfg.code_intelligence,limit=8)
@@ -61,7 +61,7 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
                 "(a list of 1-8 required MCP server names). "
                 f"Available custom agents: {json.dumps([a['name'] for a in discover_agents(workdir)])}. "
                 + ("Memory is 'alter': set mcp to [\"alter\"] for nodes that need domain knowledge or glossary terms. "
-                   if cfg.memory == "alter" else "")
+                   if cfg.knowledge == "alter" else "")
                 + f"Allowed write scope: {json.dumps(scope)}. Goal: {goal}. "
                 f"Candidate files to inspect (pointers, not full content): {json.dumps(ctx)[:3000]}")
         if history:
@@ -78,7 +78,7 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
         response=run_agent(host,prompt,workdir,timeout=300,read_only=True,max_turns=8,
                            model=None if model in (None,"auto") else model,effort=effort,
                            lean=cfg.worker_context=="lean",
-                           mcp_servers=["alter"] if cfg.memory=="alter" else None)
+                           mcp_servers=["alter"] if cfg.knowledge=="alter" else None)
         usage={"cost_usd":response.cost_usd,**(response.usage or {})}
     try:
         if host!="mock":

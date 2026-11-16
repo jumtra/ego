@@ -22,11 +22,11 @@ MAX_SCAN_DEPTH = 6
 
 
 def synced_config(root: Path) -> tuple[Config, bool]:
-    """The saved config as a sync would apply it: `memory = "file"` moves to "alter" once an alter MCP server
+    """The saved config as a sync would apply it: `knowledge = "file"` moves to "alter" once an alter MCP server
     is configured, so the session hooks that record conversations come with the update. Opt out with
     EGO_SYNC_KEEP_MEMORY=1. Returns (config, migrated); nothing is written here."""
     cfg = load_config(root)
-    if cfg.memory != "file" or os.environ.get("EGO_SYNC_KEEP_MEMORY", "").lower() in ("1", "true", "yes", "on"):
+    if cfg.knowledge != "file" or os.environ.get("EGO_SYNC_KEEP_MEMORY", "").lower() in ("1", "true", "yes", "on"):
         return cfg, False
     from ..adapters.memory import _alter_mcp_spec
     try:
@@ -35,7 +35,7 @@ def synced_config(root: Path) -> tuple[Config, bool]:
         available = False
     if not available:
         return cfg, False
-    cfg.memory = "alter"
+    cfg.knowledge = "alter"
     return cfg, True
 
 
@@ -109,7 +109,7 @@ def sync_project(root: Path, *, apply: bool) -> dict[str, Any]:
         return {**before, "status": "ERROR", "message": str(exc)}
     return {**project_info(root), "status": "APPLIED", "previous_version": before["installed_version"],
             "snapshot_id": result["snapshot_id"], "changed": [c["path"] for c in result["changes"]],
-            **({"memory_migrated": "file -> alter"} if migrated else {})}
+            **({"knowledge_migrated": "file -> alter"} if migrated else {})}
 
 
 def sync_all(*, apply: bool) -> dict[str, Any]:

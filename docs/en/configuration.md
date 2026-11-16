@@ -12,7 +12,7 @@ profile = "balanced"
 policy_mode = "relaxed"
 hosts = ["claude", "codex", "opencode", "agy"]
 code_intelligence = "none"
-memory = "alter"
+knowledge = "alter"
 runtime_mode = "native"
 max_parallel = 2
 max_attempts = 3
@@ -53,7 +53,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `hosts` | all four | `claude`, `codex`, `opencode`, `agy` | CLIs to generate files for. This is not a routing choice: the host that runs a task is chosen per task |
 | `policy_mode` | `"relaxed"` | `strict`, `relaxed` | See [Policy mode](#policy-mode) |
 | `code_intelligence` | `"none"` | `none`, `codegraph`, `graphify` | Provider behind `ego code ...`. External tools are never installed by ego; without one, a built-in text search is used |
-| `memory` | `"alter"` | `file`, `alter` | Provider behind `ego memory ...`. See [Memory](#memory) |
+| `knowledge` | `"alter"` | `file`, `alter` | Where project knowledge lives (previously `memory`). See [Knowledge and memory](#knowledge-and-memory) |
 | `runtime_mode` | `"native"` | `native`, `managed` | Recorded default working style. It does not change command behavior: `/work` in the CLI is native, `ego work run` is always managed |
 | `tests` | `[]` | list of argv arrays | Test commands recorded by `--detect-tests`, e.g. `[["pytest", "-q"]]` |
 
@@ -124,14 +124,38 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 - A spec is a `{model, effort}` table or a list of them. `effort` may be a list (`["low", "middle"]`), each entry becoming a candidate: the example above is haiku/low, haiku/medium, sonnet/auto. `middle` means `medium`; omitted `effort` / `auto` means the host default.
 - With two or more candidates the node runs as `fallback`: the next candidate is tried on `UNAVAILABLE` / `TIMEOUT` / `RATE_LIMIT` (at most 8 candidates). A node that sets its own `model`/`models` ignores per-host specs.
 
-## Memory
+## Knowledge and memory
 
-| Provider | Storage | Notes |
+Two different things are stored, and each has its own place.
+
+| What | Where | Notes |
 |---|---|---|
-| `file` | `.ego/memory/items.json` in the project | Local only. Supports `add`, `search`, `list`, `delete` |
-| `alter` | Host-configured `alter` MCP server / skills (or optional `EGO_ALTER_MCP_COMMAND`) | Retrieves domain knowledge and glossary via `alter_task_context` / `alter_search` / `alter_get_note` and keeps host MCP servers available in managed runs (`lean = False`) |
+| **Project knowledge** (domain terms, glossary, decisions) | `knowledge = "file"`: `.ego/knowledge/`<br>`knowledge = "alter"`: the alter MCP server | Chosen by the `knowledge` key. Read and written through the hooks, `ego knowledge ...` (file) or the alter tools (alter) |
+| **Process memory** (facts about the work itself) | `.ego/memory/items.json` | Always local, whatever `knowledge` says. `ego memory add`, `search`, `list`, `delete` |
 
-Checkpoints are separate from memory items and always stored in `.ego/memory/handoffs/`.
+Checkpoints are separate again and always stored in `.ego/memory/handoffs/`.
+
+### `knowledge = "file"`
+
+```
+.ego/knowledge/
+  index.md          one line per topic: slug, summary, keywords. Read this first
+  topics/<slug>.md  one reading unit: the facts of one topic
+```
+
+- **Reading:** `CLAUDE.md` / `AGENTS.md` tell the agent to read `index.md` first and open only the topic files the task needs (`ego knowledge search <words>`, `ego knowledge get <slug>`). Managed nodes get the same instruction when an index exists.
+- **Writing:** `ego knowledge add '<fact>' [--topic <slug>] [--keyword <word>]...` reads the index first. A fact that matches an existing topic (shared keyword, or enough shared words) is merged into that file; identical lines are skipped and a longer line replaces its shorter version. Only a fact with no matching topic creates a new file and index line.
+- **Automatic recording:** `ego session checkpoint` writes the checkpoint's `decisions` into the store the same way (no model is called; the goal's words become keywords). Set `EGO_KNOWLEDGE_AUTO_RECORD=0` to turn it off.
+- A single `.ego/knowledge/domain.md` from earlier versions is still listed in the index as the read-only topic `domain`.
+
+### `knowledge = "alter"`
+
+- **Rules:** `CLAUDE.md` / `AGENTS.md` and `.claude/rules/` plus the project's AI usage rules from alter (`alter_ai_usage`, injected at session start).
+- **Reading:** `alter_task_context` for every prompt (UserPromptSubmit, AGY `PreInvocation`, OpenCode `chat.message`). Managed runs keep the alter MCP server available (`lean = False`).
+- **Writing:** automatic. The Stop / SessionEnd hooks and `ego session checkpoint` send the redacted conversation and checkpoint facts to alter (`alter_record_conversation`, `alter_session_digest`) for reviewable confirmation. Set `EGO_ALTER_AUTO_REVIEW=0` to turn it off. `ego knowledge ...` is an error in this mode.
+- **alter unreachable:** the SessionStart and UserPromptSubmit hooks report `ego ERROR: alter に接続できません (...)` to the user and the agent instead of staying silent. They never block the turn. `ego doctor` shows `knowledge_health`.
+
+`memory` was the earlier name of the `knowledge` key; an old `.ego/config.toml` with `memory = "..."` is read as `knowledge` and rewritten on the next `ego apply`. `--memory` still works as an alias of `--knowledge`.
 
 ## Environment variables
 
@@ -139,9 +163,9 @@ Checkpoints are separate from memory items and always stored in `.ego/memory/han
 |---|---|
 | `EGO_HOME` | Directory of the project registry (`projects.json`). Default `~/.config/ego` |
 | `EGO_CACHE_DIR` | Cache for detected host CLI capabilities. Default `~/.cache/ego` |
-| `EGO_ALTER_MCP_COMMAND` | Optional command line to start the Alter MCP server for direct `ego memory` CLI calls |
-| `EGO_ALTER_SEARCH_TOOL` | Optional MCP tool name used by `ego memory search` when `memory = "alter"` (default `alter_search`) |
-| `EGO_ALTER_WRITE_TOOL` | Optional MCP tool name used by `ego memory add` when `memory = "alter"` (default `alter_create_note`) |
+| `EGO_ALTER_MCP_COMMAND` | Optional command line to start the Alter MCP server for the direct calls the hooks and `ego session checkpoint` make (default: the alter server the host already configures) |
+| `EGO_ALTER_AUTO_REVIEW` | `0` stops the hooks and `ego session checkpoint` from sending conversations and checkpoint facts to alter (default on) |
+| `EGO_KNOWLEDGE_AUTO_RECORD` | `0` stops `ego session checkpoint` from recording decisions into `.ego/knowledge` (default on) |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_DATA_HOME` | Respected when `ego run` reads each CLI's session records |
 
 `EGO_RUN` is set by `ego run` for the CLI it starts; do not set it yourself.

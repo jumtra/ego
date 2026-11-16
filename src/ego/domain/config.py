@@ -10,7 +10,7 @@ from ..shared.util import EgoError, atomic_text
 
 HOSTS = ("claude", "codex", "opencode", "agy")
 PROVIDERS = ("codegraph", "graphify", "none")
-MEMORY = ("file", "alter")
+KNOWLEDGE = ("file", "alter")  # where project knowledge (terms, glossary, decisions) lives
 POLICIES = ("strict", "relaxed")
 ROLE_NAMES = ("coder", "tester", "judge")
 VALID_EFFORTS = {"auto", "low", "medium", "high", "xhigh", "max"}
@@ -89,7 +89,7 @@ class Config:
     policy_mode: str = "relaxed"
     hosts: list[str] = field(default_factory=lambda: ["claude", "codex", "opencode", "agy"])
     code_intelligence: str = "codegraph"
-    memory: str = "alter"
+    knowledge: str = "alter"  # "file" (.ego/knowledge index + topic files) or "alter" (alter MCP); process memory (`ego memory`) is always local
     runtime_mode: str = "native"
     max_parallel: int = 4
     max_attempts: int = 3
@@ -115,7 +115,7 @@ class Config:
             raise EgoError("INVALID_CONFIG", f"policy_mode must be one of {POLICIES}", 2)
         if not self.hosts or any(h not in HOSTS for h in self.hosts) or len(set(self.hosts)) != len(self.hosts):
             raise EgoError("INVALID_CONFIG", "Invalid/duplicate hosts", 2)
-        if self.code_intelligence not in PROVIDERS or self.memory not in MEMORY or self.runtime_mode not in ("native", "managed"):
+        if self.code_intelligence not in PROVIDERS or self.knowledge not in KNOWLEDGE or self.runtime_mode not in ("native", "managed"):
             raise EgoError("INVALID_CONFIG", "Invalid provider/runtime", 2)
         if self.isolation not in ("copy", "worktree"):
             raise EgoError("INVALID_CONFIG", "isolation must be 'copy' or 'worktree'", 2)
@@ -234,7 +234,7 @@ def dump_config(cfg: Config) -> str:
 V2_SECTIONS = {"runtime", "sdk", "authoring", "evaluation", "evolution"}
 HOST_ALIASES = {"antigravity": "agy"}
 PROFILE_ALIASES = {"standard": "balanced"}
-MEMORY_ALIASES = {"files": "file", "alter-mcp": "alter"}
+KNOWLEDGE_ALIASES = {"files": "file", "alter-mcp": "alter"}
 
 def _normalize_loaded_data(raw: dict[str, Any]) -> dict[str, Any]:
     data = dict(raw)
@@ -254,13 +254,16 @@ def _normalize_loaded_data(raw: dict[str, Any]) -> dict[str, Any]:
         if isinstance(data.get("code_intelligence"), dict):
             data["code_intelligence"] = data["code_intelligence"].get("provider", "none")
         if isinstance(data.get("memory"), dict):
-            data["memory"] = data["memory"].get("provider", "file")
+            data["memory"] = data["memory"].get("provider", "file")  # read as the legacy `memory` key below
         if isinstance(data.get("hosts"), dict):
             data["hosts"] = data["hosts"].get("enabled", ["claude", "codex", "opencode", "agy"])
     if isinstance(data.get("profile"), str):
         data["profile"] = PROFILE_ALIASES.get(data["profile"], data["profile"])
-    if isinstance(data.get("memory"), str):
-        data["memory"] = MEMORY_ALIASES.get(data["memory"], data["memory"])
+    if "memory" in data:  # legacy key: `memory` named the provider that is now `knowledge`
+        legacy = data.pop("memory")
+        data.setdefault("knowledge", legacy)
+    if isinstance(data.get("knowledge"), str):
+        data["knowledge"] = KNOWLEDGE_ALIASES.get(data["knowledge"], data["knowledge"])
     if isinstance(data.get("hosts"), list):
         data["hosts"] = [HOST_ALIASES.get(h, h) if isinstance(h, str) else h for h in data["hosts"]]
     return data

@@ -156,8 +156,8 @@ The same `clear_suggest_tokens` setting also generates hooks for the other CLIs 
 | CLI | Generated file | Context is measured from | Notes |
 |---|---|---|---|
 | Codex | `.codex/hooks.json` (`Stop`, `SessionStart` on `clear`) | the `token_count` event in the session record (`transcript_path`) | Codex asks you to review and trust project hooks once (`/hooks`) before they run |
-| AGY | `.agents/hooks.json` (`Stop`, `SessionStart`, and with `memory = "alter"` `PreInvocation`) | the latest planner response in the conversation transcript | AGY has no clear marker: a pending checkpoint is injected when the next session starts. AGY has no prompt-submit event: with `memory = "alter"` the `PreInvocation` hook reads the latest user prompt from the transcript and looks up alter knowledge once per prompt |
-| OpenCode | `.opencode/plugins/ego.ts` (plugin) | the latest assistant message of the session, read by the plugin | The plugin sends the follow-up prompt itself; the resume context is added without a reply. With `memory = "alter"` it also looks up alter knowledge for each user message (`chat.message`) |
+| AGY | `.agents/hooks.json` (`Stop`, `SessionStart`, and with `knowledge = "alter"` `PreInvocation`) | the latest planner response in the conversation transcript | AGY has no clear marker: a pending checkpoint is injected when the next session starts. AGY has no prompt-submit event: with `knowledge = "alter"` the `PreInvocation` hook reads the latest user prompt from the transcript and looks up alter knowledge once per prompt |
+| OpenCode | `.opencode/plugins/ego.ts` (plugin) | the latest assistant message of the session, read by the plugin | The plugin sends the follow-up prompt itself; the resume context is added without a reply. With `knowledge = "alter"` it also looks up alter knowledge for each user message (`chat.message`) |
 
 Inside `ego run` these hooks stand down, as the Claude Code ones do. The Codex, AGY and OpenCode hooks are written against each CLI's documented hook interface; the AGY and OpenCode ones were run against the installed CLIs, the Codex Stop payload was not exercised end to end.
 

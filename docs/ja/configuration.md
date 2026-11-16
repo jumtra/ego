@@ -12,7 +12,7 @@ profile = "balanced"
 policy_mode = "relaxed"
 hosts = ["claude", "codex", "opencode", "agy"]
 code_intelligence = "none"
-memory = "alter"
+knowledge = "alter"
 runtime_mode = "native"
 max_parallel = 2
 max_attempts = 3
@@ -53,7 +53,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `hosts` | 4 つすべて | `claude`、`codex`、`opencode`、`agy` | ファイルを生成する CLI。ルーティングの設定ではありません。タスクを実行するホストはタスクごとに選ばれます |
 | `policy_mode` | `"relaxed"` | `strict`、`relaxed` | [ポリシーモード](#ポリシーモード) を参照 |
 | `code_intelligence` | `"none"` | `none`、`codegraph`、`graphify` | `ego code ...` の裏で動くプロバイダ。外部ツールを ego が導入することはありません。ない場合は組み込みのテキスト検索を使います |
-| `memory` | `"alter"` | `file`、`alter` | `ego memory ...` の裏で動くプロバイダ。[メモリ](#メモリ) を参照 |
+| `knowledge` | `"alter"` | `file`、`alter` | プロジェクトのナレッジの置き場所（旧 `memory`）。[ナレッジとメモリ](#ナレッジとメモリ) を参照 |
 | `runtime_mode` | `"native"` | `native`、`managed` | 記録される既定の作業方式。コマンドの動作は変えません。CLI 内の `/work` は native、`ego work run` は常に managed です |
 | `tests` | `[]` | argv 配列のリスト | `--detect-tests` が記録するテストコマンド。例: `[["pytest", "-q"]]` |
 
@@ -124,14 +124,38 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 - 指定は `{model, effort}` テーブル、またはそのリストです。`effort` はリスト（`["low", "middle"]`）にでき、各要素が候補になります。上の例は haiku/low, haiku/medium, sonnet/auto です。`middle` は `medium`、省略または `auto` はホスト既定です。
 - 候補が2つ以上ある場合は `fallback` として実行し、`UNAVAILABLE` / `TIMEOUT` / `RATE_LIMIT` で次の候補を試します（最大8件）。ノード自身が `model`/`models` を指定した場合はホスト別指定を無視します。
 
-## メモリ
+## ナレッジとメモリ
 
-| プロバイダ | 保存先 | 備考 |
+保存するものは 2 種類あり、それぞれ置き場所が違います。
+
+| 内容 | 保存先 | 備考 |
 |---|---|---|
-| `file` | プロジェクト内の `.ego/memory/items.json` | ローカルのみ。`add`、`search`、`list`、`delete` をサポート |
-| `alter` | Host 設定済みの `alter` MCP サーバー／スキル（または任意の `EGO_ALTER_MCP_COMMAND`） | `alter_task_context` / `alter_search` / `alter_get_note` でドメイン知識や用語集を取得し、managed 実行でも Host の MCP サーバーを継承します（`lean = False`） |
+| **プロジェクトのナレッジ**（ドメイン用語、用語集、決定事項） | `knowledge = "file"`: `.ego/knowledge/`<br>`knowledge = "alter"`: alter MCP サーバー | `knowledge` キーで選択。フック、`ego knowledge ...`（file）または alter のツール（alter）で読み書きします |
+| **処理メモリ**（作業そのものに関する事実） | `.ego/memory/items.json` | `knowledge` に関わらず常にローカル。`ego memory add` / `search` / `list` / `delete` |
 
-チェックポイントはメモリ項目とは別に、常に `.ego/memory/handoffs/` に保存されます。
+チェックポイントはさらに別で、常に `.ego/memory/handoffs/` に保存されます。
+
+### `knowledge = "file"`
+
+```
+.ego/knowledge/
+  index.md          トピックごとに 1 行（slug・要約・キーワード）。最初に読む
+  topics/<slug>.md  読み込みの単位。1 トピックの事実
+```
+
+- **読む:** `CLAUDE.md` / `AGENTS.md` が「まず `index.md` を読み、タスクに必要なトピックファイルだけ開く」よう指示します（`ego knowledge search <words>`、`ego knowledge get <slug>`）。managed ノードにも、index があれば同じ指示が入ります。
+- **書く:** `ego knowledge add '<fact>' [--topic <slug>] [--keyword <word>]...` は、先に index を読みます。既存トピックに合致する事実（キーワード一致、または共通語が十分）はそのファイルに統合され、同一の行はスキップされ、より詳しい行は短い方を置き換えます。合致するトピックがない場合だけ、新しいファイルと index 行を作ります。
+- **自動記録:** `ego session checkpoint` が、チェックポイントの `decisions` を同じ方法でストアに書きます（モデルは呼びません。goal の単語がキーワードになります）。`EGO_KNOWLEDGE_AUTO_RECORD=0` で無効にできます。
+- 以前のバージョンの単一ファイル `.ego/knowledge/domain.md` は、読み取り専用のトピック `domain` として index に表示されます。
+
+### `knowledge = "alter"`
+
+- **ルール:** `CLAUDE.md` / `AGENTS.md` と `.claude/rules/` に加えて、alter のプロジェクト AI 利用ルール（`alter_ai_usage`。セッション開始時に注入）。
+- **読む:** プロンプトごとに `alter_task_context`（UserPromptSubmit、AGY は `PreInvocation`、OpenCode は `chat.message`）。managed 実行では alter MCP サーバーを使えるままにします（`lean = False`）。
+- **書く:** 自動。Stop / SessionEnd フックと `ego session checkpoint` が、秘匿化した会話とチェックポイントの要点を alter に送ります（`alter_record_conversation`、`alter_session_digest`。alter 側で確認を経ます）。`EGO_ALTER_AUTO_REVIEW=0` で無効にできます。このモードでは `ego knowledge ...` はエラーです。
+- **alter に接続できないとき:** SessionStart と UserPromptSubmit のフックが、黙らずに `ego ERROR: alter に接続できません (...)` をユーザーとエージェントに伝えます。ターンはブロックしません。`ego doctor` の `knowledge_health` でも確認できます。
+
+`memory` は `knowledge` キーの旧名です。`memory = "..."` が残る古い `.ego/config.toml` は `knowledge` として読まれ、次の `ego apply` で書き換えられます。`--memory` は `--knowledge` の別名として引き続き使えます。
 
 ## 環境変数
 
@@ -139,9 +163,9 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 |---|---|
 | `EGO_HOME` | プロジェクトレジストリ（`projects.json`）のディレクトリ。既定 `~/.config/ego` |
 | `EGO_CACHE_DIR` | 検出した CLI の機能のキャッシュ。既定 `~/.cache/ego` |
-| `EGO_ALTER_MCP_COMMAND` | `ego memory` CLI から Alter MCP サーバーを直接呼び出す場合の任意の起動コマンド |
-| `EGO_ALTER_SEARCH_TOOL` | `memory = "alter"` 時に `ego memory search` が使う任意の MCP ツール名（既定 `alter_search`） |
-| `EGO_ALTER_WRITE_TOOL` | `memory = "alter"` 時に `ego memory add` が使う任意の MCP ツール名（既定 `alter_create_note`） |
+| `EGO_ALTER_MCP_COMMAND` | フックと `ego session checkpoint` が Alter MCP サーバーを直接呼び出す場合の任意の起動コマンド（既定: ホストが設定済みの alter サーバー） |
+| `EGO_ALTER_AUTO_REVIEW` | `0` でフックと `ego session checkpoint` による会話・チェックポイントの alter への送信を止める（既定は有効） |
+| `EGO_KNOWLEDGE_AUTO_RECORD` | `0` で `ego session checkpoint` による `.ego/knowledge` への決定事項の記録を止める（既定は有効） |
 | `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`XDG_DATA_HOME` | `ego run` が各 CLI のセッション記録を読むときに参照 |
 
 `EGO_RUN` は `ego run` が起動する CLI 向けに設定する変数です。手動で設定しないでください。

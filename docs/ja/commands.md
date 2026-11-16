@@ -25,12 +25,12 @@
 
 | コマンド | 用途 |
 |---|---|
-| `ego apply [flags]` | プロジェクトを設定し、ホスト向けファイルを生成。フラグ: `--hosts`、`--profile`、`--policy`、`--models`、`--graph`、`--memory`、`--runtime`、`--clear-suggest-tokens`、`--detect-tests`、`--install-alter-skills`、`--dry-run`、`--check`、`--interactive`、`--non-interactive` |
+| `ego apply [flags]` | プロジェクトを設定し、ホスト向けファイルを生成。フラグ: `--hosts`、`--profile`、`--policy`、`--models`、`--graph`、`--knowledge`（`--memory` は別名）、`--runtime`、`--clear-suggest-tokens`、`--detect-tests`、`--install-alter-skills`、`--dry-run`、`--check`、`--interactive`、`--non-interactive` |
 | `ego status` | ドリフトの状態、導入済みと実行中のバージョン、最後のスナップショット |
 | `ego sync [--apply] [--all]` | `.ego/config.toml` から再生成。`--all` は登録済みの全プロジェクトを対象にする |
 | `ego rollback [snapshot]` | 直前の（または指定した）apply のスナップショットを復元 |
 | `ego uninstall [-y] [--cli]` | プロジェクトから ego を削除、または CLI のシンボリックリンクを削除 |
-| `ego init [--apply]` | プロジェクト検出を伴う、非対話のプレビュー / 作成。フラグ: `--profile`、`--hosts`、`--graph`、`--memory`、`--detect-tests`。`/harness-init` skill が使用 |
+| `ego init [--apply]` | プロジェクト検出を伴う、非対話のプレビュー / 作成。フラグ: `--profile`、`--hosts`、`--graph`、`--knowledge`、`--detect-tests`。`/harness-init` skill が使用 |
 | `ego projects list` / `scan <dir> [--depth N]` / `add <path>...` / `remove <path>...` | 適用済みプロジェクトのレジストリ |
 | `ego update [--check] [--yes] [--sync] [--sync-all]` | ego 自体を更新。ターミナルでは適用待ちのプロジェクト設定を適用するか尋ねる（このプロジェクトの差分 / 全プロジェクト / 適用しない）。オフライン: `--wheel <file> --sha256 <digest>` |
 | `ego doctor` | ホスト CLI、コード解析、メモリ、サンドボックス、skill の lint |
@@ -72,8 +72,10 @@
 
 | コマンド | 用途 |
 |---|---|
-| `ego memory add <text> [--tags <t>]... [--evidence <ref>]...` | 事実を保存 |
-| `ego memory search <query>` / `list` / `delete <id>` | 事実を検索、または管理（`list` と `delete` はファイルプロバイダのみ） |
+| `ego knowledge add <text> [--topic <slug>] [--summary <text>] [--keyword <w>]...` | `knowledge = "file"`: 検証済みのナレッジを記録。先に index を読み、合致するトピックファイルに統合し、合致がないときだけ新規作成 |
+| `ego knowledge index` / `search <words>` / `get <slug>...` | `knowledge = "file"`: index を読む、トピックを探す、トピックファイルを表示。`knowledge = "alter"` では `ego knowledge` はすべてエラー |
+| `ego memory add <text> [--tags <t>]... [--evidence <ref>]...` | 処理に関する事実を保存（常にローカル、`.ego/memory/items.json`） |
+| `ego memory search <query>` / `list` / `delete <id>` | 処理に関する事実を検索、または管理 |
 | `ego memory install-skills [--scope global\|project] [--clients <list>] [--no-agents] [--dry-run]` | `npx` 経由で外部ツール `alter-skills`（`github:jumtra/alter-skills`）をインストール |
 | `ego code doctor` | プロバイダの利用可否と機能 |
 | `ego code search <query>` / `symbol <name>` | 検索。組み込みのテキスト検索にフォールバック |

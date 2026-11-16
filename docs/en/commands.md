@@ -25,12 +25,12 @@ Details: [Setup](setup.md).
 
 | Command | Purpose |
 |---|---|
-| `ego apply [flags]` | Configure a project and generate host files. Flags: `--hosts`, `--profile`, `--policy`, `--models`, `--graph`, `--memory`, `--runtime`, `--clear-suggest-tokens`, `--detect-tests`, `--install-alter-skills`, `--dry-run`, `--check`, `--interactive`, `--non-interactive` |
+| `ego apply [flags]` | Configure a project and generate host files. Flags: `--hosts`, `--profile`, `--policy`, `--models`, `--graph`, `--knowledge` (`--memory` is an alias), `--runtime`, `--clear-suggest-tokens`, `--detect-tests`, `--install-alter-skills`, `--dry-run`, `--check`, `--interactive`, `--non-interactive` |
 | `ego status` | Drift status, installed vs. running version, last snapshot |
 | `ego sync [--apply] [--all]` | Re-render from `.ego/config.toml`; `--all` covers every registered project |
 | `ego rollback [snapshot]` | Restore the last (or a named) apply snapshot |
 | `ego uninstall [-y] [--cli]` | Remove ego from the project, or the CLI symlinks |
-| `ego init [--apply]` | Non-interactive preview/creation with project detection. Flags: `--profile`, `--hosts`, `--graph`, `--memory`, `--detect-tests`. Used by the `/harness-init` skill |
+| `ego init [--apply]` | Non-interactive preview/creation with project detection. Flags: `--profile`, `--hosts`, `--graph`, `--knowledge`, `--detect-tests`. Used by the `/harness-init` skill |
 | `ego projects list` / `scan <dir> [--depth N]` / `add <path>...` / `remove <path>...` | The registry of applied projects |
 | `ego update [--check] [--yes] [--sync] [--sync-all]` | Update ego itself; in a terminal, asks whether to apply pending project configs (this project's diff / all projects / none). Offline: `--wheel <file> --sha256 <digest>` |
 | `ego doctor` | Host CLIs, code intelligence, memory, sandbox, skill lint |
@@ -72,8 +72,10 @@ Details: [Sessions](sessions.md).
 
 | Command | Purpose |
 |---|---|
-| `ego memory add <text> [--tags <t>]... [--evidence <ref>]...` | Store a fact |
-| `ego memory search <query>` / `list` / `delete <id>` | Recall or manage facts (`list` and `delete`: file provider only) |
+| `ego knowledge add <text> [--topic <slug>] [--summary <text>] [--keyword <w>]...` | `knowledge = "file"`: record verified knowledge. Reads the index first and merges into the matching topic file, creating one only when none matches |
+| `ego knowledge index` / `search <words>` / `get <slug>...` | `knowledge = "file"`: read the index, find topics, print topic files. All `ego knowledge` commands are an error with `knowledge = "alter"` |
+| `ego memory add <text> [--tags <t>]... [--evidence <ref>]...` | Store a process fact (always local, `.ego/memory/items.json`) |
+| `ego memory search <query>` / `list` / `delete <id>` | Recall or manage process facts |
 | `ego memory install-skills [--scope global\|project] [--clients <list>] [--no-agents] [--dry-run]` | Install external `alter-skills` from `github:jumtra/alter-skills` via `npx` |
 | `ego code doctor` | Provider availability and capabilities |
 | `ego code search <query>` / `symbol <name>` | Search; falls back to built-in text search |
