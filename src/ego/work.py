@@ -18,7 +18,7 @@ from .runner import run_agent, run_checked_command
 from .worker import run_worker
 from .util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
                    filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove,
-                   sha256, json_text, is_locked, atomic_bytes)
+                   copy_ignored_files, sha256, json_text, is_locked, atomic_bytes)
 from .task_routing import validate_task_context, resolve_routes, build_task_prompt
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 from .context import clip_output
@@ -413,6 +413,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                 staging.parent.mkdir(parents=True, exist_ok=True)
                 if git_worktree_add(root, staging, commit_or_branch="HEAD", new_branch=branch_name):
                     worktree_created = True
+                    copy_ignored_files(root, staging)
                 else:
                     staging.mkdir(parents=True, exist_ok=True)
                     simple_copy_tree(root, staging)

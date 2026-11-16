@@ -199,4 +199,35 @@ def simple_copy_tree(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, ignore=ignore, dirs_exist_ok=True, symlinks=False)
 
 
+# `git worktree add` checks out only tracked files, so gitignored project state (ego memory, host
+# configs generated for .claude/.codex/..., CLAUDE.md, node_modules, .env, ...) would be missing.
+# Copy every ignored entry so a worktree run sees the same environment as the project root, except
+# run state (it contains the worktrees themselves) and regenerable caches/build outputs.
+IGNORED_COPY_EXCLUDES = (".ego/state/", ".ego/locks/", ".ego/backups/")
+IGNORED_COPY_SKIP_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "build", "dist"}
+
+
+def copy_ignored_files(root: Path, dst: Path) -> None:
+    res = subprocess.run(["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
+                         cwd=root, capture_output=True, text=True, timeout=30)
+    if res.returncode != 0:
+        return
+    for rel in filter(None, res.stdout.split("\0")):
+        if rel.startswith(IGNORED_COPY_EXCLUDES) or any(rel == x.rstrip("/") for x in IGNORED_COPY_EXCLUDES):
+            continue
+        parts = rel.rstrip("/").split("/")
+        if any(p in IGNORED_COPY_SKIP_PARTS or p.endswith(".egg-info") for p in parts):
+            continue
+        src = root / rel.rstrip("/")
+        if src.is_symlink():
+            continue
+        target = dst / rel.rstrip("/")
+        if src.is_dir():
+            shutil.copytree(src, target, dirs_exist_ok=True, symlinks=False,
+                            ignore=lambda d, names: [n for n in names if n in IGNORED_COPY_SKIP_PARTS or n.endswith(".egg-info")])
+        elif src.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+
+
 def elapsed(start: float) -> float: return round(time.monotonic() - start, 4)
