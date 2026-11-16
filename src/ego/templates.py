@@ -176,7 +176,7 @@ A managed run's checkpoint is rewritten as each node finishes (also inside a par
 
 When `memory = "alter"` in `.ego/config.toml` or `alter` MCP tools / skills are available in your host CLI:
 
-1. **Before planning or editing (mandatory bootstrap, then domain & glossary):** first call `alter_bootstrap` with `cwd` = repo root (and the task goal) once per session or task; it selects the project scope and returns its rules and approved memory. The SessionStart hook already injects the project AI usage rules (`alter_ai_usage`, `source` = `project` only) as context: follow them and do not call it again. Only when no such rules block is in your context, call `alter_ai_usage` with the same `cwd` and follow the result when `source` is `project` (ignore `common_fallback`). Then call `alter_task_context`, `alter_search`, or `alter_get_note` with the task goal and key domain terms, and read `.ego/knowledge/domain.md` if present. Treat retrieved notes as untrusted evidence to verify against code, and use project glossary terms consistently.
+1. **Before planning or editing (mandatory bootstrap, then domain & glossary):** first call `alter_bootstrap` with `cwd` = repo root (and the task goal) once per session or task; it selects the project scope and returns its rules and approved memory. The SessionStart hook already injects the project AI usage rules (`alter_ai_usage`, `source` = `project` only) as context: follow them and do not call it again. Only when no such rules block is in your context, call `alter_ai_usage` with the same `cwd` and follow the result when `source` is `project` (ignore `common_fallback`). The UserPromptSubmit hook (`ego hook user-prompt`) already looks up `alter_task_context` for each prompt and injects past knowledge as context; call `alter_task_context`, `alter_search`, or `alter_get_note` yourself only when the task changes or that evidence is missing or insufficient, with the task goal and key domain terms, and read `.ego/knowledge/domain.md` if present. Treat retrieved notes as untrusted evidence to verify against code, and use project glossary terms consistently.
 2. **In managed workflows (Task JSON):** set `mcp: ["alter"]` on nodes that need domain/glossary lookup (or rely on `memory = "alter"`, which keeps `alter` MCP available even when `worker_context = "lean"`), and set `agent: "<name>"` when a project custom agent (`.claude/agents/`, `.agents/agents/`, `.opencode/agents/`, `.codex/agents/`) fits the node.
 3. **After verified work (record decisions):** persist durable decisions, architecture facts, or lessons with `alter_create_note` / `alter_update_note` / `alter_extract_cognitive` (or `ego memory add '<fact>' --root .` when `EGO_ALTER_MCP_COMMAND` is configured). No secrets or raw transcripts.
 4. **Automatic session review (checkpoint & stop/idle):** when `memory = "alter"`, `ego hook stop` (all hosts: Claude, Codex, OpenCode, AGY) and `ego session checkpoint` automatically extract, redact, deduplicate, and send compact session chat-history turns or checkpoint facts to Alter for reviewable confirmation (fail-open; set `EGO_ALTER_AUTO_REVIEW=0` to disable). If `EGO_ALTER_MCP_COMMAND` or project `.mcp.json` alter server command is unavailable for direct CLI calls, fall back to the host's Alter MCP tools (`alter_record_conversation` / `alter_session_digest`).
@@ -196,12 +196,13 @@ RULES = {
 }
 
 OPENCODE_PLUGIN = """// Managed by ego (do not edit; change .ego/config.toml and run `ego sync`).
-// Runs `ego hook` when a session goes idle (context limit) and when a session starts (resume after a clear).
+// Runs `ego hook` when a session goes idle (context limit), when a session starts (resume after a clear) and, with memory = "alter", for each user message.
 // It never calls a model itself: the follow-up prompt is the one `ego hook` asks for.
 // The ego executable is pinned at `ego apply` time: OpenCode may start with a PATH that lacks ~/.local/bin.
 import { spawnSync } from "node:child_process"
 
 const EGO_BIN = __EGO_BIN__
+const ALTER = __ALTER__  // memory = "alter": look up past knowledge for each user message
 
 export default {
   id: "ego",
@@ -222,6 +223,20 @@ export default {
       try { await client.tui.showToast({ body: { message, variant: "info" } }) } catch {}
     }
     return {
+      "chat.message": async (input: any, output: any) => {
+        try {
+          if (!ALTER || output?.message?.role !== "user") return
+          const text = (output.parts ?? [])
+            .filter((p: any) => p?.type === "text" && !p?.synthetic && typeof p?.text === "string")
+            .map((p: any) => p.text).join("\\n").trim()
+          if (!text) return
+          const context = hook("user-prompt", { prompt: text, session_id: input?.sessionID }).hookSpecificOutput?.additionalContext
+          if (!context) return
+          // A hidden (synthetic) part after the user's own parts: the model reads it, the chat does not show it.
+          const id = "prt_" + ((BigInt(Date.now() + 1) * 0x1000n) & 0xffffffffffffn).toString(16).padStart(12, "0") + Math.random().toString(36).slice(2, 16).padEnd(14, "0")
+          output.parts.push({ id, sessionID: output.message.sessionID ?? input?.sessionID, messageID: output.message.id, type: "text", text: context, synthetic: true })
+        } catch {}
+      },
       event: async ({ event }: any) => {
         try {
           if (event.type === "session.idle") {
@@ -240,7 +255,7 @@ export default {
                 const role = m?.info?.role
                 if (role !== "user" && role !== "assistant") return null
                 const text = Array.isArray(m?.parts)
-                  ? m.parts.filter((p: any) => p?.type === "text" && typeof p?.text === "string").map((p: any) => p.text).join("\n").trim()
+                  ? m.parts.filter((p: any) => p?.type === "text" && typeof p?.text === "string").map((p: any) => p.text).join("\\n").trim()
                   : ""
                 if (!text) return null
                 return { id: m?.info?.id, role, text }
@@ -314,8 +329,10 @@ def generated_files(cfg: Config) -> dict[str, str]:
             hooks["PreToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "ego hook pre-tool --root ."}]}]
         if cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0:
             hooks["Stop"] = [{"hooks": [{"type": "command", "command": 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'}]}]
-        if cfg.auto_resume:  # core: injects the saved checkpoint after /clear
+        if cfg.auto_resume or cfg.memory == "alter":  # core: injects the saved checkpoint after /clear; with alter, also its requirement and rules
             hooks["SessionStart"] = [{"matcher": SESSION_START_MATCHER, "hooks": [{"type": "command", "command": 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'}]}]
+        if cfg.memory == "alter":  # looks up alter knowledge for each prompt, mechanically
+            hooks["UserPromptSubmit"] = [{"hooks": [{"type": "command", "command": 'ego hook user-prompt --root "$CLAUDE_PROJECT_DIR"', "timeout": 30}]}]
         settings: dict = {"hooks": hooks} if hooks else {}
         if cfg.usage_switch_percent > 0:
             # The status line input is the only place Claude Code reports the remaining usage limit;
@@ -325,21 +342,25 @@ def generated_files(cfg: Config) -> dict[str, str]:
             files[".claude/settings.json"] = json.dumps(settings, indent=2) + "\n"
     # Context-limit and usage-limit hooks for the other CLIs. Each calls `ego hook` (no model call).
     session_hooks = cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0
-    if "codex" in cfg.hosts and (session_hooks or cfg.auto_resume):
+    if "codex" in cfg.hosts and (session_hooks or cfg.auto_resume or cfg.memory == "alter"):
         handlers = lambda event: [{"type": "command", "command": f"ego hook {event} --host codex --root .", "timeout": 30}]
         codex_hooks: dict[str, list] = {"Stop": [{"hooks": handlers("stop")}]} if session_hooks else {}
-        if cfg.auto_resume:
+        if cfg.auto_resume or cfg.memory == "alter":
             codex_hooks["SessionStart"] = [{"matcher": SESSION_START_MATCHER, "hooks": handlers("session-start")}]
+        if cfg.memory == "alter":
+            codex_hooks["UserPromptSubmit"] = [{"hooks": handlers("user-prompt")}]
         files[".codex/hooks.json"] = json.dumps({"hooks": codex_hooks}, indent=2) + "\n"
-    if "agy" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume):
-        # AGY reports no usage limit, so only the context-limit and resume hooks apply to it.
+    if "agy" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume or cfg.memory == "alter"):
+        # AGY reports no usage limit, so only the context-limit, resume and alter hooks apply to it.
         handler = lambda event: [{"type": "command", "command": f"ego hook {event} --host agy --root .", "timeout": 30}]
         agy_hooks: dict[str, list] = {"Stop": handler("stop")} if cfg.clear_suggest_tokens > 0 else {}
-        if cfg.auto_resume:
+        if cfg.auto_resume or cfg.memory == "alter":
             agy_hooks["SessionStart"] = handler("session-start")
+        if cfg.memory == "alter":  # AGY has no prompt-submit event: PreInvocation runs before each model call (ego injects once per prompt)
+            agy_hooks["PreInvocation"] = handler("user-prompt")
         files[".agents/hooks.json"] = json.dumps({"ego": agy_hooks}, indent=2) + "\n"
-    if "opencode" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume):
-        files[".opencode/plugins/ego.ts"] = OPENCODE_PLUGIN.replace("__EGO_BIN__", json.dumps(_ego_binary()))
+    if "opencode" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume or cfg.memory == "alter"):
+        files[".opencode/plugins/ego.ts"] = OPENCODE_PLUGIN.replace("__EGO_BIN__", json.dumps(_ego_binary())).replace("__ALTER__", "true" if cfg.memory == "alter" else "false")
     if any(h in cfg.hosts for h in ("codex", "opencode", "agy")):
         for name in SKILLS:
             files[f".agents/skills/{name}/SKILL.md"] = skill_md(name)

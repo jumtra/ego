@@ -129,8 +129,8 @@ def test_session_resume_arms_auto_resume_only_when_the_hook_is_installed(tmp_pat
 
 
 def test_hooks_are_generated_only_on_request_and_call_the_installed_command(project: Path):
-    assert ".claude/settings.json" not in generated_files(Config(clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
-    cfg = Config(); cfg.clear_suggest_tokens = 120000
+    assert ".claude/settings.json" not in generated_files(Config(clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0, memory="file"))
+    cfg = Config(memory="file"); cfg.clear_suggest_tokens = 120000
     hooks = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
     assert set(hooks) == {"Stop", "SessionStart"} and hooks["SessionStart"][0]["matcher"] == "startup|resume|clear"
     assert hooks["Stop"][0]["hooks"][0]["command"] == 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'
@@ -298,7 +298,7 @@ def test_near_usage_limit_asks_for_a_checkpoint_and_proposes_installed_clis_once
 
 
 def test_usage_switch_hooks_and_statusline_cli(tmp_path: Path, monkeypatch, capsys):
-    cfg = Config(clear_suggest_tokens=0, auto_resume=False); cfg.usage_switch_percent = 85
+    cfg = Config(clear_suggest_tokens=0, auto_resume=False, memory="file"); cfg.usage_switch_percent = 85
     settings = json.loads(generated_files(cfg)[".claude/settings.json"])
     assert set(settings["hooks"]) == {"Stop"}  # no SessionStart(clear) hook when auto_resume is off
     assert settings["statusLine"] == {"type": "command", "command": "ego hook statusline"}
@@ -421,8 +421,8 @@ def test_session_start_injects_the_pending_checkpoint_in_each_hosts_format(tmp_p
 
 
 def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path: Path):
-    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(Config(clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0)))
-    cfg = Config(); cfg.clear_suggest_tokens = 120000
+    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(Config(clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0, memory="file")))
+    cfg = Config(memory="file"); cfg.clear_suggest_tokens = 120000
     files = generated_files(cfg)
     codex = json.loads(files[".codex/hooks.json"])["hooks"]
     assert codex["Stop"][0]["hooks"][0]["command"] == "ego hook stop --host codex --root ."
@@ -430,7 +430,7 @@ def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path
     agy = json.loads(files[".agents/hooks.json"])["ego"]
     assert agy["Stop"][0]["command"] == "ego hook stop --host agy --root ." and agy["Stop"][0]["type"] == "command"
     assert "session.idle" in files[".opencode/plugins/ego.ts"] and "ego" in files[".opencode/plugins/ego.ts"]
-    usage_only = Config(clear_suggest_tokens=0, auto_resume=False); usage_only.usage_switch_percent = 85
+    usage_only = Config(clear_suggest_tokens=0, auto_resume=False, memory="file"); usage_only.usage_switch_percent = 85
     only = generated_files(usage_only)
     assert set(json.loads(only[".codex/hooks.json"])["hooks"]) == {"Stop"}  # Codex reports its limits
     assert ".agents/hooks.json" not in only and ".opencode/plugins/ego.ts" not in only  # AGY / OpenCode do not
@@ -517,3 +517,139 @@ def test_alter_project_rules_fail_open(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(memory.MCPStdio, "call_tool", lambda self, name, args: (_ for _ in ()).throw(memory.EgoError("MCP_TIMEOUT", name, 5)))
     assert session.alter_project_rules(tmp_path) == []
     assert session.with_alter_mandate({}, tmp_path)["hookSpecificOutput"]["additionalContext"] == session.ALTER_SESSION_MANDATE
+
+
+def _fake_alter_context(monkeypatch, payload, calls=None):
+    from ego import memory
+
+    monkeypatch.delenv("EGO_ALTER_PROMPT_CONTEXT", raising=False)
+    monkeypatch.setattr(memory, "_alter_mcp_spec", lambda root: (["alter-mcp"], None))
+
+    def call(self, name, args):
+        if calls is not None:
+            calls.append((name, args))
+        return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
+
+    monkeypatch.setattr(memory.MCPStdio, "call_tool", call)
+
+
+def test_alter_prompt_context_looks_up_evidence_for_the_prompt(tmp_path: Path, monkeypatch):
+    from ego import session
+
+    calls: list = []
+    _fake_alter_context(monkeypatch, {"evidence": [{"title": "決定A", "excerpt": "\n## 内容\n理由 B", "source_ref": "note:1@r1"}, {"excerpt": "no title"}]}, calls)
+    out = session.alter_prompt_context(tmp_path, "/work 過去の決定を探したい")
+    assert "- 決定A: 内容 理由 B [note:1@r1]" in out and "no title" not in out
+    assert calls == [("alter_task_context", {"task": "過去の決定を探したい", "cwd": str(tmp_path)})]
+
+
+def test_alter_prompt_context_is_silent_when_nothing_to_say(tmp_path: Path, monkeypatch):
+    from ego import memory, session
+
+    calls: list = []
+    _fake_alter_context(monkeypatch, {"evidence": []}, calls)
+    assert session.alter_prompt_context(tmp_path, "十分に長いプロンプトです") == ""
+    assert session.alter_prompt_context(tmp_path, "/clear") == "" and session.alter_prompt_context(tmp_path, "ok") == ""
+    assert len(calls) == 1  # the short ones never reach alter
+    monkeypatch.setenv("EGO_ALTER_PROMPT_CONTEXT", "0")
+    assert session.alter_prompt_context(tmp_path, "十分に長いプロンプトです") == ""
+    monkeypatch.delenv("EGO_ALTER_PROMPT_CONTEXT")
+    monkeypatch.setattr(memory.MCPStdio, "call_tool", lambda self, name, args: (_ for _ in ()).throw(memory.EgoError("MCP_TIMEOUT", name, 5)))
+    assert session.alter_prompt_context(tmp_path, "十分に長いプロンプトです") == ""
+
+
+def test_alter_memory_uses_the_host_configured_server(tmp_path: Path, monkeypatch):
+    from ego import memory
+
+    monkeypatch.delenv("EGO_ALTER_MCP_COMMAND", raising=False)
+    monkeypatch.setattr(memory, "_alter_mcp_spec", lambda root: (["alter-mcp"], {"K": "v"}))
+    assert memory.AlterMemory(tmp_path).mcp is not None
+    assert memory.memory_health(tmp_path, "alter")["mcp_resolved"] is True
+    monkeypatch.setattr(memory, "_alter_mcp_spec", lambda root: None)
+    assert memory.AlterMemory(tmp_path).mcp is None
+    assert memory.memory_health(tmp_path, "alter")["mcp_resolved"] is False
+
+
+def test_alter_memory_installs_the_user_prompt_hook(tmp_path: Path):
+    from ego.config import Config
+    from ego.templates import generated_files as render_files
+
+    files = render_files(Config(memory="alter", hosts=["claude", "codex"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    assert "ego hook user-prompt" in files[".claude/settings.json"] and "ego hook user-prompt" in files[".codex/hooks.json"]
+    plain = render_files(Config(memory="file", hosts=["claude"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    assert ".claude/settings.json" not in plain
+
+
+def test_alter_memory_installs_the_same_hooks_on_every_host(tmp_path: Path):
+    from ego.config import Config
+    from ego.templates import generated_files as render_files
+
+    files = render_files(Config(memory="alter", hosts=["claude", "codex", "opencode", "agy"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    claude = json.loads(files[".claude/settings.json"])["hooks"]
+    codex = json.loads(files[".codex/hooks.json"])["hooks"]
+    agy = json.loads(files[".agents/hooks.json"])["ego"]
+    assert "SessionStart" in claude and "UserPromptSubmit" in claude  # the requirement and rules, then the per-prompt lookup
+    assert "SessionStart" in codex and "UserPromptSubmit" in codex
+    assert "session-start --host agy" in agy["SessionStart"][0]["command"]
+    assert agy["PreInvocation"][0]["command"] == "ego hook user-prompt --host agy --root ."
+    plugin = files[".opencode/plugins/ego.ts"]
+    assert "const ALTER = true" in plugin and '"chat.message"' in plugin and '"user-prompt"' in plugin
+    off = render_files(Config(memory="file", hosts=["opencode"], auto_resume=True, clear_suggest_tokens=0, usage_switch_percent=0))
+    assert "const ALTER = false" in off[".opencode/plugins/ego.ts"]
+    assert "PreInvocation" not in render_files(Config(memory="file", hosts=["agy"], auto_resume=True))[".agents/hooks.json"]
+
+
+def test_opencode_plugin_is_valid_typescript_text():
+    from ego.config import Config
+    from ego.templates import generated_files as render_files
+
+    plugin = render_files(Config(memory="alter", hosts=["opencode"]))[".opencode/plugins/ego.ts"]
+    for line in plugin.splitlines():  # a string literal must never be split across lines
+        assert line.count('"') % 2 == 0, line
+
+
+def test_session_start_for_alter_alone_does_not_resume_a_checkpoint(tmp_path: Path, monkeypatch, capsys):
+    from ego import session
+
+    apply_install(tmp_path, Config(memory="alter", auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    monkeypatch.setattr(session, "clear_resume", lambda root, obj: (_ for _ in ()).throw(AssertionError("resume must stay off")))
+    out = _hook(monkeypatch, capsys, tmp_path, "session-start", "claude", {"source": "clear", "cwd": str(tmp_path)})
+    assert "alter_bootstrap" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def _agy_prompts(path: Path, *prompts: str) -> None:
+    rows = []
+    for i, text in enumerate(prompts):
+        rows.append({"type": "USER_INPUT", "source": "USER_EXPLICIT", "content": text, "step_index": i * 2})
+        rows.append({"type": "PLANNER_RESPONSE", "source": "MODEL", "content": "ok", "step_index": i * 2 + 1})
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf8")
+
+
+def test_agy_prompt_is_handed_out_once_per_user_message(tmp_path: Path):
+    from ego import session
+
+    (tmp_path / ".ego").mkdir()
+    transcript = tmp_path / "t.jsonl"
+    payload = {"session_id": "c1", "transcript_path": str(transcript)}
+    assert session.new_transcript_prompt(tmp_path, payload) == ""  # nothing written yet
+    _agy_prompts(transcript, "最初の依頼です")
+    assert session.new_transcript_prompt(tmp_path, payload) == "最初の依頼です"
+    assert session.new_transcript_prompt(tmp_path, payload) == ""  # PreInvocation fires again between tool calls
+    _agy_prompts(transcript, "最初の依頼です", "次の依頼です")
+    assert session.new_transcript_prompt(tmp_path, payload) == "次の依頼です"
+    assert session.new_transcript_prompt(tmp_path, {"session_id": "c2", "transcript_path": str(transcript)}) == "次の依頼です"  # per session
+    assert session.new_transcript_prompt(tmp_path, {"transcript_path": str(transcript)}) == ""
+
+
+def test_agy_user_prompt_hook_injects_alter_evidence_as_a_system_message(tmp_path: Path, monkeypatch, capsys):
+    apply_install(tmp_path, Config(memory="alter", clear_suggest_tokens=0, usage_switch_percent=0))
+    transcript = tmp_path / "t.jsonl"
+    _agy_prompts(transcript, "過去の決定を探したい")
+    _fake_alter_context(monkeypatch, {"evidence": [{"title": "決定A", "excerpt": "理由", "source_ref": "note:1@r1"}]})
+    payload = ({"conversationId": "c9", "transcriptPath": str(transcript), "cwd": str(tmp_path)})
+    for expect in (True, False):  # the second model call of the same prompt adds nothing
+        out = _hook(monkeypatch, capsys, tmp_path, "user-prompt", "agy", payload)
+        if expect:
+            assert "決定A" in out["injectSteps"][0]["systemMessage"]["systemMessage"]
+        else:
+            assert out == {}

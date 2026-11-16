@@ -529,8 +529,10 @@ class AlterMemory:
     """alter-mcp provider. Host-configured alter MCP is the default; EGO_ALTER_MCP_COMMAND enables direct CLI calls."""
     def __init__(self, root: Path):
         self.root = root
-        raw=os.environ.get("EGO_ALTER_MCP_COMMAND", "")
-        self.mcp=MCPStdio(shlex.split(raw)) if raw else None
+        # EGO_ALTER_MCP_COMMAND wins; otherwise the alter server the host already configures
+        # (~/.claude.json or .mcp.json) is spawned directly, so no manual setup is needed.
+        spec=_alter_mcp_spec(root)
+        self.mcp=MCPStdio(spec[0],env=spec[1]) if spec else None
     def _host_guidance(self) -> dict:
         return {"provider":"alter","mode":"host-mcp","hint":ALTER_HOST_HINT}
     def add(self,text:str,**kw)->dict:
@@ -567,8 +569,9 @@ def memory_health(root:Path, name:str) -> dict:
                 "command_configured":configured,"tools_configured":tools_ok}
     if name == "alter":
         configured=bool(os.environ.get("EGO_ALTER_MCP_COMMAND"))
-        return {"provider":"alter","status":"ok" if configured else "host-managed",
-                "mode":"mcp-cli" if configured else "host-mcp","command_configured":configured,
+        resolved=configured or _alter_mcp_spec(root) is not None  # resolved from host config only; no server is started
+        return {"provider":"alter","status":"ok" if resolved else "host-managed",
+                "mode":"mcp-cli" if resolved else "host-mcp","command_configured":configured,"mcp_resolved":resolved,
                 "skills_installed":alter_skills_installed(root),
                 "hint":None if configured else ALTER_HOST_HINT}
     raise EgoError("UNKNOWN_MEMORY",name,2)

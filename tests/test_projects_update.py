@@ -88,7 +88,7 @@ def test_status_shows_version_difference_and_apply_sets_the_clear_limit(tmp_path
     capsys.readouterr()
     assert load_config(root).clear_suggest_tokens == 90000
     hooks = json.loads((root / ".claude/settings.json").read_text())["hooks"]
-    assert set(hooks) == {"Stop", "SessionStart"}
+    assert set(hooks) == {"Stop", "SessionStart", "UserPromptSubmit"}  # memory = alter adds the prompt lookup
     _age(root, "0.0.2")
     assert main(["status", "--root", str(root)]) == 0
     status = json.loads(capsys.readouterr().out)

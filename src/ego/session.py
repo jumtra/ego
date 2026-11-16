@@ -8,6 +8,7 @@ non-interactive CLI.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -814,6 +815,69 @@ def alter_project_rules(root: Path, timeout: int = 8) -> list[str]:
     return rules[:20]
 
 
+def alter_prompt_context(root: Path, prompt: str, timeout: int = 8) -> str:
+    """Evidence from alter (`alter_task_context`) for the user's prompt, as one context block; "" when none.
+
+    Runs mechanically on every prompt so past knowledge is looked up without the model having to ask.
+    Fail-open: no MCP config, a timeout, a short prompt or a malformed reply yield ""."""
+    if os.environ.get("EGO_ALTER_PROMPT_CONTEXT", "1").lower() in ("0", "false", "off", "no"):
+        return ""
+    task = " ".join(prompt.split())
+    if task.startswith("/"):  # a slash command: search for its arguments, not its name
+        task = task.partition(" ")[2].strip()
+    if len(task) < 6:
+        return ""
+    try:
+        from .memory import MCPStdio, _alter_mcp_spec
+        spec = _alter_mcp_spec(root)
+        if spec is None:
+            return ""
+        cmd, env = spec
+        result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_task_context", {"task": task[:500], "cwd": str(root)})
+        payload: Any = result
+        if isinstance(result, dict) and isinstance(result.get("content"), list):
+            payload = json.loads(result["content"][0]["text"])
+        evidence = payload.get("evidence") if isinstance(payload, dict) else None
+    except Exception:
+        return ""
+    lines: list[str] = []
+    for item in evidence[:5] if isinstance(evidence, list) else []:
+        if not isinstance(item, dict) or not item.get("title"):
+            continue
+        excerpt = " ".join(str(item.get("excerpt") or "").replace("#", " ").split())[:240]
+        ref = str(item.get("source_ref") or item.get("id") or "")[:80]
+        lines.append(f"- {item['title']}: {excerpt} [{ref}]")
+    if not lines:
+        return ""
+    return "alter: 過去ナレッジ（このプロンプトに関連。未検証の根拠として扱い、コードで確認する）:\n" + "\n".join(lines)
+
+
+def new_transcript_prompt(root: Path, payload: dict[str, Any], host: str = "agy") -> str:
+    """The latest user prompt in the host transcript, once; "" when it was already handed out or cannot be read.
+
+    AGY has no prompt-submit event and its payload carries no prompt text: the `PreInvocation` hook fires before
+    every model call (also between tool calls), so the prompt is read from the transcript and each one is
+    returned a single time per session."""
+    transcript, sid = payload.get("transcript_path"), str(payload.get("session_id") or "")
+    if not isinstance(transcript, str) or not sid:
+        return ""
+    from .memory import _extract_turn_from_obj
+    turn = next((t for t in (_extract_turn_from_obj(o, host) for o in reversed(_tail_objects(Path(transcript).expanduser(), 256 * 1024)))
+                 if t and t.get("role") == "user"), None)
+    if turn is None:
+        return ""
+    key = str(turn.get("id") or turn.get("sequence") or hashlib.sha1(turn["text"].encode("utf8")).hexdigest())
+    path = root.resolve() / ".ego" / "state" / "alter_prompts.json"
+    seen = read_json(path, {})
+    seen = seen if isinstance(seen, dict) else {}
+    if seen.get(sid) == key:
+        return ""
+    seen.pop(sid, None)
+    seen[sid] = key
+    write_json(path, dict(list(seen.items())[-50:]))  # bounded: the latest sessions only
+    return str(turn["text"])
+
+
 def with_alter_mandate(out: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
     """Add the alter-first requirement (and alter-managed project rules) to a session-start output, keeping any checkpoint advice already there."""
     merged = dict(out or {})
@@ -831,7 +895,10 @@ def with_alter_mandate(out: dict[str, Any], root: Path | None = None) -> dict[st
 
 
 def adapt_output(host: str, event: str, out: dict[str, Any], once: bool = False) -> dict[str, Any]:
-    """The advice in the output format `host` reads for `event` (`stop` or `session-start`)."""
+    """The advice in the output format `host` reads for `event` (`stop`, `session-start` or `user-prompt`)."""
+    if host == "agy" and event == "user-prompt":  # PreInvocation: a persistent system message before the model call
+        context = (out.get("hookSpecificOutput") or {}).get("additionalContext")
+        return {"injectSteps": [{"systemMessage": {"systemMessage": context}}]} if context else {}
     if host == "agy":
         if event == "stop":
             if out.get("decision") == "block":
