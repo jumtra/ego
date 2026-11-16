@@ -322,6 +322,8 @@ def test_the_wrapped_cli_is_typed_into(tmp_path: Path, monkeypatch):
 
 
 def test_hooks_stand_down_inside_ego_run(project: Path, monkeypatch, capsys):
+    cfg_path = project / ".ego/config.toml"
+    cfg_path.write_text(cfg_path.read_text().replace('memory = "file"', 'memory = "alter"'))
     save_checkpoint(project, "feat", goal="ship it")
     (project / ".claude").mkdir(exist_ok=True)
     (project / ".claude" / "settings.json").write_text('{"hooks": "ego hook session-start"}')

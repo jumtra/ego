@@ -814,6 +814,43 @@ def alter_project_rules(root: Path, timeout: int = 8) -> list[str]:
     return rules[:20]
 
 
+def alter_prompt_context(root: Path, prompt: str, timeout: int = 8) -> str:
+    """Evidence from alter (`alter_task_context`) for the user's prompt, as one context block; "" when none.
+
+    Runs mechanically on every prompt so past knowledge is looked up without the model having to ask.
+    Fail-open: no MCP config, a timeout, a short prompt or a malformed reply yield ""."""
+    if os.environ.get("EGO_ALTER_PROMPT_CONTEXT", "1").lower() in ("0", "false", "off", "no"):
+        return ""
+    task = " ".join(prompt.split())
+    if task.startswith("/"):  # a slash command: search for its arguments, not its name
+        task = task.partition(" ")[2].strip()
+    if len(task) < 6:
+        return ""
+    try:
+        from .memory import MCPStdio, _alter_mcp_spec
+        spec = _alter_mcp_spec(root)
+        if spec is None:
+            return ""
+        cmd, env = spec
+        result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_task_context", {"task": task[:500], "cwd": str(root)})
+        payload: Any = result
+        if isinstance(result, dict) and isinstance(result.get("content"), list):
+            payload = json.loads(result["content"][0]["text"])
+        evidence = payload.get("evidence") if isinstance(payload, dict) else None
+    except Exception:
+        return ""
+    lines: list[str] = []
+    for item in evidence[:5] if isinstance(evidence, list) else []:
+        if not isinstance(item, dict) or not item.get("title"):
+            continue
+        excerpt = " ".join(str(item.get("excerpt") or "").replace("#", " ").split())[:240]
+        ref = str(item.get("source_ref") or item.get("id") or "")[:80]
+        lines.append(f"- {item['title']}: {excerpt} [{ref}]")
+    if not lines:
+        return ""
+    return "alter: 過去ナレッジ（このプロンプトに関連。未検証の根拠として扱い、コードで確認する）:\n" + "\n".join(lines)
+
+
 def with_alter_mandate(out: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
     """Add the alter-first requirement (and alter-managed project rules) to a session-start output, keeping any checkpoint advice already there."""
     merged = dict(out or {})
