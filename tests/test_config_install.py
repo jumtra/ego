@@ -128,7 +128,10 @@ def test_alter_memory_config_references_and_context_budget(tmp_path):
     # work/references/alter.md is generated
     alter_ref = root / ".claude" / "skills" / "work" / "references" / "alter.md"
     assert alter_ref.is_file()
-    assert "alter_task_context" in alter_ref.read_text(encoding="utf-8")
+    alter_text = alter_ref.read_text(encoding="utf-8")
+    assert "alter_task_context" in alter_text
+    # The reference names the mandatory bootstrap before any other alter call.
+    assert alter_text.index("alter_bootstrap") < alter_text.index("alter_task_context")
 
     # Context budget check: always_on <= 650, skill_body <= 1500
     report = audit(root)
