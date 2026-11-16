@@ -10,7 +10,7 @@ from .util import EgoError, atomic_text
 
 HOSTS = ("claude", "codex", "opencode", "agy")
 PROVIDERS = ("codegraph", "graphify", "none")
-MEMORY = ("file", "engram", "alter")
+MEMORY = ("file", "alter")
 POLICIES = ("strict", "relaxed")
 ROLE_NAMES = ("coder", "tester", "judge")
 VALID_EFFORTS = {"auto", "low", "medium", "high", "xhigh", "max"}

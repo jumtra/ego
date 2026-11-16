@@ -66,7 +66,7 @@ ego apply
 | Profile | `minimal` / `balanced` / `full` | `balanced` |
 | Hosts（複数選択） | `claude` / `codex` / `opencode` / `agy` | 4 つすべて |
 | コード解析 | `codegraph` / `graphify` / `none` | `none` |
-| メモリ | `file` / `engram` / `alter` | `alter` |
+| メモリ | `file` / `alter` | `alter` |
 | 既定の実行方式 | `native` / `managed` | `native` |
 | テストコマンドを検出 | はい / いいえ（テストが未設定のときのみ） | いいえ |
 | この変更を適用しますか？ | はい / いいえ（変更ファイル一覧の後に表示） | **いいえ** |
@@ -86,7 +86,7 @@ ego apply
 | `--policy <mode>` | `relaxed`（既定）または `strict`。[設定](configuration.md#ポリシーモード) を参照 |
 | `--models <json>` | ホストごとの既定モデル。例: `'{"claude":"sonnet","codex":"auto"}'` |
 | `--graph <provider>` | `none`、`codegraph`、`graphify` |
-| `--memory <provider>` | `file`、`engram`、または `alter` |
+| `--memory <provider>` | `file` または `alter` |
 | `--runtime <mode>` | `native` または `managed`（記録される既定値） |
 | `--clear-suggest-tokens <N>` | セッションをチェックポイント保存してクリアするコンテキストサイズ。`0` で無効。[セッション](sessions.md) を参照 |
 | `--detect-tests` | テストコマンド候補を検出して設定に保存（実行はしません） |
