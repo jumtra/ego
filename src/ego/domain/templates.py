@@ -402,6 +402,9 @@ def generated_files(cfg: Config) -> dict[str, str]:
         for name in SKILLS:
             files[f".agents/skills/{name}/SKILL.md"] = skill_md(name)
         files.update(_work_references(".agents/skills"))
+        # Same rules as .claude/rules/: AGENTS.md points codex, opencode and agy at this directory.
+        for name in RULES:
+            files[f".agents/rules/{name}.md"] = f"# {name.title()}\n\n{RULES[name]}"
     if "opencode" in cfg.hosts:
         for name in AGENTS:
             permission = "permission:\n  edit: deny\n  bash: deny\n" if name == "reviewer" else ""
@@ -420,26 +423,29 @@ def generated_files(cfg: Config) -> dict[str, str]:
 MARK_BEGIN = "<!-- EGO:BEGIN managed; edit .ego/config.toml and run ego sync -->"
 MARK_END = "<!-- EGO:END managed -->"
 
-def instruction_block(cfg: Config) -> str:
+def instruction_block(cfg: Config, rules_dir: str = ".claude/rules") -> str:
     policy_note = (
         "Policy mode: relaxed (loose mode; user-requested git push, PR creation and config edits are permitted autonomously).\n"
         if getattr(cfg, "policy_mode", "strict") == "relaxed"
         else "Policy mode: strict (mutating remote/git push and sensitive config edits require manual user action).\n"
     )
     knowledge_note = (
-        "Knowledge: alter (alter skills/MCP, alter_task_context). Rules: this file and `.claude/rules/` plus the alter project AI usage rules. "
+        f"Knowledge: alter (alter skills/MCP, alter_task_context). Rules: this file and `{rules_dir}/` plus the alter project AI usage rules. "
         "MANDATORY: `alter_bootstrap`, `alter_ai_usage` (cwd = repo root); obey its rules."
         if cfg.knowledge == "alter"
         else "Knowledge: file. Read `.ego/knowledge/index.md` first (if it exists) and open only the topic files the task needs; "
              "record verified knowledge with `ego knowledge add`."
     )
+    # Claude Code loads .claude/rules/ itself; the other hosts only follow what AGENTS.md tells them.
+    rules_note = f"Rules: read every file in `{rules_dir}/` before editing.\n" if rules_dir != ".claude/rules" else ""
     return (f"{MARK_BEGIN}\n"
             f"{policy_note}"
             f"Configured code intelligence: {cfg.code_intelligence}. {knowledge_note}\n"
+            f"{rules_note}"
             f"{MARK_END}\n")
 
 def root_instructions(cfg: Config) -> dict[str,str]:
     targets = {}
     if "claude" in cfg.hosts: targets["CLAUDE.md"] = instruction_block(cfg)
-    if any(h in cfg.hosts for h in ("codex", "opencode", "agy")): targets["AGENTS.md"] = instruction_block(cfg)
+    if any(h in cfg.hosts for h in ("codex", "opencode", "agy")): targets["AGENTS.md"] = instruction_block(cfg, ".agents/rules")
     return targets
