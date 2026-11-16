@@ -416,6 +416,10 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                 if git_worktree_add(root, staging, commit_or_branch="HEAD", new_branch=branch_name):
                     worktree_created = True
                     copy_ignored_files(root, staging)
+                    # File knowledge may be untracked/uncommitted, so a checkout alone can miss it.
+                    kdir = root / ".ego" / "knowledge"
+                    if kdir.is_dir():
+                        shutil.copytree(kdir, staging / ".ego" / "knowledge", dirs_exist_ok=True, symlinks=False)
                 else:
                     staging.mkdir(parents=True, exist_ok=True)
                     simple_copy_tree(root, staging)
