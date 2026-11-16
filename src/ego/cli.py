@@ -396,6 +396,11 @@ def _cmd_optimize(args):
         _print(opt.full(root,Path(args.fixture),args.host,args.skill,args.field,args.rounds,execute=args.execute,
                         spending_ref=args.spend_approval,trust_local=args.trusted_local));return 0
 
+def _cmd_state(args):
+    from .retention import prune_state
+    _print(prune_state(_root(args)));return 0
+
+
 def _cmd_memory(args):
     from .config import load_config
     from .memory import memory_provider, install_alter_skills
@@ -847,6 +852,8 @@ def build_parser()->argparse.ArgumentParser:
     r=s.add_parser("promote");r.add_argument("experiment");r.add_argument("--approval-ref",required=True);r.add_argument("--suite",required=True);r.add_argument("--host",default="mock");r.add_argument("--approve",action="store_true")
     r=s.add_parser("full");r.add_argument("--fixture",required=True);r.add_argument("--host",default="mock");r.add_argument("--skill",default="work");r.add_argument("--field",default="skill.description");r.add_argument("--rounds",type=int,default=1);r.add_argument("--execute",action="store_true");r.add_argument("--spend-approval");r.add_argument("--trusted-local",action="store_true")
     sp.set_defaults(func=_cmd_optimize)
+    sp=sub.add_parser("state",help="Enforce retention limits on .ego/state and related growth paths");common(sp);s=sp.add_subparsers(dest="action",required=True)
+    s.add_parser("prune",help="Remove entries beyond the retention limits now (also runs automatically)").set_defaults(func=_cmd_state)
     sp=sub.add_parser("memory");common(sp);s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("add");r.add_argument("text");r.add_argument("--tags",action="append");r.add_argument("--evidence",action="append")
     r=s.add_parser("search");r.add_argument("query");s.add_parser("list");r=s.add_parser("delete");r.add_argument("id")

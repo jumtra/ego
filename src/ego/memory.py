@@ -517,6 +517,8 @@ def submit_alter_session_review(
             "updated_at": now(),
         }
         write_json(state_path, {"schema_version": 1, "sessions": updated_sessions})
+        from .retention import prune_state
+        prune_state(root)
         return {"status": "submitted", "session_id": sid, "count": len(extracted), "result": result}
     except Exception as exc:
         return {"status": "error", "reason": str(exc), "session_id": sid}
