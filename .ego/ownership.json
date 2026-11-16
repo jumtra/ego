@@ -8,7 +8,7 @@
     ".agents/skills/harness-init/SKILL.md": "a658dc653c09ddcc6dedc1073150bc9aef650b1463fe94439982d071016d2498",
     ".agents/skills/work-plan/SKILL.md": "ced6cedb3c45b740025cf1bcda50329f7673bc268ea20bd3718e079ad971cf25",
     ".agents/skills/work/SKILL.md": "d33e88e7daeeb74950ec0e97982ebd6bd5201923276323a23fc219ec97c2af18",
-    ".agents/skills/work/references/alter.md": "6bebbc599db6f3f9889000bc582c2e8198617ae1e8ab42665962338e3f1706b1",
+    ".agents/skills/work/references/alter.md": "6d8076523f2bdccdfa6eb3a21d4ada29566386c16e6ecfbb591a348b7304effe",
     ".agents/skills/work/references/checkpoint.md": "b41c59e1f346a9105659c7f24c44728e7e37882bda780f5d86faf57468bee3c0",
     ".agents/skills/work/references/loop.md": "8f537e63486ec0ec53a99fec170c3981d549326eeb535507d2989bfb36baf1d6",
     ".agents/skills/work/references/managed.md": "443fc52ebaa4985f80167215fd10ce3183d572ef7a9fd7e55d4248877dceb24b",
@@ -22,7 +22,7 @@
     ".claude/skills/harness-init/SKILL.md": "a658dc653c09ddcc6dedc1073150bc9aef650b1463fe94439982d071016d2498",
     ".claude/skills/work-plan/SKILL.md": "ced6cedb3c45b740025cf1bcda50329f7673bc268ea20bd3718e079ad971cf25",
     ".claude/skills/work/SKILL.md": "d33e88e7daeeb74950ec0e97982ebd6bd5201923276323a23fc219ec97c2af18",
-    ".claude/skills/work/references/alter.md": "6bebbc599db6f3f9889000bc582c2e8198617ae1e8ab42665962338e3f1706b1",
+    ".claude/skills/work/references/alter.md": "6d8076523f2bdccdfa6eb3a21d4ada29566386c16e6ecfbb591a348b7304effe",
     ".claude/skills/work/references/checkpoint.md": "b41c59e1f346a9105659c7f24c44728e7e37882bda780f5d86faf57468bee3c0",
     ".claude/skills/work/references/loop.md": "8f537e63486ec0ec53a99fec170c3981d549326eeb535507d2989bfb36baf1d6",
     ".claude/skills/work/references/managed.md": "443fc52ebaa4985f80167215fd10ce3183d572ef7a9fd7e55d4248877dceb24b",
@@ -37,7 +37,7 @@
     ".ego/spec/skills/harness-init/SKILL.md": "a658dc653c09ddcc6dedc1073150bc9aef650b1463fe94439982d071016d2498",
     ".ego/spec/skills/work-plan/SKILL.md": "ced6cedb3c45b740025cf1bcda50329f7673bc268ea20bd3718e079ad971cf25",
     ".ego/spec/skills/work/SKILL.md": "d33e88e7daeeb74950ec0e97982ebd6bd5201923276323a23fc219ec97c2af18",
-    ".ego/spec/skills/work/references/alter.md": "6bebbc599db6f3f9889000bc582c2e8198617ae1e8ab42665962338e3f1706b1",
+    ".ego/spec/skills/work/references/alter.md": "6d8076523f2bdccdfa6eb3a21d4ada29566386c16e6ecfbb591a348b7304effe",
     ".ego/spec/skills/work/references/checkpoint.md": "b41c59e1f346a9105659c7f24c44728e7e37882bda780f5d86faf57468bee3c0",
     ".ego/spec/skills/work/references/loop.md": "8f537e63486ec0ec53a99fec170c3981d549326eeb535507d2989bfb36baf1d6",
     ".ego/spec/skills/work/references/managed.md": "443fc52ebaa4985f80167215fd10ce3183d572ef7a9fd7e55d4248877dceb24b",
@@ -46,10 +46,10 @@
     ".opencode/agents/implementer.md": "59c52f6931e48dc865226690e91b83c6920ebc0a8ce376a1a381eb9390d14c00",
     ".opencode/agents/reviewer.md": "a6bc0b2232980b388d066620a61f5fcea8e3b0311b3d83ea0b5432396a8b6b52",
     ".opencode/plugins/ego.ts": "c7cf5f9e17085f1619214533892d372217580ee94900ca118b4775370ceeb5e4",
-    "AGENTS.md": "87f1a628ac4f298dd963334c8ef7343eeaeae46ae2d4f50deddf40e0ce8afb2e",
-    "CLAUDE.md": "87f1a628ac4f298dd963334c8ef7343eeaeae46ae2d4f50deddf40e0ce8afb2e"
+    "AGENTS.md": "9cfe3a03d3dfb424efd341461670433e5d661597e32260f5211c34f9b5ecffae",
+    "CLAUDE.md": "9cfe3a03d3dfb424efd341461670433e5d661597e32260f5211c34f9b5ecffae"
   },
   "installed_version": "0.0.26",
-  "last_snapshot_id": "snapshot-47ae4f20d087",
+  "last_snapshot_id": "snapshot-5e66c358a3c1",
   "schema_version": 1
 }

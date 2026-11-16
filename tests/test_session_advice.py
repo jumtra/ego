@@ -475,3 +475,44 @@ def test_checkpoint_under_ego_run_records_the_run(tmp_path: Path, monkeypatch, c
 def test_clear_resume_ignores_non_clear_sources(tmp_path: Path):
     for source in ("startup", "resume", "compact", None):
         assert clear_resume(tmp_path, {"source": source} if source else {}) == {}
+
+
+def _fake_alter_usage(monkeypatch, payload):
+    from ego import memory
+
+    monkeypatch.delenv("EGO_ALTER_SESSION_RULES", raising=False)
+    monkeypatch.setattr(memory, "_alter_mcp_spec", lambda root: (["alter-mcp"], None))
+    monkeypatch.setattr(
+        memory.MCPStdio, "call_tool",
+        lambda self, name, args: {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]} if name == "alter_ai_usage" else {},
+    )
+
+
+def test_alter_project_rules_are_injected_at_session_start(tmp_path: Path, monkeypatch):
+    from ego import session
+
+    _fake_alter_usage(monkeypatch, {"scope": "project/x", "source": "project",
+                                    "text": "- 日本語: 日本語で回答する\n- 検証: テストを先に確認する\n-  \nnot a rule"})
+    context = session.with_alter_mandate({}, tmp_path)["hookSpecificOutput"]["additionalContext"]
+    assert context.startswith(session.ALTER_SESSION_MANDATE)
+    assert "- 日本語: 日本語で回答する" in context and "- 検証: テストを先に確認する" in context
+    assert "not a rule" not in context
+
+
+def test_alter_common_fallback_rules_are_not_applied(tmp_path: Path, monkeypatch):
+    from ego import session
+
+    _fake_alter_usage(monkeypatch, {"scope": "project/x", "source": "common_fallback", "text": "- 共通: 共通ルール"})
+    assert session.alter_project_rules(tmp_path) == []
+
+
+def test_alter_project_rules_fail_open(tmp_path: Path, monkeypatch):
+    from ego import memory, session
+
+    _fake_alter_usage(monkeypatch, {})
+    monkeypatch.setattr(memory, "_alter_mcp_spec", lambda root: None)
+    assert session.alter_project_rules(tmp_path) == []
+    monkeypatch.setattr(memory, "_alter_mcp_spec", lambda root: (["alter-mcp"], None))
+    monkeypatch.setattr(memory.MCPStdio, "call_tool", lambda self, name, args: (_ for _ in ()).throw(memory.EgoError("MCP_TIMEOUT", name, 5)))
+    assert session.alter_project_rules(tmp_path) == []
+    assert session.with_alter_mandate({}, tmp_path)["hookSpecificOutput"]["additionalContext"] == session.ALTER_SESSION_MANDATE

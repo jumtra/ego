@@ -771,17 +771,52 @@ def normalize_payload(host: str, obj: Any) -> dict[str, Any]:
 
 ALTER_SESSION_MANDATE = (
     "ego: memory = \"alter\" is required on this host. Before planning or editing, call `alter_bootstrap` "
-    "with cwd set to the repo root, and use `alter_task_context` / `alter_search` for domain terms."
+    "with cwd set to the repo root, then call `alter_ai_usage` (cwd = repo root) and follow its rules when `source` is `project` "
+    "(ignore `common_fallback`); use `alter_task_context` / `alter_search` for domain terms."
 )
 
 
-def with_alter_mandate(out: dict[str, Any]) -> dict[str, Any]:
-    """Add the alter-first requirement to a session-start output, keeping any checkpoint advice already there."""
+def alter_project_rules(root: Path, timeout: int = 8) -> list[str]:
+    """This project's own AI usage rules from alter (`alter_ai_usage`), as plain lines.
+
+    Only `source == "project"` counts: alter falls back to the common list when a project has none, and
+    common rules must not be applied here. Fail-open: any missing MCP config, timeout or malformed reply yields []."""
+    if os.environ.get("EGO_ALTER_SESSION_RULES", "1").lower() in ("0", "false", "off", "no"):
+        return []
+    try:
+        from .memory import MCPStdio, _alter_mcp_spec
+        spec = _alter_mcp_spec(root)
+        if spec is None:
+            return []
+        cmd, env = spec
+        result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_ai_usage", {"cwd": str(root)})
+        payload: Any = result
+        if isinstance(result, dict) and isinstance(result.get("content"), list):
+            payload = json.loads(result["content"][0]["text"])
+        if not isinstance(payload, dict) or payload.get("source") != "project":
+            return []
+        text = payload.get("text")
+    except Exception:
+        return []
+    rules: list[str] = []
+    for line in text.splitlines() if isinstance(text, str) else []:
+        line = line.strip()
+        if line.startswith("- ") and line[2:].strip():
+            rules.append(" ".join(line[2:].split())[:500])
+    return rules[:20]
+
+
+def with_alter_mandate(out: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
+    """Add the alter-first requirement (and alter-managed project rules) to a session-start output, keeping any checkpoint advice already there."""
     merged = dict(out or {})
     hook = dict(merged.get("hookSpecificOutput") or {})
     hook.setdefault("hookEventName", "SessionStart")
     previous = hook.get("additionalContext") or ""
-    hook["additionalContext"] = f"{previous}\n{ALTER_SESSION_MANDATE}" if previous else ALTER_SESSION_MANDATE
+    mandate = ALTER_SESSION_MANDATE
+    rules = alter_project_rules(root) if root is not None else []
+    if rules:
+        mandate += "\nPJ AI利用ルール（alter 管理。必ず適用する）:\n" + "\n".join(f"- {rule}" for rule in rules)
+    hook["additionalContext"] = f"{previous}\n{mandate}" if previous else mandate
     merged["hookSpecificOutput"] = hook
     return merged
 
@@ -797,6 +832,7 @@ def adapt_output(host: str, event: str, out: dict[str, Any], once: bool = False)
             return {}
         context = (out.get("hookSpecificOutput") or {}).get("additionalContext")
         # Only a restored checkpoint is worth announcing; the alter requirement alone is silent context.
-        note = "" if context == ALTER_SESSION_MANDATE else "\nTell the user briefly that this checkpoint was loaded."
+        # The mandate comes first only when there is no checkpoint advice before it (see with_alter_mandate).
+        note = "" if (context or "").startswith(ALTER_SESSION_MANDATE) else "\nTell the user briefly that this checkpoint was loaded."
         return {"injectSteps": [{"systemMessage": {"systemMessage": f"{context}{note}"}}]} if context else {}
     return out
