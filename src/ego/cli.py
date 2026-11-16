@@ -539,7 +539,7 @@ def _cmd_hook(args):
                 # Inside `ego run` the checkpoint resume stands down, but the alter requirement is not a resume: keep it.
                 if load_config(root).memory=="alter":
                     from .session import with_alter_mandate
-                    out=with_alter_mandate(out)
+                    out=with_alter_mandate(out, root)
             out=adapt_output(host,args.event,out,once=bool(info.get("once")))
         except (ValueError,OSError,EgoError,KeyError,TypeError):out={}
         print(json.dumps(out,ensure_ascii=False));return 0
