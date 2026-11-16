@@ -17,7 +17,7 @@ from ..domain.policy import check_write, check_role_write
 from ..adapters.runner import run_agent, run_checked_command
 from .worker import run_worker
 from ..shared.util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
-                   filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove,
+                   filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove, git_branch_delete,
                    copy_ignored_files, sha256, json_text, is_locked, atomic_bytes)
 from ..domain.task_routing import validate_task_context, resolve_routes, build_task_prompt
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
@@ -570,6 +570,8 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         # An unfinished run keeps its worktree: resume and `--from` continue from that staging.
         if record.get("worktree") and should_cleanup and record["final_status"] in ("PASSED","COMPARISON_READY"):
             git_worktree_remove(root, staging, force=True)
+            # The staging branch is only a vehicle; drop it unless it holds unmerged commits.
+            record["branch_deleted"] = git_branch_delete(root, f"ego-task-{run_id}")
             record["worktree_cleaned"] = True
             write_json(record_path, record)
         milestone=("COMPLETED" if record["final_status"]=="PASSED" and record["applied"]

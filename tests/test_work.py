@@ -96,6 +96,14 @@ def test_work_skills_forbid_external_planning():
     assert 'Do not invoke external brainstorming or planning skills' in plan
 
 
+def test_work_skills_finish_with_yes_no_pr_and_cleanup():
+    work = skill_md('work')
+    assert 'yes/no' in work and 'gh pr create' in work and 'git worktree remove' in work
+    assert 'Finish' in skill_md('work-plan')
+    from ego.domain.templates import WORK_REFERENCES
+    assert 'Finish' in WORK_REFERENCES['managed']
+
+
 def test_v0012_work_skill_refreshes():
     from ego.domain.templates import LEGACY_WORK_HASHES
     assert '645c9862f86b9ea4e7db50885ceee9bd10fd98de3225a96f822878b212cd5039' in LEGACY_WORK_HASHES
@@ -289,6 +297,9 @@ def test_worktree_isolation_and_cleanup(tmp_path):
     staging_path = root / ".ego" / "state" / "runs" / res_clean["run_id"] / "staging"
     assert not staging_path.exists()
     assert not (root / "result.txt").exists()
+    assert res_clean["branch_deleted"] is True
+    branches = subprocess.run(["git", "branch", "--list", "ego-task-*"], cwd=root, capture_output=True, text=True).stdout
+    assert f"ego-task-{res_clean['run_id']}" not in branches
 
     # 2. worktree without cleanup (keep_worktree)
     res_keep = execute(root, task, worktree=True, cleanup_worktree=False)

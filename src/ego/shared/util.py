@@ -128,6 +128,12 @@ def git_worktree_remove(root: Path, path: Path, *, force: bool = True) -> bool:
     return res.returncode == 0
 
 
+def git_branch_delete(root: Path, branch: str) -> bool:
+    """Safe delete (-d): refuses a branch holding unmerged commits."""
+    res = subprocess.run(["git", "branch", "-d", branch], cwd=root, capture_output=True, text=True, timeout=30)
+    return res.returncode == 0
+
+
 def git_dirty(root: Path) -> bool:
     r = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, timeout=5)
     return r.returncode == 0 and bool(r.stdout.strip())
