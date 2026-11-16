@@ -158,3 +158,37 @@ def test_update_typo_is_accepted(tmp_path: Path, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["project_sync"]["status"] == "APPLIED"
     with pytest.raises(SystemExit):
         main(["totallyunknown"])
+
+
+def test_update_asks_which_pending_configs_to_apply(tmp_path: Path, capsys):
+    from ego.cli import _ask_config_sync
+    a = _apply(tmp_path / "a", hosts=["claude"])
+    b = _apply(tmp_path / "b")
+    _age(a); _age(b)
+    rows = [r for r in list_projects() if r["status"] == "CHANGES_PENDING"]
+    assert len(rows) == 2
+    answers = iter(["1\n"])
+    assert _ask_config_sync(a, rows, read=lambda: next(answers)) == "project"  # this project only
+    assert _ask_config_sync(b, rows, read=lambda: "2\n") == "all"
+    assert _ask_config_sync(a, rows, read=lambda: "3\n") == "none"
+    assert _ask_config_sync(a, rows, read=lambda: "\n") == "none"              # Enter keeps the safe default
+    assert _ask_config_sync(a, rows, read=lambda: "") == "none"                # end of input never applies
+    answers = iter(["9\n", "x\n", "2\n"])
+    assert _ask_config_sync(a, rows, read=lambda: next(answers)) == "all"      # invalid input re-asks
+    other = tmp_path / "elsewhere"; other.mkdir()
+    capsys.readouterr()
+    assert _ask_config_sync(other, rows, read=lambda: "1\n") == "all"          # an unregistered root gets no 'this project' option
+    assert "差分だけ適用" not in capsys.readouterr().err
+
+
+def test_interactive_update_applies_only_the_chosen_scope(tmp_path: Path, monkeypatch, capsys):
+    import io
+    a = _apply(tmp_path / "a", clear_suggest_tokens=150000)
+    _age(a)
+    monkeypatch.setattr(selfupdate, "self_update", lambda *x, **k: {"mode": "git", "update_available": False})
+    monkeypatch.setattr(selfupdate.sys, "stdin", io.StringIO("1\n"))
+    monkeypatch.setattr(selfupdate.sys, "stdout", type("T", (io.StringIO,), {"isatty": lambda self: True})())
+    monkeypatch.setattr(selfupdate.sys.stdin, "isatty", lambda: True, raising=False)
+    assert main(["update", "--root", str(a)]) == 0  # the in-terminal prompt picked 1: this project only
+    assert read_json(a / OWNERSHIP)["installed_version"] == __version__
+    assert load_config(a).clear_suggest_tokens == 150000
