@@ -184,7 +184,7 @@ A project with user-modified owned files is reported `BLOCKED` and left untouche
 ## Check the installation
 
 ```bash
-ego doctor            # host CLIs found, code intelligence, memory, sandbox, skill lint, modules
+ego doctor            # host CLIs found, code intelligence, memory, sandbox, skill lint
 ego hosts inspect     # CLI versions and the flags ego detected
 ego models list       # model catalog per host
 ```

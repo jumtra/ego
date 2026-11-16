@@ -133,22 +133,6 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 
 Checkpoints are separate from memory items and always stored in `.ego/memory/handoffs/`.
 
-## Optimization settings
-
-`ego optimize` (opt-in prompt/skill experiments) reads `.ego/optimization.toml`, written by `ego optimize configure ... --apply`. It is off by default and is never loaded by normal commands.
-
-| Key | Default | Range |
-|---|---|---|
-| `mode` | `"off"` | `off`, `analyze`, `shadow`, `assisted` |
-| `profile` | `"lite"` | `lite`, `full` |
-| `cost_policy` | `"manual_consent"` | `manual_consent`, `require_metered` |
-| `max_candidates` | `1` | 1–8 |
-| `max_rounds` | `1` | 1–5 |
-| `max_probe_runs` | `2` | 0–40 |
-| `max_wall_seconds` | `900` | 30–7200 |
-| `max_candidate_bytes` | `8192` | 100–32768 |
-| `require_human_approval` | `true` | must stay `true` |
-
 ## Environment variables
 
 | Variable | Purpose |

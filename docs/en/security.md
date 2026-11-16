@@ -14,7 +14,7 @@
 | Starting real AI CLIs | Requires `--trust-cli`. Skipping permissions requires `--autonomy bypass` together with `--attest-external-sandbox` |
 | Prompts | Output of earlier nodes is never appended to later prompts verbatim; later nodes read the verified files. Reference files and checkpoints are labeled as untrusted data |
 | Skill and prompt changes | Limited to harness-owned skill descriptions, marker-bounded skill bodies and the tool guide. Promotion needs evaluation evidence and `--approve`, and is reversible |
-| Spending | `ego optimize` is off by default; unmetered experiments need `--spend-approval`. Planner model calls need `--execute` |
+| Spending | Planner model calls need `--execute` |
 | Updates | `ego update` pins the GitHub repository, HTTPS, the wheel name, a stable version and the SHA256 from the GitHub API. No arbitrary URLs, shell pipelines or dependency installation. A git checkout is only fast-forwarded |
 | Stored data | Checkpoints and memory stay in the project. No conversation transcripts are collected. A redactor removes typical credential formats from persisted run results |
 

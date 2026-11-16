@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import sys
 from . import __version__
-from .util import EgoError, read_json, write_json, now
+from .shared.util import EgoError, read_json, write_json, now
 
 def _print(data):print(json.dumps(data,indent=2,ensure_ascii=False,default=str))
 def _root(args):return Path(getattr(args,"root", ".")).resolve()
@@ -20,8 +20,8 @@ def _project_target(args) -> Path:
 
 def _cmd_apply(args):
     """CWD-first installation; guided TTY choices or deterministic non-interactive use."""
-    from .config import load_config
-    from .install import installation_plan, apply_install
+    from .domain.config import load_config
+    from .usecases.install import installation_plan, apply_install
     root = _project_target(args)
     cfg = load_config(root)
     if args.hosts is not None: cfg.hosts = [h.strip() for h in args.hosts.split(",") if h.strip()]
@@ -46,7 +46,7 @@ def _cmd_apply(args):
         except Exception as exc:
             raise EgoError("INVALID_CONFIG", f"roles must be a valid JSON object: {exc}", 2)
     # No extra import or stdin inspection on scripted apply/check/dry-run.
-    from .apply_wizard import should_prompt, select_options, confirm_apply, WizardCancelled
+    from .usecases.apply_wizard import should_prompt, select_options, confirm_apply, WizardCancelled
     interactive = should_prompt(args)
     detect_tests = args.detect_tests
     if interactive:
@@ -57,7 +57,7 @@ def _cmd_apply(args):
             return 0
     cfg.validate()
     if detect_tests and not cfg.tests:
-        from .detect import detect
+        from .adapters.detect import detect
         cfg.tests = detect(root)["test_commands"]
     plan = installation_plan(root, cfg)
     changes = [c for c in plan["changes"] if c["action"] != "unchanged"]
@@ -70,13 +70,13 @@ def _cmd_apply(args):
                "changed_count": len(changes)}
     if args.dry_run or args.check or plan["conflicts"]:
         if getattr(args, "install_alter_skills", False) and not args.check and not plan["conflicts"]:
-            from .memory import install_alter_skills
+            from .adapters.memory import install_alter_skills
             summary["alter_skills"] = install_alter_skills(root, clients=cfg.hosts, scope="global", dry_run=True)
         _print(summary)
         return 5 if args.check and (changes or plan["conflicts"]) else 0
     if not changes:
         if getattr(args, "install_alter_skills", False):
-            from .memory import install_alter_skills
+            from .adapters.memory import install_alter_skills
             summary["alter_skills"] = install_alter_skills(root, clients=cfg.hosts, scope="global")
         _print(summary)
         return 0
@@ -91,14 +91,14 @@ def _cmd_apply(args):
     result = apply_install(root, cfg)
     out = {**summary, "status": result["status"], "snapshot_id": result["snapshot_id"]}
     if getattr(args, "install_alter_skills", False):
-        from .memory import install_alter_skills
+        from .adapters.memory import install_alter_skills
         out["alter_skills"] = install_alter_skills(root, clients=cfg.hosts, scope="global")
     _print(out)
     return 0
 
 def _cmd_status(args):
-    from .config import load_config
-    from .install import installation_plan, OWNERSHIP
+    from .domain.config import load_config
+    from .usecases.install import installation_plan, OWNERSHIP
     root = _project_target(args)
     ownership_path = root / OWNERSHIP
     ownership = read_json(ownership_path, {})
@@ -128,7 +128,7 @@ def _cmd_status(args):
     return 0
 
 def _cmd_rollback(args):
-    from .install import rollback, OWNERSHIP
+    from .usecases.install import rollback, OWNERSHIP
     root = _project_target(args)
     snapshot = getattr(args, "snapshot", None)
     if not snapshot:
@@ -147,7 +147,7 @@ def _cmd_rollback(args):
     return 0
 
 def _cmd_uninstall(args):
-    from .install import uninstall_project, uninstall_cli
+    from .usecases.install import uninstall_project, uninstall_cli
     if getattr(args, "cli", False):
         _print(uninstall_cli())
         return 0
@@ -164,15 +164,15 @@ def _cmd_uninstall(args):
     return 0
 
 def _cmd_init(args):
-    from .config import Config, load_config
-    from .install import installation_plan,apply_install
+    from .domain.config import Config, load_config
+    from .usecases.install import installation_plan,apply_install
     cfg=load_config(_root(args))
     if args.profile:cfg.profile=args.profile
     if args.hosts:cfg.hosts=args.hosts.split(",")
     if args.graph:cfg.code_intelligence=args.graph
     if args.memory:cfg.memory=args.memory
     cfg.validate()
-    from .detect import detect
+    from .adapters.detect import detect
     detection=detect(_root(args))
     if args.detect_tests and not cfg.tests:
         cfg.tests=detection["test_commands"]
@@ -183,19 +183,19 @@ def _cmd_init(args):
 
 def _cmd_sync(args):
     if args.all:
-        from .projects import sync_all
+        from .usecases.projects import sync_all
         result=sync_all(apply=args.apply)
         _print(result)
         return 5 if any(k in result["counts"] for k in ("ERROR","BLOCKED")) else 0
-    from .config import load_config
-    from .install import installation_plan,apply_install
+    from .domain.config import load_config
+    from .usecases.install import installation_plan,apply_install
     cfg=load_config(_root(args))
     result=apply_install(_root(args),cfg) if args.apply else installation_plan(_root(args),cfg)
     if not args.apply:result.pop("wanted",None)
     _print(result);return 0
 
 def _cmd_projects(args):
-    from .projects import list_projects,register,unregister,scan,project_info,registry_path
+    from .usecases.projects import list_projects,register,unregister,scan,project_info,registry_path
     if args.action=="list":
         _print({"harness_version":__version__,"registry":str(registry_path()),"projects":list_projects()});return 0
     if args.action=="scan":
@@ -211,42 +211,22 @@ def _cmd_projects(args):
     _print(results);return 0
 
 def _cmd_doctor(args):
-    from .config import load_config
-    from .hosts import capability
-    from .codeintel import health
-    from .memory import memory_health
-    from .registry import resolve
-    from .author import lint
-    from .policy import sandbox_diagnostics
+    from .domain.config import load_config
+    from .adapters.hosts import capability
+    from .adapters.codeintel import health
+    from .adapters.memory import memory_health
+    from .domain.policy import sandbox_diagnostics
     cfg=load_config(_root(args))
     results={"version":__version__,"hosts":{x:capability(x).__dict__ for x in cfg.hosts},
              "code_intelligence":health(cfg.code_intelligence),"memory":cfg.memory,
-             "sandbox":sandbox_diagnostics(),"skills":lint(_root(args)),
-             "memory_health":memory_health(_root(args),cfg.memory),
-             "modules":resolve(_root(args),["core","eval","author","evolve","memory-"+cfg.memory]+([cfg.code_intelligence] if cfg.code_intelligence!="none" else []))}
+             "sandbox":sandbox_diagnostics(),
+             "memory_health":memory_health(_root(args),cfg.memory)}
     _print(results);return 0
 
-def _cmd_modules(args):
-    from .registry import discover,resolve,scaffold
-    if args.action=="list":_print(discover(_root(args)))
-    elif args.action=="resolve":_print(resolve(_root(args),args.modules.split(",")))
-    else:_print(scaffold(_root(args),args.name,apply=args.apply))
-    return 0
 
-def _cmd_migrate(args):
-    from .install import legacy_plan,remove_legacy,rollback,restore_legacy
-    root=_root(args)
-    if args.action=="plan":_print({"legacy":legacy_plan(root)});return 0
-    if args.action=="rollback":_print(rollback(root,args.snapshot));return 0
-    if args.action=="restore-legacy":
-        if not args.approve:raise EgoError("APPROVAL_REQUIRED","Explicit --approve required")
-        _print(restore_legacy(root,args.snapshot));return 0
-    if args.action=="remove-legacy":
-        if not args.approve:raise EgoError("APPROVAL_REQUIRED","Explicit --approve required")
-        _print(remove_legacy(root,read_json(Path(args.hashes))));return 0
 
 def _cmd_work(args):
-    from .work import execute,status,cancel,compact_result,watch
+    from .usecases.work import execute,status,cancel,compact_result,watch
     root=_root(args)
     # Default output is a compact summary: the full record holds a per-file
     # snapshot and raw worker output, which would land in the caller's context.
@@ -254,17 +234,17 @@ def _cmd_work(args):
     if args.action=="status":_print(shape(status(root,args.run_id)));return 0
     if args.action=="watch":watch(root,args.run_id,after=args.after);return 0
     if args.action=="cancel":
-        from .loop import ledger_path,cancel_loop
+        from .usecases.loop import ledger_path,cancel_loop
         _print(cancel_loop(root,args.run_id) if ledger_path(root,args.run_id).exists() else cancel(root,args.run_id));return 0
     if args.action=="loop-status":
-        from .loop import loop_status
+        from .usecases.loop import loop_status
         _print(loop_status(root,args.loop_id));return 0
     if args.action=="loop-apply":
-        from .loop import apply_loop
+        from .usecases.loop import apply_loop
         result=apply_loop(root,args.loop_id,approve=args.approve)
         _print(result);return 0 if result["status"]=="COMPLETED" else 5
     if args.action=="loop":
-        from .loop import run_loop,SUCCESS
+        from .usecases.loop import run_loop,SUCCESS
         checks=[]
         for raw in args.done_check:
             try:argv=json.loads(raw) if raw.lstrip().startswith("[") else __import__("shlex").split(raw)
@@ -285,7 +265,7 @@ def _cmd_work(args):
                         autonomy=args.autonomy,isolated=args.attest_external_sandbox,plan_first=args.plan_first,task=task)
         _print(result);return 0 if result["status"] in SUCCESS else 5
     if args.action=="plan":
-        from .planner import plan_work
+        from .usecases.planner import plan_work
         result=plan_work(root,args.goal,args.host,args.scope.split(",") if args.scope else None,execute=args.execute)
         if args.out:
             # The task file carries the planning cost, so a later `work run` reports the plan phase too.
@@ -317,93 +297,19 @@ def _cmd_work(args):
                    seed_from=getattr(args,"seed_from",None),task_file=args.task)
     _print(shape(result));return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
 
-def _cmd_context(args):
-    from .context import audit
-    result=audit(_root(args));_print(result)
-    return 0 if result["status"]=="PASS" else 5
 
-def _cmd_eval(args):
-    from .evals import run_eval,compare
-    if args.action=="compare":
-        result=compare(read_json(Path(args.baseline)),read_json(Path(args.candidate)));_print(result)
-        return 0 if result["promotable"] else 5
-    res=run_eval(_root(args),Path(args.suite),host=args.host,trials=args.trials,model=args.model,split=args.split,timeout=args.timeout)
-    _print({"run_id":res["run_id"],"all_passed":res["all_passed"],"summary":res["summary"],"elapsed_seconds":res["elapsed_seconds"]})
-    return 0 if res["all_passed"] else 5
 
-def _cmd_author(args):
-    from .author import lint,plan,gate
-    from .candidates import new_candidate,promote,rollback_promotion
-    root=_root(args)
-    if args.action=="lint":res=lint(root);_print(res);return 0 if res["status"]=="PASS" else 5
-    if args.action=="plan":_print(plan(root,args.skill,args.field,args.goal));return 0
-    if args.action=="candidate":
-        replacement=Path(args.replacement_file).read_text(encoding="utf8")
-        rec=new_candidate(root,args.skill,args.field,replacement,args.goal)
-        write_json(root/".ego"/"state"/"candidates"/(rec["candidate_id"]+".json"),rec)
-        _print(rec);return 0
-    if args.action=="gate":
-        res=gate(root,read_json(Path(args.candidate)),Path(args.suite),args.host,allow_mock=args.allow_mock_test,model=args.model)
-        if args.out:write_json(Path(args.out),res)
-        _print({k:v for k,v in res.items() if k!="report"});return 0 if res["status"]=="PASS" else 5
-    if args.action=="promote":
-        if not args.approve:raise EgoError("APPROVAL_REQUIRED","Explicit --approve required")
-        _print(promote(root,read_json(Path(args.candidate)),approval_ref=args.approval_ref,gate=read_json(Path(args.gate)),allow_mock=args.allow_mock_test))
-        return 0
-    if args.action=="rollback":_print(rollback_promotion(root,args.promotion_id));return 0
 
-def _cmd_evolve(args):
-    from .evolve import observe,propose,lesson
-    root=_root(args)
-    if args.action=="observe":_print(observe(root,args.message,args.outcome,args.task_class,args.evidence or []));return 0
-    if args.action=="propose":
-        replacement=Path(args.replacement_file).read_text(encoding="utf8") if args.replacement_file else None
-        _print(propose(root,args.observation_id,args.skill,args.field,args.host,replacement=replacement));return 0
-    if args.action=="lesson":_print(lesson(root,args.evidence,args.summary,args.host,args.task_class));return 0
 
-def _cmd_optimize(args):
-    from . import optimize as opt   # LAZY import -- never happens in Fast mode
-    from .config import load_opt,save_opt
-    root=_root(args)
-    if args.action=="status":_print(opt.status(root));return 0
-    if args.action=="doctor":_print(opt.doctor(root,args.host));return 0
-    if args.action=="configure":
-        cfg=load_opt(root)
-        if args.mode:cfg.mode=args.mode
-        if args.profile:cfg.profile=args.profile
-        if args.cost_policy:cfg.cost_policy=args.cost_policy
-        if args.max_candidates is not None:cfg.max_candidates=args.max_candidates
-        if args.max_probe_runs is not None:cfg.max_probe_runs=args.max_probe_runs
-        if args.max_rounds is not None:cfg.max_rounds=args.max_rounds
-        if args.max_wall_seconds is not None:cfg.max_wall_seconds=args.max_wall_seconds
-        cfg.validate()
-        if args.apply:save_opt(root,cfg)
-        _print({"mode":cfg.mode,"profile":cfg.profile,"cost_policy":cfg.cost_policy,"applied":args.apply});return 0
-    if args.action=="disable":
-        cfg=load_opt(root);cfg.mode="off"
-        if args.apply:save_opt(root,cfg)
-        _print({"mode":"off","applied":args.apply});return 0
-    if args.action=="plan":_print(opt.plan(root,Path(args.fixture),args.host,args.skill,args.field,model=args.model));return 0
-    if args.action=="propose":
-        repl=Path(args.replacement_file).read_text(encoding="utf8") if args.replacement_file else None
-        _print(opt.propose(root,args.experiment,replacement=repl,goal=args.goal,execute=args.execute,spending_ref=args.spend_approval,trust_local=args.trusted_local));return 0
-    if args.action=="run":_print(opt.run(root,args.experiment,execute=args.execute,spending_ref=args.spend_approval,trust_local=args.trusted_local));return 0
-    if args.action=="report":_print(opt.report(root,args.experiment));return 0
-    if args.action=="promote":
-        if not args.approve:raise EgoError("APPROVAL_REQUIRED","--approve required")
-        _print(opt.promote_experiment(root,args.experiment,approval_ref=args.approval_ref,author_suite=Path(args.suite),host=args.host));return 0
-    if args.action=="full":
-        _print(opt.full(root,Path(args.fixture),args.host,args.skill,args.field,args.rounds,execute=args.execute,
-                        spending_ref=args.spend_approval,trust_local=args.trusted_local));return 0
 
 def _cmd_state(args):
-    from .retention import prune_state
+    from .domain.retention import prune_state
     _print(prune_state(_root(args)));return 0
 
 
 def _cmd_memory(args):
-    from .config import load_config
-    from .memory import memory_provider, install_alter_skills
+    from .domain.config import load_config
+    from .adapters.memory import memory_provider, install_alter_skills
     root=_root(args);cfg=load_config(root)
     if args.action=="install-skills":
         clients=[c.strip() for c in args.clients.split(",") if c.strip()] if args.clients else cfg.hosts
@@ -420,7 +326,7 @@ def _cmd_memory(args):
         _print({"deleted":p.delete(args.id)});return 0
 
 def _cmd_session(args):
-    from .session import (save_checkpoint, load_checkpoint, rotation_instructions, arm_auto_resume,
+    from .usecases.session import (save_checkpoint, load_checkpoint, rotation_instructions, arm_auto_resume,
                           detect_host, list_checkpoints, resolve_task, handoff, pickup, RUN_ID_ENV)
     root = _root(args)
     if args.action == "checkpoint":
@@ -432,9 +338,9 @@ def _cmd_session(args):
             run=os.environ.get(RUN_ID_ENV),
         )
         try:
-            from .config import load_config
+            from .domain.config import load_config
             if load_config(root).memory == "alter":
-                from .memory import submit_alter_checkpoint_review
+                from .adapters.memory import submit_alter_checkpoint_review
                 submit_alter_checkpoint_review(root, saved_record)
         except Exception:
             pass
@@ -466,8 +372,8 @@ def _cmd_session(args):
 
 
 def _cmd_run(args):
-    from .config import load_config
-    from .ptyrun import run_host
+    from .domain.config import load_config
+    from .usecases.ptyrun import run_host
     root=_root(args)
     cfg=load_config(root)
     threshold=args.clear_tokens if args.clear_tokens is not None else cfg.clear_suggest_tokens
@@ -475,43 +381,39 @@ def _cmd_run(args):
 
 
 def _cmd_code(args):
-    from .codeintel import health,search,symbol,index,impact,affected_tests
-    from .config import load_config
+    from .adapters.codeintel import health,search,symbol,index,impact,affected_tests
+    from .domain.config import load_config
     provider=load_config(_root(args)).code_intelligence
     res={"doctor":lambda:health(provider),"search":lambda:search(_root(args),args.query,provider),
          "symbol":lambda:symbol(_root(args),args.name,provider),"index":lambda:index(_root(args),provider,execute=args.execute),
          "impact":lambda:impact(_root(args),args.name,provider),"affected":lambda:affected_tests(_root(args),args.files,provider)}[args.action]()
     _print(res);return 0
 
-def _cmd_tool(args):
-    from .tools import available_tools,invoke_registered
-    if args.action=="list":_print(available_tools(_root(args)));return 0
-    _print(invoke_registered(args.name,json.loads(args.arguments),_root(args),approve_external=args.approve_external));return 0
 
 def _cmd_hook(args):
-    from .policy import check_hook_payload
-    from .config import load_config
+    from .domain.policy import check_hook_payload
+    from .domain.config import load_config
     root=_root(args)
     raw=sys.stdin.read(1024*1024)
     if args.event=="context-probe":
         # Status line of a host started by `ego run`: report its context size to the wrapper.
         try:
-            from .ptyrun import STATE_ENV,record_context
+            from .usecases.ptyrun import STATE_ENV,record_context
             print(record_context(json.loads(raw),Path(os.environ[STATE_ENV])))
         except (ValueError,OSError,EgoError,KeyError,TypeError):print("")
         return 0
     if args.event=="statusline":
         # Prints the status line itself (plain text); any problem means an empty line.
         try:
-            from .session import record_usage
+            from .usecases.session import record_usage
             print(record_usage(json.loads(raw),root))
         except (ValueError,OSError,EgoError,KeyError,TypeError):print("")
         return 0
     if args.event=="user-prompt":
         # Looks up alter knowledge for the prompt; any problem means "say nothing".
         try:
-            from .memory import use_host
-            from .session import adapt_output,alter_prompt_context,new_transcript_prompt,normalize_payload,project_root
+            from .adapters.memory import use_host
+            from .usecases.session import adapt_output,alter_prompt_context,new_transcript_prompt,normalize_payload,project_root
             obj=normalize_payload(args.host,json.loads(raw))
             root=project_root(root,obj.get("cwd"))
             prompt=str(obj.get("prompt") or "")
@@ -525,8 +427,8 @@ def _cmd_hook(args):
         # The session is closing (exit, /clear, logout): record the conversation in alter. Never fails the host.
         # Under `ego run` the wrapper rotates sessions itself (automatic clear): that is not a session end.
         try:
-            from .memory import submit_alter_session_review
-            from .session import normalize_payload,project_root
+            from .adapters.memory import submit_alter_session_review
+            from .usecases.session import normalize_payload,project_root
             obj=normalize_payload(args.host,json.loads(raw))
             root=project_root(root,obj.get("cwd"))
             if not os.environ.get("EGO_RUN") and load_config(root).memory=="alter":
@@ -539,7 +441,7 @@ def _cmd_hook(args):
         # Advisory hooks never fail the host turn: any problem means "say nothing".
         host=args.host
         try:
-            from .session import adapt_output,bind_run_session,clear_advice,clear_resume,codex_limits,normalize_payload,project_root,usage_advice
+            from .usecases.session import adapt_output,bind_run_session,clear_advice,clear_resume,codex_limits,normalize_payload,project_root,usage_advice
             obj=normalize_payload(host,json.loads(raw))
             root=project_root(root,obj.get("cwd"))
             bind_run_session(root,obj)
@@ -548,7 +450,7 @@ def _cmd_hook(args):
                 cfg=load_config(root)
                 if cfg.memory == "alter":
                     try:
-                        from .memory import submit_alter_session_review
+                        from .adapters.memory import submit_alter_session_review
                         submit_alter_session_review(
                             root,
                             session_id=str(obj.get("session_id") or ""),
@@ -571,8 +473,8 @@ def _cmd_hook(args):
                 out={} if os.environ.get("EGO_RUN") or not load_config(root).auto_resume else clear_resume(root,obj)  # the hook is also installed for alter alone
                 # Inside `ego run` the checkpoint resume stands down, but the alter requirement is not a resume: keep it.
                 if load_config(root).memory=="alter":
-                    from .memory import use_host
-                    from .session import with_alter_mandate
+                    from .adapters.memory import use_host
+                    from .usecases.session import with_alter_mandate
                     with use_host(host):
                         out=with_alter_mandate(out, root)
             out=adapt_output(host,args.event,out,once=bool(info.get("once")))
@@ -589,40 +491,12 @@ def _cmd_hook(args):
     return 0
 
 
-def _cmd_prompt(args):
-    from .prompting import extract_reply,register_prompt,get_prompt
-    root=_root(args)
-    if args.action=="register":
-        _print(register_prompt(root,args.name,Path(args.file).read_text(encoding="utf8"),args.role));return 0
-    if args.action=="show":_print(get_prompt(root,args.name,args.version));return 0
-    if args.action=="extract":_print(extract_reply(Path(args.file).read_text(encoding="utf8"),args.contract));return 0
 
-def _cmd_events(args):
-    from .events import tail
-    _print(tail(_root(args),args.n));return 0
 
-def _cmd_pr(args):
-    from .github import create_pr,reviews
-    if args.action=="create":_print(create_pr(_root(args),args.title,args.body,args.base,approve=args.approve));return 0
-    if args.action=="reviews":_print(reviews(_root(args),args.number));return 0
 
-def _cmd_bench(args):
-    import statistics,subprocess,time,sys
-    root=_root(args)
-    samples=[]
-    for _ in range(args.trials):
-        start=time.perf_counter()
-        p=subprocess.run([sys.executable,"-m","ego","work","native","--root",str(root)],capture_output=True,text=True)
-        if p.returncode:raise EgoError("BENCH_FAILED",p.stderr,5)
-        samples.append((time.perf_counter()-start)*1000)
-    results=sorted(samples)
-    _print({"metric":"ego work native no-agent dispatch","count":len(results),"p50_ms":round(statistics.median(results),3),
-            "p95_ms":round(results[min(len(results)-1,int(len(results)*.95))],3),
-            "baseline_note":"This measures ego CLI dispatch only, not native Claude/Codex/OpenCode task execution"})
-    return 0
 
 def _cmd_hosts(args):
-    from .hostcompat import list_host_capabilities, inspect_host
+    from .adapters.hostcompat import list_host_capabilities, inspect_host
     if args.host:
         _print(inspect_host(args.host, refresh=args.action=="refresh"))
     else:
@@ -631,7 +505,7 @@ def _cmd_hosts(args):
 
 
 def _cmd_models(args):
-    from .models import list_models,refresh_catalog
+    from .adapters.models import list_models,refresh_catalog
     root=_root(args)
     if args.action=="refresh":
         _print(refresh_catalog(root,hosts=[args.host] if args.host else None))
@@ -641,7 +515,7 @@ def _cmd_models(args):
 
 
 def _cmd_update(args):
-    from .selfupdate import self_update, update_from_local_wheel, self_argv
+    from .adapters.selfupdate import self_update, update_from_local_wheel, self_argv
     project=_root(args)
     if args.sync and not (project/".ego"/"config.toml").exists():
         raise EgoError("PROJECT_NOT_INITIALIZED","--sync requires existing .ego/config.toml",3)
@@ -785,10 +659,6 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--sync",action="store_true",help="Then re-render the --root project with its saved config")
     sp.add_argument("--sync-all",action="store_true",help="Then re-render every registered project, each with its own saved config")
     sp.set_defaults(func=_cmd_update)
-    sp=sub.add_parser("modules");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    s.add_parser("list");r=s.add_parser("resolve");r.add_argument("modules");r=s.add_parser("scaffold");r.add_argument("name");r.add_argument("--apply",action="store_true");sp.set_defaults(func=_cmd_modules)
-    sp=sub.add_parser("migrate");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    s.add_parser("plan");r=s.add_parser("rollback");r.add_argument("snapshot");r=s.add_parser("restore-legacy");r.add_argument("snapshot");r.add_argument("--approve",action="store_true");r=s.add_parser("remove-legacy");r.add_argument("--hashes",required=True);r.add_argument("--approve",action="store_true");sp.set_defaults(func=_cmd_migrate)
     sp=sub.add_parser("work");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("native");r=s.add_parser("status");r.add_argument("run_id");r.add_argument("--verbose",action="store_true",help="Print the full run record")
     r=s.add_parser("cancel");r.add_argument("run_id",help="Run ID or loop ID")
@@ -824,34 +694,6 @@ def build_parser()->argparse.ArgumentParser:
             r.add_argument("--from",dest="seed_from",metavar="RUN_ID",
                            help="Continue a failed run with a corrected task: start from its verified changes and skip its verified, unchanged agent nodes")
     sp.set_defaults(func=_cmd_work)
-    sp=sub.add_parser("eval");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    r=s.add_parser("run");r.add_argument("--suite",required=True);r.add_argument("--host",default="mock");r.add_argument("--trials",type=int,default=1);r.add_argument("--model");r.add_argument("--split");r.add_argument("--timeout",type=int,default=120)
-    r=s.add_parser("compare");r.add_argument("baseline");r.add_argument("candidate")
-    sp.set_defaults(func=_cmd_eval)
-    sp=sub.add_parser("author");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    s.add_parser("lint")
-    r=s.add_parser("plan");r.add_argument("--skill",default="work");r.add_argument("--field",default="skill.description");r.add_argument("--goal",required=True)
-    r=s.add_parser("candidate");r.add_argument("--skill",default="work");r.add_argument("--field",default="skill.description");r.add_argument("--replacement-file",required=True);r.add_argument("--goal",required=True)
-    r=s.add_parser("gate");r.add_argument("--candidate",required=True);r.add_argument("--suite",required=True);r.add_argument("--host",default="mock");r.add_argument("--model");r.add_argument("--out");r.add_argument("--allow-mock-test",action="store_true")
-    r=s.add_parser("promote");r.add_argument("--candidate",required=True);r.add_argument("--gate",required=True);r.add_argument("--approval-ref",required=True);r.add_argument("--approve",action="store_true");r.add_argument("--allow-mock-test",action="store_true")
-    r=s.add_parser("rollback");r.add_argument("promotion_id")
-    sp.set_defaults(func=_cmd_author)
-    sp=sub.add_parser("evolve");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    r=s.add_parser("observe");r.add_argument("message");r.add_argument("--outcome",default="FAIL");r.add_argument("--task-class",default="general");r.add_argument("--evidence",action="append")
-    r=s.add_parser("propose");r.add_argument("observation_id");r.add_argument("--skill",default="work");r.add_argument("--field",default="skill.description");r.add_argument("--host",default="mock");r.add_argument("--replacement-file")
-    r=s.add_parser("lesson");r.add_argument("summary");r.add_argument("--host",default="claude");r.add_argument("--task-class",default="general");r.add_argument("--evidence",action="append",required=True)
-    sp.set_defaults(func=_cmd_evolve)
-    sp=sub.add_parser("optimize");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    s.add_parser("status");r=s.add_parser("doctor");r.add_argument("--host",default="mock")
-    r=s.add_parser("configure");r.add_argument("--mode",choices=["off","analyze","shadow","assisted"]);r.add_argument("--profile",choices=["lite","full"]);r.add_argument("--cost-policy",choices=["manual_consent","require_metered"]);r.add_argument("--max-candidates",type=int);r.add_argument("--max-probe-runs",type=int);r.add_argument("--max-rounds",type=int);r.add_argument("--max-wall-seconds",type=int);r.add_argument("--apply",action="store_true")
-    r=s.add_parser("disable");r.add_argument("--apply",action="store_true")
-    r=s.add_parser("plan");r.add_argument("--fixture",required=True);r.add_argument("--host",default="mock");r.add_argument("--model");r.add_argument("--skill",default="work");r.add_argument("--field",default="skill.description")
-    r=s.add_parser("propose");r.add_argument("experiment");r.add_argument("--replacement-file");r.add_argument("--goal",default="Improve failed fixture");r.add_argument("--execute",action="store_true");r.add_argument("--spend-approval");r.add_argument("--trusted-local",action="store_true")
-    r=s.add_parser("run");r.add_argument("experiment");r.add_argument("--execute",action="store_true");r.add_argument("--spend-approval");r.add_argument("--trusted-local",action="store_true")
-    r=s.add_parser("report");r.add_argument("experiment")
-    r=s.add_parser("promote");r.add_argument("experiment");r.add_argument("--approval-ref",required=True);r.add_argument("--suite",required=True);r.add_argument("--host",default="mock");r.add_argument("--approve",action="store_true")
-    r=s.add_parser("full");r.add_argument("--fixture",required=True);r.add_argument("--host",default="mock");r.add_argument("--skill",default="work");r.add_argument("--field",default="skill.description");r.add_argument("--rounds",type=int,default=1);r.add_argument("--execute",action="store_true");r.add_argument("--spend-approval");r.add_argument("--trusted-local",action="store_true")
-    sp.set_defaults(func=_cmd_optimize)
     sp=sub.add_parser("state",help="Enforce retention limits on .ego/state and related growth paths");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("prune",help="Remove entries beyond the retention limits now (also runs automatically)").set_defaults(func=_cmd_state)
     sp=sub.add_parser("memory");common(sp);s=sp.add_subparsers(dest="action",required=True)
@@ -891,8 +733,6 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--yolo",action=argparse.BooleanOptionalAction,default=None,help="Start the CLI with its skip-permissions switch (default: run_yolo in .ego/config.toml)")
     sp.add_argument("args",nargs="*",help="Arguments for the CLI itself, after --")
     sp.set_defaults(func=_cmd_run)
-    sp=sub.add_parser("context",help="Measure always-on and on-demand context against budgets");common(sp)
-    s=sp.add_subparsers(dest="action",required=True);s.add_parser("audit");sp.set_defaults(func=_cmd_context)
     sp=sub.add_parser("code");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("doctor")
     r=s.add_parser("search");r.add_argument("query")
@@ -901,22 +741,7 @@ def build_parser()->argparse.ArgumentParser:
     r=s.add_parser("affected");r.add_argument("files",nargs="+")
     r=s.add_parser("index");r.add_argument("--execute",action="store_true",help="Index using installed provider after manual review")
     sp.set_defaults(func=_cmd_code)
-    sp=sub.add_parser("tool");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    s.add_parser("list");r=s.add_parser("call");r.add_argument("name");r.add_argument("arguments");r.add_argument("--approve-external",action="store_true")
-    sp.set_defaults(func=_cmd_tool)
     sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool","stop","session-start","session-end","user-prompt","statusline","context-probe"]);sp.add_argument("--host",choices=["claude","codex","opencode","agy"],default="claude",help="Host CLI whose hook payload arrives on stdin");sp.set_defaults(func=_cmd_hook)
-    sp=sub.add_parser("prompt");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    r=s.add_parser("register");r.add_argument("name");r.add_argument("file");r.add_argument("--role",default="worker")
-    r=s.add_parser("show");r.add_argument("name");r.add_argument("--version")
-    r=s.add_parser("extract");r.add_argument("file");r.add_argument("--contract",choices=["json","reply"],default="json")
-    sp.set_defaults(func=_cmd_prompt)
-    sp=sub.add_parser("events");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    r=s.add_parser("tail");r.add_argument("-n",type=int,default=20);sp.set_defaults(func=_cmd_events)
-    sp=sub.add_parser("pr");common(sp);s=sp.add_subparsers(dest="action",required=True)
-    r=s.add_parser("create");r.add_argument("--title",required=True);r.add_argument("--body",required=True);r.add_argument("--base",default="main");r.add_argument("--approve",action="store_true")
-    r=s.add_parser("reviews");r.add_argument("number",type=int)
-    sp.set_defaults(func=_cmd_pr)
-    sp=sub.add_parser("bench");common(sp);sp.add_argument("--trials",type=int,default=10);sp.set_defaults(func=_cmd_bench)
     return p
 
 def _correct_update_typo(args_list:list[str],parser:argparse.ArgumentParser)->None:

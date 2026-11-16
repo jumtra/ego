@@ -120,8 +120,6 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 
 ### タスク JSON
 
-完全な例: [`examples/multihost/task.json`](../../examples/multihost/task.json)
-
 ```json
 {
   "schema_version": 1,
@@ -246,8 +244,3 @@ ego work cancel <loop_id>                    # 次のイテレーションの前
 |---|---|
 | `ego memory add '<fact>' --evidence <ref>` / `ego memory search '<words>'` | 検証済みのプロジェクト事実を保存・検索 |
 | `ego code search <query>` / `symbol` / `impact` / `affected` | 設定されたプロバイダによるコード検索。テキスト検索にフォールバック |
-| `ego context audit` | 常時読み込まれるコンテキストと、必要時に読み込まれるコンテキストを予算と比較（超過時は終了コード 5。トークン数は推定） |
-| `ego events tail -n 20` | 最近のハーネスイベント |
-| `ego pr create --title ... --body ... --approve` / `ego pr reviews <n>` | `gh` 経由のプルリクエスト操作 |
-
-skill やプロンプトそのものを改善する（`ego eval`、`ego author`、`ego evolve`、`ego optimize`）については、[コマンドリファレンス](commands.md#スキルとプロンプトの改善) を参照してください。

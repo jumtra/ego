@@ -186,7 +186,7 @@ ego sync --all --apply            # 各プロジェクトの .ego/config.toml �
 ## 導入状態の確認
 
 ```bash
-ego doctor            # 検出された CLI、コード解析、メモリ、サンドボックス、skill の lint、modules
+ego doctor            # 検出された CLI、コード解析、メモリ、サンドボックス、skill の lint
 ego hosts inspect     # CLI のバージョンと検出されたフラグ
 ego models list       # ホストごとのモデル一覧
 ```
