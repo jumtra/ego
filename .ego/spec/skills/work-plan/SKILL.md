@@ -41,7 +41,7 @@ Do not edit project files yourself. The engine runs each node in an isolated cop
 5. After `run_finished`, read `ego work status run-<slug> --root .` once (`nodes`, `failures`, `changed_files`, `next_action`).
 6. `INTERRUPTED` (in `ego work status`, or a `run_stopped` event) means the process died while the run was RUNNING. Completed nodes stay saved. Report it as interrupted and resumable, then run `ego work resume run-<slug> --root . --task .ego/state/tasks/<slug>.json --host <host> --trust-cli`; PASSED nodes are skipped. Never start a new run under the same ID.
 7. `RUN_ACTIVE` means another live process holds `.ego/locks/run-<slug>.lock`. Do not delete the lock or start a second run, and do not resume or hand off its checkpoint until that process finishes or the run reports `INTERRUPTED`.
-8. A PASSED run is **検証済み・未適用**. Show the changed files and ask for approval to apply. After approval run the `next_action` command, then inspect `git diff`.
+8. A PASSED run is **検証済み・未適用**. Show the changed files and ask for approval to apply. After approval run the `next_action` command, then inspect `git diff`. Then do `work`'s **Finish** step: ask yes/no, and on yes create the branch, push, open the PR and close the run's staging worktree and `ego-task-<run-id>` branch.
 9. If a node fails, a step cannot be done as written, needs a file outside its Where, or one of the node's assumptions turns out false, stop and ask instead of improvising: explain, and get approval before changing the plan or rerunning.
 10. After approval, correct only the failed nodes in the task file, keep the others unchanged, and rerun step 2's command with `--run-id run-<slug>-2 --from run-<slug>`: unchanged verified nodes are not run again.
 
