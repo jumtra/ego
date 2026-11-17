@@ -182,7 +182,7 @@ def is_locked(path: Path) -> bool:
         os.close(fd)
 
 
-def snapshot(root: Path, excludes: tuple[str, ...] = (".git", ".ego/state", ".ego/artifacts", "__pycache__", ".pytest_cache", ".venv", "node_modules")) -> dict[str, str]:
+def snapshot(root: Path, excludes: tuple[str, ...] = (".git", ".ego/state", ".ego/locks", ".ego/artifacts", "__pycache__", ".pytest_cache", ".venv", "node_modules")) -> dict[str, str]:
     def excluded(rel: str) -> bool:
         return any(rel == x or rel.startswith(x + "/") or ("/" not in x and x in rel.split("/")) for x in excludes)
 
