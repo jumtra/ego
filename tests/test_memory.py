@@ -515,7 +515,7 @@ def test_install_alter_skills_and_cli(project, monkeypatch, capsys):
     dry = install_alter_skills(project, clients=["claude", "codex"], scope="project", agents=False, dry_run=True)
     assert dry["status"] == "DRY_RUN"
     assert "--project" in dry["command"] and "--no-agents" in dry["command"]
-    assert "github:jumtra/alter-skills" in dry["command"]
+    assert "github:jumtra/alter-skills#v0.2.1" in dry["command"]
 
     # Mocked npx execution via CLI
     calls = []

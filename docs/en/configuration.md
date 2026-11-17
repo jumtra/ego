@@ -157,6 +157,19 @@ Checkpoints are separate again and always stored in `.ego/memory/handoffs/`.
 
 `memory` was the earlier name of the `knowledge` key; an old `.ego/config.toml` with `memory = "..."` is read as `knowledge` and rewritten on the next `ego apply`. `--memory` still works as an alias of `--knowledge`.
 
+### Session analysis (`alter_analysis`)
+
+Opt-in. Only with `knowledge = "alter"`. Off by default because it spends model budget.
+
+When `alter_analysis = true`, a session that has been recorded to alter is analyzed after it ends. ego launches the analyzer host headless (`ego session analyze <sid>`, detached), which runs the `alter-session-analyzer` skill and attaches the analysis to the same recorded conversation id. Analysis runs after the session, so it never blocks session end, and any failure is ignored (fail open). Run it by hand with `ego session analyze <sid>`.
+
+| Key | Default | Range | Effect |
+|---|---|---|---|
+| `alter_analysis` | `false` | bool | Enables the post-session analysis above |
+| `alter_analyzer` | `{opencode = {model = "opencode/glm-5.3-flash-free"}}` | table of host → `{model = "..."}` | Analyzer model per host. Hosts not listed use the session's host, so the analyzer host is the session host unless overridden here |
+| `alter_analysis_budget_usd` | `0.5` | number ≥ 0 | Spend cap for one analysis, in USD |
+| `alter_analysis_timeout_seconds` | `600` | integer > 0 | Wall-clock limit for one analysis, in seconds |
+
 ## Environment variables
 
 | Variable | Purpose |

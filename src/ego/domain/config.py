@@ -23,6 +23,7 @@ DEFAULT_MODELS: dict[str, Any] = {
     "opencode": "auto",
     "agy": {"model": "gemini-4-hydrogen-medium", "effort": "auto"},
 }
+DEFAULT_ALTER_ANALYZER: dict[str, Any] = {"opencode": {"model": "opencode/glm-5.3-flash-free"}}
 DEFAULT_ROLES: dict[str, Any] = {
     "coder": {
         "claude": {"model": "haiku", "effort": ["low", "medium"]},
@@ -101,6 +102,10 @@ class Config:
     auto_resume: bool = True  # Claude Code/Codex/AGY: SessionStart(clear) hook injects the saved checkpoint after /clear (core; independent of clear_suggest_tokens)
     usage_switch_percent: int = 99  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
     run_yolo: bool = True  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
+    alter_analysis: bool = False  # opt-in: after a session ends, run the analyzer host headless to attach analysis to the recorded conversation (knowledge=alter only)
+    alter_analyzer: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_ALTER_ANALYZER))  # host -> {model} used for analysis; overrides the session host
+    alter_analysis_budget_usd: float = 0.5  # per-analysis spend cap in USD; must be >= 0
+    alter_analysis_timeout_seconds: int = 600  # per-analysis wall-clock limit in seconds; must be > 0
     models: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_MODELS))
     roles: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_ROLES))  # role (coder/tester/judge) -> {host, model, effort}; same vocabulary as hosts/models
     isolation: str = "worktree"  # "copy" (staging directory) or "worktree" (git worktree)
@@ -137,6 +142,22 @@ class Config:
             raise EgoError("INVALID_CONFIG", "run_yolo must be a boolean", 2)
         if self.worker_context not in ("lean", "inherit"):
             raise EgoError("INVALID_CONFIG", "worker_context must be 'lean' or 'inherit'", 2)
+        if not isinstance(self.alter_analysis, bool):
+            raise EgoError("INVALID_CONFIG", "alter_analysis must be a boolean", 2)
+        if not isinstance(self.alter_analyzer, dict):
+            raise EgoError("INVALID_CONFIG", "alter_analyzer must be a dictionary", 2)
+        for h, a in self.alter_analyzer.items():
+            if h not in HOSTS:
+                raise EgoError("INVALID_CONFIG", f"Unsupported host '{h}' in alter_analyzer", 2)
+            if not isinstance(a, dict) or set(a) != {"model"}:
+                raise EgoError("INVALID_CONFIG", f"alter_analyzer.{h} must be a table with only 'model'", 2)
+            model_name = a["model"]
+            if not isinstance(model_name, str) or not model_name.strip() or len(model_name) > 128:
+                raise EgoError("INVALID_CONFIG", f"alter_analyzer.{h}.model must be a non-empty string", 2)
+        if isinstance(self.alter_analysis_budget_usd, bool) or not isinstance(self.alter_analysis_budget_usd, (int, float)) or self.alter_analysis_budget_usd < 0:
+            raise EgoError("INVALID_CONFIG", "alter_analysis_budget_usd must be a number >= 0", 2)
+        if isinstance(self.alter_analysis_timeout_seconds, bool) or not isinstance(self.alter_analysis_timeout_seconds, int) or self.alter_analysis_timeout_seconds <= 0:
+            raise EgoError("INVALID_CONFIG", "alter_analysis_timeout_seconds must be an integer > 0", 2)
         if not isinstance(self.models, dict):
             raise EgoError("INVALID_CONFIG", "models must be a dictionary", 2)
         for h, m in self.models.items():
@@ -228,6 +249,12 @@ def dump_config(cfg: Config) -> str:
         "#\n"
         "# ego run の権限確認スキップ (run_yolo):\n"
         "#   run_yolo = true  # ego run が各CLIを権限確認なしで起動 (claude/agy: --dangerously-skip-permissions, codex: --dangerously-bypass-approvals-and-sandbox, opencode: --auto)。--yolo / --no-yolo で起動ごとに上書き\n"
+        "#\n"
+        "# セッション終了後の分析 (alter_analysis, knowledge=alter のみ。既定 false = オプトイン。モデル費用が発生):\n"
+        "#   alter_analysis = false\n"
+        "#   alter_analyzer = {opencode = {model = \"opencode/glm-5.3-flash-free\"}}  # ホスト別の分析モデル。未指定はセッションのホストを使用\n"
+        "#   alter_analysis_budget_usd = 0.5     # 1回あたりの費用上限 (USD, >= 0)\n"
+        "#   alter_analysis_timeout_seconds = 600  # 1回あたりの制限時間 (秒, > 0)\n"
     )
     return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in vars(cfg).items()) + "\n"
 

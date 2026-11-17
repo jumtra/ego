@@ -379,6 +379,9 @@ def _cmd_session(args):
                                "run launch_command yourself: " + result["launch_command"], 3)
             os.chdir(root)
             os.execvp(result["launch_argv"][0], result["launch_argv"])
+    elif args.action == "analyze":
+        from .usecases.alter_analysis import analyze_session
+        result = analyze_session(root, args.session_id)
     elif args.from_host:
         result = pickup(root, args.task_id, args.from_host)
     else:
@@ -450,10 +453,15 @@ def _cmd_hook(args):
             from .usecases.session import normalize_payload,project_root
             obj=normalize_payload(args.host,json.loads(raw))
             root=project_root(root,obj.get("cwd"))
-            if not os.environ.get("EGO_RUN") and load_config(root).knowledge=="alter":
-                submit_alter_session_review(root,session_id=str(obj.get("session_id") or ""),host=args.host,
+            cfg=load_config(root)
+            if not os.environ.get("EGO_RUN") and cfg.knowledge=="alter":
+                sid=str(obj.get("session_id") or "")
+                submit_alter_session_review(root,session_id=sid,host=args.host,
                     transcript=obj.get("transcript_path") if isinstance(obj.get("transcript_path"),str) else None,
-                    messages=obj.get("messages") if isinstance(obj.get("messages"),list) else None,timeout=25)
+                    messages=obj.get("messages") if isinstance(obj.get("messages"),list) else None,timeout=25,keep_turns=cfg.alter_analysis)
+                if cfg.alter_analysis:
+                    from .usecases.alter_analysis import launch_analysis
+                    launch_analysis(root,sid)  # detached; fail open
         except Exception:pass
         print("{}");return 0
     if args.event in ("stop","session-start"):
@@ -476,7 +484,11 @@ def _cmd_hook(args):
                             host=host,
                             transcript=obj.get("transcript_path") if isinstance(obj.get("transcript_path"), str) else None,
                             messages=obj.get("messages") if isinstance(obj.get("messages"), list) else None,
+                            keep_turns=cfg.alter_analysis,
                         )
+                        if cfg.alter_analysis:
+                            from .usecases.alter_analysis import launch_analysis
+                            launch_analysis(root, str(obj.get("session_id") or ""))  # detached; fail open
                     except Exception:
                         pass
                 # A nearly spent usage limit outranks a large context: there may be no later turn to save in.
@@ -489,6 +501,12 @@ def _cmd_hook(args):
                 elif host in ("opencode","agy"):limits={}
                 out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts,host=host,limits=limits) or ({} if wrapped else clear_advice(root,obj,cfg.clear_suggest_tokens,host=host,info=info))
             else:
+                if load_config(root).knowledge=="alter":
+                    try:
+                        from .usecases.alter_analysis import launch_pending
+                        launch_pending(root)  # at most one unanalyzed saved session; detached; fail open
+                    except Exception:
+                        pass
                 out={} if os.environ.get("EGO_RUN") or not load_config(root).auto_resume else clear_resume(root,obj)  # the hook is also installed for alter alone
                 # Inside `ego run` the checkpoint resume stands down, but the alter requirement is not a resume: keep it.
                 if load_config(root).knowledge=="alter":
@@ -753,6 +771,8 @@ def build_parser()->argparse.ArgumentParser:
     r.add_argument("--to",required=True,choices=["claude","codex","opencode","agy"])
     r.add_argument("--from",dest="from_host",choices=["claude","codex","opencode","agy"],help="Take the latest checkpoint that CLI saved")
     r.add_argument("--launch",action="store_true",help="Start the target CLI in this terminal")
+    r=s.add_parser("analyze",help="Run the analyzer host headless on a recorded session and attach the analysis (alter_analysis)")
+    r.add_argument("session_id")
     sp.set_defaults(func=_cmd_session)
     sp=sub.add_parser("run",help="Start an interactive CLI that ego checkpoints, clears and resumes by itself at the context limit");common(sp)
     sp.add_argument("host",choices=["claude","codex","opencode","agy"])

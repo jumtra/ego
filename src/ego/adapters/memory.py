@@ -5,6 +5,7 @@ from contextvars import ContextVar
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import shlex
 import shutil
@@ -92,7 +93,8 @@ class MCPStdio:
             except subprocess.TimeoutExpired:p.kill();p.wait()
 
 ALTER_HOST_HINT="Add the alter MCP server to the host (alter_task_context / alter_ai_usage) or set EGO_ALTER_MCP_COMMAND"
-ALTER_SKILLS_SOURCE="github:jumtra/alter-skills"
+ALTER_SKILLS_VERSION="v0.2.1"
+ALTER_SKILLS_SOURCE=f"github:jumtra/alter-skills#{ALTER_SKILLS_VERSION}"
 ALTER_SKILLS_CLIENTS=("claude","codex","opencode","agy")
 ALTER_SKILLS_MARKER="alter-context-loader"
 
@@ -463,6 +465,38 @@ def _alter_auto_review_enabled() -> bool:
     return os.environ.get("EGO_ALTER_AUTO_REVIEW", "1").strip().lower() not in ("0", "false", "off", "no")
 
 
+def alter_turns_path(root: Path, sid: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(sid or "").strip()) or "unknown"
+    return root.resolve() / ".ego" / "state" / "alter_turns" / f"{safe}.json"
+
+
+def _ensure_turn_ids(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return copies of the turns where each has a stable id and sequence (index-based when missing)."""
+    out: list[dict[str, Any]] = []
+    for index, turn in enumerate(turns):
+        item = dict(turn)
+        if not (isinstance(item.get("id"), str) and item["id"].strip()):
+            item["id"] = f"turn-{index}"
+        if not (isinstance(item.get("sequence"), int) and not isinstance(item.get("sequence"), bool)):
+            item["sequence"] = index
+        out.append(item)
+    return out
+
+
+def _conversation_id(result: Any) -> str | None:
+    """Tolerantly extract the conversation id from an alter_record_conversation result."""
+    if not isinstance(result, dict):
+        return None
+    for container in (result, result.get("structuredContent"), result.get("conversation")):
+        if not isinstance(container, dict):
+            continue
+        for key in ("conversation_id", "conversationId", "id"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
 def submit_alter_session_review(
     root: Path,
     *,
@@ -472,8 +506,12 @@ def submit_alter_session_review(
     messages: list[dict[str, Any]] | None = None,
     title: str | None = None,
     timeout: int = 10,
+    keep_turns: bool = False,
 ) -> dict[str, Any]:
-    """Extract, redact, deduplicate, and submit session turns to Alter fail-open."""
+    """Extract, redact, deduplicate, and submit session turns to Alter fail-open.
+
+    With keep_turns=True, a successful submission also persists the turns and the Alter
+    conversation id to `alter_turns_path` so a later analyzer can attach to that conversation."""
     if not _alter_auto_review_enabled():
         return {"status": "skipped", "reason": "disabled"}
     sid = str(session_id or "").strip()
@@ -517,9 +555,21 @@ def submit_alter_session_review(
             "updated_at": now(),
         }
         write_json(state_path, {"schema_version": 1, "sessions": updated_sessions})
+        conversation_id = _conversation_id(result)
+        if keep_turns:
+            write_json(alter_turns_path(root, sid), {
+                "session_id": sid,
+                "host": host,
+                "conversation_id": conversation_id,
+                "turns": _ensure_turn_ids(extracted),
+                "recorded_at": now(),
+            })
         from ..domain.retention import prune_state
         prune_state(root)
-        return {"status": "submitted", "session_id": sid, "count": len(extracted), "result": result}
+        response: dict[str, Any] = {"status": "submitted", "session_id": sid, "count": len(extracted), "result": result}
+        if keep_turns:
+            response["conversation_id"] = conversation_id
+        return response
     except Exception as exc:
         return {"status": "error", "reason": str(exc), "session_id": sid}
 
