@@ -264,6 +264,13 @@ def _cmd_work(args):
                         trust_cli=args.trust_cli,execute_planner=args.execute,apply=args.apply,approve=args.approve,
                         autonomy=args.autonomy,isolated=args.attest_external_sandbox,plan_first=args.plan_first,task=task)
         _print(result);return 0 if result["status"] in SUCCESS else 5
+    if args.action=="alter-plan":
+        from .usecases.alter_plan import push,wait,pull,sync
+        if args.plan_action=="push":result=push(root,args.task,args.slug)
+        elif args.plan_action=="wait":result=wait(root,args.plan_id,args.interval,args.timeout)
+        elif args.plan_action=="pull":result=pull(root,args.plan_id,args.out,args.run_id)
+        else:result=sync(root,args.run_id,args.task)
+        _print(result);return 0
     if args.action=="plan":
         from .usecases.planner import plan_work
         result=plan_work(root,args.goal,args.host,args.scope.split(",") if args.scope else None,execute=args.execute)
@@ -692,6 +699,11 @@ def build_parser()->argparse.ArgumentParser:
     r=s.add_parser("loop-status");r.add_argument("loop_id")
     r=s.add_parser("loop-apply",help="Apply the staged result of a VERIFIED loop");r.add_argument("loop_id");r.add_argument("--approve",action="store_true")
     r=s.add_parser("plan");r.add_argument("--goal",required=True);r.add_argument("--host",default="mock");r.add_argument("--scope");r.add_argument("--out");r.add_argument("--execute",action="store_true")
+    r=s.add_parser("alter-plan",help="Hand a plan to alter for node editing, then pull the approved plan");ap=r.add_subparsers(dest="plan_action",required=True)
+    ac=ap.add_parser("push");ac.add_argument("--task",required=True);ac.add_argument("--slug")
+    ac=ap.add_parser("wait");ac.add_argument("plan_id");ac.add_argument("--interval",type=float,default=5);ac.add_argument("--timeout",type=float,default=0)
+    ac=ap.add_parser("pull");ac.add_argument("plan_id");ac.add_argument("--out",required=True);ac.add_argument("--run-id",required=True)
+    ac=ap.add_parser("sync");ac.add_argument("run_id");ac.add_argument("--task",required=True)
     r=s.add_parser("watch",help="Stream a run's progress events (JSON lines) until it ends");r.add_argument("run_id");r.add_argument("--after",type=int,default=0)
     for name in ("run","resume"):
         r=s.add_parser(name);r.add_argument("--task",required=True);r.add_argument("--host",choices=["mock","claude","codex","opencode","agy"],default="mock")
