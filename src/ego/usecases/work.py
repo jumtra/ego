@@ -36,8 +36,9 @@ class Progress:
     A calling agent follows a run through these one-line JSON events instead of
     waiting for the final summary; the full record stays on disk.
     """
-    def __init__(self,path:Path|None,echo:bool=False):
+    def __init__(self,path:Path|None,echo:bool=False,on_event=None):
         self.path,self.echo,self.lock=path,echo,threading.Lock()
+        self.on_event=on_event
         self.seq=0
         if path is not None and path.exists():
             self.seq=sum(1 for line in path.read_text(encoding="utf8").splitlines() if line.strip())
@@ -50,6 +51,9 @@ class Progress:
             self.path.parent.mkdir(parents=True,exist_ok=True)
             with self.path.open("a",encoding="utf8") as f:f.write(line+"\n")
             if self.echo:print(line,file=sys.stderr,flush=True)
+        if self.on_event:
+            try: self.on_event(event,fields)
+            except Exception: pass
 
 
 def _brief_findings(findings)->list[str]:
@@ -591,12 +595,46 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         return result
 
 
+def _alter_reporter(root:Path,ref:dict,run_id:str,runroot:Path):
+    """Build a progress callback that mirrors node results to the alter plan; alter outages never fail the run."""
+    nodes:dict={}
+    failures:dict={}
+    client=None
+    marker=runroot/"alter_sync.json"
+    def callback(event:str,fields:dict)->None:
+        nonlocal client
+        node=fields.get("node")
+        if event=="node_started":
+            nodes[node]={"status":"RUNNING","attempts":0,"failure":""}
+        elif event=="node_finished":
+            failed=fields["status"]!="PASSED"
+            nodes[node]={"status":fields["status"],"attempts":fields["attempts"],"failure":failures.get(node,"") if failed else ""}
+        elif event=="attempt_finished" and any(c["status"]!="PASSED" for c in fields.get("checks",[])):
+            failures[node]=clip_output(fields.get("feedback") or "",300)
+        if event in ("run_started","node_started","node_finished","attempt_finished"):state="running"
+        elif event=="run_finished":state="passed" if fields["final_status"]=="PASSED" else "failed"
+        elif event=="run_error":state="failed"
+        else:return
+        try:
+            if client is None:
+                from ..adapters.alter_plan import AlterPlanClient
+                client=AlterPlanClient(root)
+            client.report(ref["plan_id"],run_id,state,dict(nodes))
+        except Exception as exc:
+            write_json(marker,{"pending":True,"state":state,"error":str(exc)[:300],"at":now()})
+            return
+        marker.unlink(missing_ok=True)
+    return callback
+
+
 def execute(root:Path, spec:dict, *, run_id:str|None=None, progress_stderr:bool=False, **kwargs)->dict:
     """Run a task and journal its progress to `.ego/state/runs/<run_id>/progress.jsonl`."""
     run_id=run_id or ident("run")
     if not all(c.isalnum() or c in "-_" for c in run_id):raise EgoError("INVALID_ID",run_id,2)
     runroot=root.resolve()/".ego"/"state"/"runs"/run_id
     progress=Progress(runroot/"progress.jsonl",echo=progress_stderr)
+    ref=(spec.get("source") or {}).get("alter_plan")
+    if ref:progress.on_event=_alter_reporter(root,ref,run_id,runroot)
     try:
         result=_execute(root,spec,progress,run_id=run_id,**kwargs)
     except BaseException as exc:
