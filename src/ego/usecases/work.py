@@ -16,6 +16,7 @@ from ..domain.config import load_config
 from ..domain.policy import check_write, check_role_write
 from ..adapters.runner import run_agent, run_checked_command
 from .worker import run_worker
+from .overlay import overlaid
 from ..shared.util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
                    filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove, git_branch_delete,
                    copy_ignored_files, sha256, json_text, is_locked, atomic_bytes)
@@ -191,19 +192,21 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 mcp_servers=list(node.get("mcp") or [])
                 if cfg.knowledge=="alter" and "alter" not in mcp_servers:
                     mcp_servers.append("alter")
-                try:
-                    r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,threshold=cfg.clear_suggest_tokens,
-                                 segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
-                                 on_event=lambda **f:progress.emit("worker_segment",node=node["id"],attempt=iteration,**f),
-                                 model=chosen_model,effort=chosen_effort,
-                                 read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
-                                 max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
-                                 lean=cfg.worker_context=="lean",mcp_servers=mcp_servers or None,max_budget_usd=budget_usd)
-                except EgoError as exc:
-                    if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
-                        raise
-                    from ..adapters.runner import RunResult
-                    r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model,effort=chosen_effort)
+                # `ego apply` no longer writes the managed block, so the worker's private copy gets it for its session.
+                with overlaid(work,chosen_host,cfg):
+                    try:
+                        r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,threshold=cfg.clear_suggest_tokens,
+                                     segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
+                                     on_event=lambda **f:progress.emit("worker_segment",node=node["id"],attempt=iteration,**f),
+                                     model=chosen_model,effort=chosen_effort,
+                                     read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
+                                     max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
+                                     lean=cfg.worker_context=="lean",mcp_servers=mcp_servers or None,max_budget_usd=budget_usd)
+                    except EgoError as exc:
+                        if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
+                            raise
+                        from ..adapters.runner import RunResult
+                        r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model,effort=chosen_effort)
             checks=[]
             if r.status=="PASS":
                 for argv in node.get("checks",[]):

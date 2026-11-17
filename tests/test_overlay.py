@@ -63,3 +63,23 @@ def test_a_run_that_died_without_restoring_is_cleaned_up_by_the_next_run(tmp_pat
     assert not crashed.state_file.exists()
     end_overlay(nxt)
     assert (tmp_path / "CLAUDE.md").read_text(encoding="utf8") == "# notes\n"
+
+
+def test_ego_work_worker_copy_carries_the_block_during_its_session_only(tmp_path: Path, monkeypatch):
+    from ego.adapters.runner import RunResult
+    from ego.usecases import work
+
+    original = "# notes\n"
+    (tmp_path / "CLAUDE.md").write_text(original, encoding="utf8")
+    seen = {}
+
+    def fake_run_worker(host, prompt, cwd, timeout=180, **kw):
+        seen["text"] = (Path(cwd) / "CLAUDE.md").read_text(encoding="utf8")
+        return RunResult("PASS", "ok", "", 0, 0.0, host)
+
+    monkeypatch.setattr(work, "run_worker", fake_run_worker)
+    spec = {"goal": "g", "nodes": [{"id": "n1", "kind": "agent", "prompt": "p", "write_allowlist": ["src/**"]}]}
+    res = work.execute(tmp_path, spec, host="claude", trust_cli=True)
+    assert res["final_status"] == "PASSED"
+    assert seen["text"].startswith(MARK_BEGIN) and seen["text"].endswith(original)
+    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf8") == original

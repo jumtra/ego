@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -62,6 +64,16 @@ def end_overlay(overlay: Overlay | None) -> None:
         current = read_json(overlay.state_file)  # another run may have handed the block over meanwhile
         state = current if isinstance(current, dict) else overlay.state
         _release(overlay.root, state, overlay.state_file)
+
+
+@contextmanager
+def overlaid(root: Path, host: str, cfg: Config) -> Iterator[None]:
+    """Hold the managed block on `root`'s instruction file while one host session runs (workers use a copy)."""
+    overlay = begin_overlay(root, host, cfg)
+    try:
+        yield
+    finally:
+        end_overlay(overlay)
 
 
 def _scan(root: Path) -> tuple[list[tuple[Path, dict]], list[tuple[Path, dict]]]:
