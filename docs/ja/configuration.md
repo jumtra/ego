@@ -167,7 +167,6 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 |---|---|---|---|
 | `alter_analysis` | `false` | bool | 上記のセッション後分析を有効にする |
 | `alter_analyzer` | `{opencode = {model = "opencode/glm-5.3-flash-free"}}` | ホスト → `{model = "..."}` の表 | ホスト別の分析モデル。一覧にないホストはセッションのホストを使うため、上書きしない限り分析ホストはセッションのホストです |
-| `alter_analysis_budget_usd` | `0.5` | 数値 ≥ 0 | 1回の分析の費用上限（USD） |
 | `alter_analysis_timeout_seconds` | `600` | 整数 > 0 | 1回の分析の制限時間（秒） |
 
 ## 環境変数

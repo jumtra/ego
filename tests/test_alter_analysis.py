@@ -87,7 +87,7 @@ def _state(root: Path) -> dict:
 @pytest.fixture
 def fake_host(monkeypatch):
     """Fake inspect_host (controls availability/support) and run_agent (records calls, returns a scripted status)."""
-    ctl = {"available": True, "supported": True, "status": "PASS", "calls": [], "inspected": []}
+    ctl = {"available": True, "supported": True, "status": "PASS", "calls": [], "inspected": [], "output": None}
 
     def fake_inspect(host, **kw):
         ctl["inspected"].append(host)
@@ -97,7 +97,10 @@ def fake_host(monkeypatch):
     def fake_run(host, prompt, cwd, timeout=180, **kw):
         ctl["calls"].append({"host": host, "prompt": prompt, "cwd": cwd, "timeout": timeout, **kw})
         ok = ctl["status"] == "PASS"
-        return RunResult(status=ctl["status"], output="", stderr="", exit_code=0 if ok else 1,
+        # By default the analyzer reports that alter accepted the analysis for CONV; tests may override.
+        default = f"done\nALTER_ANALYSIS conversation={CONV} result=attached" if ok else ""
+        out = ctl["output"] if ctl["output"] is not None else default
+        return RunResult(status=ctl["status"], output=out, stderr="", exit_code=0 if ok else 1,
                          elapsed_seconds=0.0, host=host, reason="" if ok else "boom")
 
     monkeypatch.setattr(hostcompat, "inspect_host", fake_inspect)
@@ -152,6 +155,29 @@ def test_launch_skipped_when_already_analyzed(root, popen, set_cfg):
     set_cfg(_cfg())
     assert aa.launch_analysis(root, SID)["reason"] == "analyzed"
     assert popen == []
+
+
+def test_launch_reanalyzes_when_session_grew_since_analysis(root, popen, set_cfg):
+    _write_turns(root, SID, n=6)
+    write_json(aa._state_path(root), {"schema_version": 1, "sessions": {SID: {"status": "analyzed", "turns": 4}}})
+    set_cfg(_cfg())
+    assert aa.launch_analysis(root, SID)["status"] == "launched"
+    write_json(aa._state_path(root), {"schema_version": 1, "sessions": {SID: {"status": "analyzed", "turns": 6}}})
+    assert aa.launch_analysis(root, SID)["reason"] == "analyzed"
+
+
+def test_pending_reanalyzes_grown_session(root, popen, set_cfg):
+    _write_turns(root, SID, n=6)
+    write_json(aa._state_path(root), {"schema_version": 1, "sessions": {SID: {"status": "analyzed", "turns": 4}}})
+    set_cfg(_cfg())
+    assert aa.launch_pending(root)["status"] == "launched"
+
+
+def test_analyze_records_analyzed_turn_count(root, set_cfg, fake_host):
+    _write_turns(root, SID, n=6)
+    set_cfg(_cfg())
+    assert aa.analyze_session(root, SID)["status"] == "analyzed"
+    assert _state(root)[SID]["turns"] == 6
 
 
 def test_launch_positive_spawns_detached_analyze(root, popen, set_cfg):
@@ -254,12 +280,39 @@ def test_analyze_success_marks_done_and_targets_conversation(root, set_cfg, fake
     call = fake_host["calls"][0]
     assert call["host"] == host
     assert CONV in call["prompt"] and "Do not record a new conversation" in call["prompt"]
+    # The conversation is already recorded: go straight to the skill's fallback (extract) step.
+    assert "Skip step 1" in call["prompt"] and f"alter_extract_cognitive` with `conversation_id: \"{CONV}\"" in call["prompt"]
+    assert "`turn_id` = the turn's `id`" in call["prompt"] and "`turn_seq` = its `sequence`" in call["prompt"]
     assert call["allowed_tools"] == aa.ANALYZER_TOOLS
     assert call["mcp_servers"] == ["alter"]
     assert call["read_only"] is False and call["lean"] is True
     assert call["env"][aa.ANALYZER_ENV] == "1" and call["env"]["EGO_ALTER_AUTO_REVIEW"] == "0"
     entry = _state(root)[SID]
     assert entry["status"] == "analyzed" and entry["attempts"] == 1 and entry["host"] == host
+
+
+@pytest.mark.parametrize("output", [
+    "",                                                        # no marker at all
+    f"ALTER_ANALYSIS conversation={CONV} result=not_attached",  # analyzer says alter did not accept
+    "ALTER_ANALYSIS conversation=other-conv result=attached",  # marker names a different conversation
+    f"ALTER_ANALYSIS conversation={CONV} result=attached\nALTER_ANALYSIS conversation={CONV} result=not_attached",  # last marker wins
+])
+def test_analyze_not_marked_analyzed_without_confirmed_attachment(root, set_cfg, fake_host, output):
+    _write_turns(root, SID, host="claude")
+    set_cfg(_cfg())
+    fake_host["output"] = output
+    res = aa.analyze_session(root, SID)
+    assert res["status"] == "failed"
+    entry = _state(root)[SID]
+    assert entry["status"] == "failed" and entry["attempts"] == 1 and entry["reason"]
+
+
+def test_analyze_run_failure_is_failed_even_with_attached_marker(root, set_cfg, fake_host):
+    _write_turns(root, SID, host="claude")
+    set_cfg(_cfg())
+    fake_host["status"] = "FAIL"
+    fake_host["output"] = f"ALTER_ANALYSIS conversation={CONV} result=attached"
+    assert aa.analyze_session(root, SID)["status"] == "failed"
 
 
 def test_analyze_opencode_default_model(root, set_cfg, fake_host):
@@ -433,6 +486,17 @@ def test_keep_turns_persists_turns_and_conversation_id(root, alter_submit):
     assert all(isinstance(t["id"], str) and isinstance(t["sequence"], int) for t in saved["turns"])
 
 
+def test_ensure_turn_ids_mirrors_alter_defaults():
+    # alter stores a missing id as `turn-${sequence}` and a missing sequence as the index;
+    # the analyzer cites these ids, so ego's saved copy must use the same rule.
+    turns = [{"role": "user", "text": "a"},                          # neither: index 0
+             {"role": "assistant", "text": "b", "sequence": 7},      # sequence only
+             {"role": "user", "text": "c", "id": "u-1", "sequence": 9},
+             {"role": "assistant", "text": "d", "id": "a-1"}]        # id only: sequence = index
+    out = memory._ensure_turn_ids(turns)
+    assert [(t["id"], t["sequence"]) for t in out] == [("turn-0", 0), ("turn-7", 7), ("u-1", 9), ("a-1", 3)]
+
+
 def test_keep_turns_false_writes_no_turn_file(root, alter_submit):
     res = memory.submit_alter_session_review(root, session_id=SID, host="claude")
     assert res["status"] == "submitted" and "conversation_id" not in res
@@ -498,8 +562,8 @@ def test_config_defaults_valid():
     cfg = Config()
     cfg.validate()
     assert cfg.alter_analysis is False
-    assert cfg.alter_analysis_budget_usd == 0.5
     assert cfg.alter_analysis_timeout_seconds == 600
+    assert not hasattr(cfg, "alter_analysis_budget_usd")
 
 
 @pytest.mark.parametrize("kwargs, needle", [
@@ -510,8 +574,6 @@ def test_config_defaults_valid():
     ({"alter_analyzer": {"claude": {"model": "m", "effort": "low"}}}, "alter_analyzer.claude must be a table"),
     ({"alter_analyzer": {"claude": {"model": ""}}}, "alter_analyzer.claude.model must be a non-empty string"),
     ({"alter_analyzer": {"claude": {"model": 3}}}, "alter_analyzer.claude.model must be a non-empty string"),
-    ({"alter_analysis_budget_usd": -0.1}, "alter_analysis_budget_usd must be a number >= 0"),
-    ({"alter_analysis_budget_usd": True}, "alter_analysis_budget_usd must be a number >= 0"),
     ({"alter_analysis_timeout_seconds": 0}, "alter_analysis_timeout_seconds must be an integer > 0"),
     ({"alter_analysis_timeout_seconds": 1.5}, "alter_analysis_timeout_seconds must be an integer > 0"),
 ])
@@ -521,6 +583,67 @@ def test_config_rejects_invalid_alter_settings(kwargs, needle):
     assert exc.value.code == "INVALID_CONFIG" and needle in str(exc.value)
 
 
-def test_config_accepts_zero_budget_and_host_override():
-    cfg = Config(alter_analysis_budget_usd=0, alter_analyzer={"claude": {"model": "sonnet"}})
+def test_config_accepts_host_override():
+    cfg = Config(alter_analyzer={"claude": {"model": "sonnet"}})
     cfg.validate()
+
+
+# ---------- 5. AGY idle watcher / hook wiring ----------
+
+def test_start_idle_watch_spawns_one_watcher(root, set_cfg, monkeypatch):
+    _write_turns(root, SID)
+    set_cfg(_cfg())
+    calls = []
+
+    class P:
+        pid = os.getpid()  # a live pid: the second Stop must not start another watcher
+
+        def __init__(self, args, **kw):
+            calls.append(args)
+
+    monkeypatch.setattr(aa.subprocess, "Popen", P)
+    assert aa.start_idle_watch(root, SID)["status"] == "watching"
+    assert calls[0][1:] == ["-m", "ego", "session", "analyze", SID, "--when-idle"]
+    assert aa.start_idle_watch(root, SID)["reason"] == "watching" and len(calls) == 1
+
+
+def test_start_idle_watch_gating(root, popen, set_cfg):
+    set_cfg(_cfg(alter_analysis=False))
+    _write_turns(root, SID)
+    assert aa.start_idle_watch(root, SID)["status"] == "skipped"
+    set_cfg(_cfg())
+    _write_turns(root, "short", n=2)
+    assert aa.start_idle_watch(root, "short")["reason"] == "not enough turns"
+    assert popen == []
+
+
+def test_analyze_when_idle_waits_then_analyzes(root, set_cfg, fake_host):
+    _write_turns(root, SID, age_seconds=10)
+    set_cfg(_cfg())
+    naps = []
+
+    def nap(sec):  # each nap makes the file look older, as real time would
+        naps.append(sec)
+        path = memory.alter_turns_path(root, SID)
+        t = time.time() - 100
+        os.utime(path, (t, t))
+
+    res = aa.analyze_when_idle(root, SID, idle_seconds=60, poll_seconds=5, sleep=nap)
+    assert res["status"] == "analyzed" and len(naps) == 1 and len(fake_host["calls"]) == 1
+    assert _state(root)[SID]["watcher_pid"] is None
+
+
+def test_analyze_when_idle_gives_up_when_turns_pruned(root, set_cfg, fake_host):
+    set_cfg(_cfg())
+    assert aa.analyze_when_idle(root, SID, sleep=lambda s: None)["reason"] == "turns gone"
+    assert fake_host["calls"] == []
+
+
+def test_codex_gets_session_end_hook_and_agy_does_not():
+    from ego.domain.templates import generated_files
+    files = generated_files(Config(knowledge="alter", hosts=["codex", "agy"], auto_resume=False,
+                                   clear_suggest_tokens=0, usage_switch_percent=0))
+    import json
+    codex = json.loads(files[".codex/hooks.json"])["hooks"]
+    assert "session-end --host codex" in codex["SessionEnd"][0]["hooks"][0]["command"]
+    assert "SessionEnd" not in json.loads(files[".agents/hooks.json"])["ego"]

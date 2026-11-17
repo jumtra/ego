@@ -380,8 +380,8 @@ def _cmd_session(args):
             os.chdir(root)
             os.execvp(result["launch_argv"][0], result["launch_argv"])
     elif args.action == "analyze":
-        from .usecases.alter_analysis import analyze_session
-        result = analyze_session(root, args.session_id)
+        from .usecases.alter_analysis import analyze_session, analyze_when_idle
+        result = analyze_when_idle(root, args.session_id) if args.when_idle else analyze_session(root, args.session_id)
     elif args.from_host:
         result = pickup(root, args.task_id, args.from_host)
     else:
@@ -486,9 +486,9 @@ def _cmd_hook(args):
                             messages=obj.get("messages") if isinstance(obj.get("messages"), list) else None,
                             keep_turns=cfg.alter_analysis,
                         )
-                        if cfg.alter_analysis:
-                            from .usecases.alter_analysis import launch_analysis
-                            launch_analysis(root, str(obj.get("session_id") or ""))  # detached; fail open
+                        if cfg.alter_analysis and host == "agy":  # AGY has no session-end event: analyze once it has gone idle
+                            from .usecases.alter_analysis import start_idle_watch
+                            start_idle_watch(root, str(obj.get("session_id") or ""))  # detached; fail open
                     except Exception:
                         pass
                 # A nearly spent usage limit outranks a large context: there may be no later turn to save in.
@@ -773,6 +773,7 @@ def build_parser()->argparse.ArgumentParser:
     r.add_argument("--launch",action="store_true",help="Start the target CLI in this terminal")
     r=s.add_parser("analyze",help="Run the analyzer host headless on a recorded session and attach the analysis (alter_analysis)")
     r.add_argument("session_id")
+    r.add_argument("--when-idle",action="store_true",help="Wait until the session has been idle (no new saved turns) and then analyze it (hosts without a session-end event)")
     sp.set_defaults(func=_cmd_session)
     sp=sub.add_parser("run",help="Start an interactive CLI that ego checkpoints, clears and resumes by itself at the context limit");common(sp)
     sp.add_argument("host",choices=["claude","codex","opencode","agy"])

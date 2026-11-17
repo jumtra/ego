@@ -167,7 +167,6 @@ When `alter_analysis = true`, a session that has been recorded to alter is analy
 |---|---|---|---|
 | `alter_analysis` | `false` | bool | Enables the post-session analysis above |
 | `alter_analyzer` | `{opencode = {model = "opencode/glm-5.3-flash-free"}}` | table of host → `{model = "..."}` | Analyzer model per host. Hosts not listed use the session's host, so the analyzer host is the session host unless overridden here |
-| `alter_analysis_budget_usd` | `0.5` | number ≥ 0 | Spend cap for one analysis, in USD |
 | `alter_analysis_timeout_seconds` | `600` | integer > 0 | Wall-clock limit for one analysis, in seconds |
 
 ## Environment variables
