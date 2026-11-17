@@ -15,7 +15,7 @@ from ..shared.util import EgoError, read_json, write_json
 
 BINARIES = {"claude": "claude", "codex": "codex", "opencode": "opencode", "agy": "agy"}
 CACHE_TTL = 7 * 86400
-FLAG_RE = re.compile(r"(?<![\w-])--[a-z][a-z0-9-]*")
+FLAG_RE = re.compile(r"(?<![\w-])--[A-Za-z][A-Za-z0-9-]*")  # claude lists camelCase switches such as --allowedTools
 
 
 def cache_path() -> Path:
