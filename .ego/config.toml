@@ -22,6 +22,7 @@ policy_mode = "relaxed"
 hosts = ["claude", "agy", "codex", "opencode"]
 code_intelligence = "codegraph"
 memory = "alter"
+alter_analysis = true
 runtime_mode = "native"
 max_parallel = 4
 max_attempts = 3
