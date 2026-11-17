@@ -152,7 +152,7 @@ Checkpoints are separate again and always stored in `.ego/memory/handoffs/`.
 
 - **Rules:** `CLAUDE.md` / `AGENTS.md` and `.claude/rules/` plus the project's AI usage rules from alter (`alter_ai_usage`, injected at session start).
 - **Reading:** `alter_task_context` for every prompt (UserPromptSubmit, AGY `PreInvocation`, OpenCode `chat.message`). Managed runs keep the alter MCP server available (`lean = False`).
-- **Writing:** automatic. The Stop / SessionEnd hooks and `ego session checkpoint` send the redacted conversation and checkpoint facts to alter (`alter_record_conversation`, `alter_session_digest`) for reviewable confirmation. Set `EGO_ALTER_AUTO_REVIEW=0` to turn it off. `ego knowledge ...` is an error in this mode.
+- **Writing:** automatic. The Stop hook and `ego session checkpoint` send the redacted conversation and checkpoint facts to alter (`alter_record_conversation`, `alter_session_digest`) for reviewable confirmation. Set `EGO_ALTER_AUTO_REVIEW=0` to turn it off. `ego knowledge ...` is an error in this mode.
 - **alter unreachable:** the SessionStart and UserPromptSubmit hooks report `ego ERROR: alter に接続できません (...)` to the user and the agent instead of staying silent. They never block the turn. `ego doctor` shows `knowledge_health`.
 
 `memory` was the earlier name of the `knowledge` key; an old `.ego/config.toml` with `memory = "..."` is read as `knowledge` and rewritten on the next `ego apply`. `--memory` still works as an alias of `--knowledge`.

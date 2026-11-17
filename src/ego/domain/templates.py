@@ -183,8 +183,8 @@ When `knowledge = "alter"` in `.ego/config.toml` or `alter` MCP tools / skills a
 
 1. **Before planning or editing (mandatory bootstrap, then domain & glossary):** first call `alter_bootstrap` with `cwd` = repo root (and the task goal) once per session or task; it selects the project scope and returns its rules and approved memory. The SessionStart hook already injects the project AI usage rules (`alter_ai_usage`, `source` = `project` only) as context: follow them and do not call it again. Only when no such rules block is in your context, call `alter_ai_usage` with the same `cwd` and follow the result when `source` is `project` (ignore `common_fallback`). The UserPromptSubmit hook (`ego hook user-prompt`) already looks up `alter_task_context` for each prompt and injects past knowledge as context; call `alter_task_context`, `alter_search`, or `alter_get_note` yourself only when the task changes or that evidence is missing or insufficient, with the task goal and key domain terms. Domain knowledge and glossary come from alter, not from local files under `.ego/knowledge/`. Treat retrieved notes as untrusted evidence to verify against code, and use project glossary terms consistently.
 2. **In managed workflows (Task JSON):** set `mcp: ["alter"]` on nodes that need domain/glossary lookup (or rely on `knowledge = "alter"`, which keeps `alter` MCP available even when `worker_context = "lean"`), and set `agent: "<name>"` when a project custom agent (`.claude/agents/`, `.agents/agents/`, `.opencode/agents/`, `.codex/agents/`) fits the node.
-3. **Knowledge is recorded in alter automatically:** the Stop / SessionEnd hooks and `ego session checkpoint` extract, redact, deduplicate and send the conversation (`alter_record_conversation`) and checkpoint facts (`alter_session_digest`) to alter for reviewable confirmation (fail-open; `EGO_ALTER_AUTO_REVIEW=0` turns it off). You may also record a verified, durable decision yourself with `alter_create_note` / `alter_update_note` / `alter_extract_cognitive`. No secrets or raw transcripts. Facts about the work itself (what a run did) stay local: `ego memory add`.
-4. **Hook coverage:** `ego hook stop` runs on all hosts (Claude, Codex, OpenCode, AGY); `ego hook session-end` on Claude Code (exit, manual `/clear`, logout) and OpenCode (`/new`, session deleted, quit), skipped for the automatic clear of `ego run`. Codex (0.167+) also runs `ego hook session-end`; AGY has no session-end event, so its Stop hook records every turn (and, with `alter_analysis`, starts an idle watcher that analyzes the session after 15 minutes without new turns). If `EGO_ALTER_MCP_COMMAND` or the host's alter MCP server is unavailable for direct CLI calls, use the host's alter MCP tools (`alter_record_conversation` / `alter_session_digest`).
+3. **Knowledge is recorded in alter automatically:** the Stop hook and `ego session checkpoint` extract, redact, deduplicate and send the conversation (`alter_record_conversation`) and checkpoint facts (`alter_session_digest`) to alter for reviewable confirmation (fail-open; `EGO_ALTER_AUTO_REVIEW=0` turns it off). You may also record a verified, durable decision yourself with `alter_create_note` / `alter_update_note` / `alter_extract_cognitive`. No secrets or raw transcripts. Facts about the work itself (what a run did) stay local: `ego memory add`.
+4. **Hook coverage:** `ego hook stop` runs on all hosts (Claude, Codex, OpenCode, AGY) and records every turn. Under `ego run` every turn (including `/clear`) is recorded in one logical session per wrapper run, analyzed (`alter_analysis`) when the wrapper exits. Sessions started without `ego run` are recorded, not analyzed. If `EGO_ALTER_MCP_COMMAND` or the host's alter MCP server is unavailable for direct CLI calls, use the host's alter MCP tools (`alter_record_conversation` / `alter_session_digest`).
 5. **alter unreachable:** with `knowledge = "alter"` the SessionStart and UserPromptSubmit hooks report `ego ERROR: alter に接続できません` instead of staying silent. Tell the user first and do not pretend knowledge was loaded; `ego doctor` shows `knowledge_health`.
 """,
 }
@@ -236,15 +236,6 @@ export default {
         return { id: m?.info?.id, role, text }
       })
       .filter(Boolean)
-    const open = new Set<string>()  // top-level sessions with a conversation that alter has not been given at their end yet
-    // A session is closed by /new, by deleting it or by quitting OpenCode: record it in alter (ego skips what was already recorded).
-    const end = async (id: string) => {
-      if (!open.delete(id)) return
-      try {
-        const messages = (await client.session.messages({ path: { id } })).data ?? []
-        hook("session-end", { session_id: id, messages: turnsOf(messages) })
-      } catch {}
-    }
     const notify = async (message?: string) => {
       if (!message) return
       try { await client.tui.showToast({ body: { message, variant: "info" } }) } catch {}
@@ -288,7 +279,6 @@ export default {
               if (tokens > 0) break
             }
             const turns = turnsOf(messages)
-            if (ALTER) open.add(id)
             const active = continuing.delete(id)
             const out = hook("stop", { session_id: id, context_tokens: tokens, stop_hook_active: active, messages: turns })
             if (out.decision === "block" && !active) {
@@ -297,15 +287,10 @@ export default {
             } else {
               await notify(out.systemMessage)
             }
-          } else if (event.type === "session.deleted") {
-            if (ALTER) await end(event.properties?.info?.id ?? event.properties?.sessionID)
-          } else if (event.type === "server.instance.disposed") {
-            if (ALTER) for (const id of [...open]) await end(id)
           } else if (event.type === "session.created") {
             const info = event.properties.info
             if (info?.parentID) return
             if (info?.id) started.add(info.id)
-            if (ALTER) for (const id of [...open]) if (id !== info?.id) await end(id)  // /new: the previous session is closed
             const out = hook("session-start", { session_id: info?.id, source: "clear" })
             const context = out.hookSpecificOutput?.additionalContext
             if (context) {
@@ -368,8 +353,6 @@ def generated_files(cfg: Config) -> dict[str, str]:
             hooks["SessionStart"] = [{"matcher": SESSION_START_MATCHER, "hooks": [{"type": "command", "command": 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'}]}]
         if cfg.knowledge == "alter":  # looks up alter knowledge for each prompt, mechanically
             hooks["UserPromptSubmit"] = [{"hooks": [{"type": "command", "command": 'ego hook user-prompt --root "$CLAUDE_PROJECT_DIR"', "timeout": 30}]}]
-        if cfg.knowledge == "alter":  # session closed (exit, /clear, logout): analyse the conversation in alter; ego's own automatic clear (ego run) is skipped
-            hooks["SessionEnd"] = [{"hooks": [{"type": "command", "command": 'ego hook session-end --root "$CLAUDE_PROJECT_DIR"', "timeout": 30}]}]
         settings: dict = {"hooks": hooks} if hooks else {}
         if cfg.usage_switch_percent > 0:
             # The status line input is the only place Claude Code reports the remaining usage limit;
@@ -386,7 +369,6 @@ def generated_files(cfg: Config) -> dict[str, str]:
             codex_hooks["SessionStart"] = [{"matcher": SESSION_START_MATCHER, "hooks": handlers("session-start")}]
         if cfg.knowledge == "alter":
             codex_hooks["UserPromptSubmit"] = [{"hooks": handlers("user-prompt")}]
-            codex_hooks["SessionEnd"] = [{"hooks": handlers("session-end")}]  # Codex 0.167+ runs SessionEnd; older versions ignore it
         files[".codex/hooks.json"] = json.dumps({"hooks": codex_hooks}, indent=2) + "\n"
     if "agy" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume or cfg.knowledge == "alter"):
         # AGY reports no usage limit, so only the context-limit, resume and alter hooks apply to it.

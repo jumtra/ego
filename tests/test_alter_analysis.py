@@ -18,6 +18,7 @@ from ego.domain import retention
 from ego.domain.config import Config, DEFAULT_ALTER_ANALYZER
 from ego.shared.util import EgoError, read_json, write_json
 from ego.usecases import alter_analysis as aa
+from ego.usecases import ptyrun
 
 SID = "sess-1"
 CONV = "conv-123"
@@ -166,13 +167,6 @@ def test_launch_reanalyzes_when_session_grew_since_analysis(root, popen, set_cfg
     assert aa.launch_analysis(root, SID)["reason"] == "analyzed"
 
 
-def test_pending_reanalyzes_grown_session(root, popen, set_cfg):
-    _write_turns(root, SID, n=6)
-    write_json(aa._state_path(root), {"schema_version": 1, "sessions": {SID: {"status": "analyzed", "turns": 4}}})
-    set_cfg(_cfg())
-    assert aa.launch_pending(root)["status"] == "launched"
-
-
 def test_analyze_records_analyzed_turn_count(root, set_cfg, fake_host):
     _write_turns(root, SID, n=6)
     set_cfg(_cfg())
@@ -204,66 +198,6 @@ def test_launch_fails_open_when_spawn_raises(root, set_cfg, monkeypatch):
     monkeypatch.setattr(aa.subprocess, "Popen", boom)
     res = aa.launch_analysis(root, SID)
     assert res["status"] == "error" and "no exec" in res["reason"]
-
-
-# ---------- 2. launch_pending ----------
-
-def test_pending_launches_at_most_one(root, popen, set_cfg):
-    _write_turns(root, "a", age_seconds=10)
-    _write_turns(root, "b", age_seconds=20)
-    set_cfg(_cfg())
-    res = aa.launch_pending(root)
-    assert res == {"status": "launched", "session_id": "a"}  # newest first
-    assert len(popen) == 1
-
-
-def test_pending_ignores_sessions_older_than_48h(root, popen, set_cfg):
-    _write_turns(root, "old", age_seconds=49 * 3600)
-    set_cfg(_cfg())
-    assert aa.launch_pending(root) == {"status": "skipped", "reason": "nothing pending"}
-    assert popen == []
-
-
-def test_pending_accepts_session_just_inside_48h(root, popen, set_cfg):
-    _write_turns(root, "edge", age_seconds=47 * 3600)
-    set_cfg(_cfg())
-    assert aa.launch_pending(root)["status"] == "launched"
-
-
-def test_pending_skips_analyzed_and_attempt_exhausted(root, popen, set_cfg):
-    assert aa.MAX_ATTEMPTS == 2
-    _write_turns(root, "done", age_seconds=10)
-    _write_turns(root, "spent", age_seconds=20)
-    write_json(aa._state_path(root), {"schema_version": 1, "sessions": {
-        "done": {"status": "analyzed"},
-        "spent": {"status": "failed", "attempts": aa.MAX_ATTEMPTS},
-    }})
-    set_cfg(_cfg())
-    assert aa.launch_pending(root)["reason"] == "nothing pending"
-    assert popen == []
-
-
-def test_pending_retries_while_attempts_below_limit(root, popen, set_cfg):
-    _write_turns(root, "retry", age_seconds=10)
-    write_json(aa._state_path(root), {"schema_version": 1, "sessions": {
-        "retry": {"status": "failed", "attempts": aa.MAX_ATTEMPTS - 1}}})
-    set_cfg(_cfg())
-    assert aa.launch_pending(root) == {"status": "launched", "session_id": "retry"}
-
-
-def test_pending_skips_when_disabled_or_inside_analyzer(root, popen, set_cfg, monkeypatch):
-    _write_turns(root, SID)
-    set_cfg(_cfg(alter_analysis=False))
-    assert aa.launch_pending(root)["reason"] == "disabled"
-    set_cfg(_cfg())
-    monkeypatch.setenv(aa.ANALYZER_ENV, "1")
-    assert aa.launch_pending(root)["reason"] == "disabled"
-    assert popen == []
-
-
-def test_pending_no_saved_sessions(root, popen, set_cfg):
-    set_cfg(_cfg())
-    assert aa.launch_pending(root) == {"status": "skipped", "reason": "no saved sessions"}
 
 
 # ---------- 3. analyze_session per host ----------
@@ -379,9 +313,6 @@ def test_run_failure_counts_an_attempt_and_retries_are_capped(root, set_cfg, fak
     assert second["attempts"] == 2
     assert _state(root)[SID]["status"] == "failed"
 
-    # launch_pending stops retrying once MAX_ATTEMPTS is reached.
-    assert aa.launch_pending(root)["reason"] == "nothing pending"
-    assert popen == []
     assert len(fake_host["calls"]) == 2
 
 
@@ -669,65 +600,27 @@ def test_config_accepts_host_override():
     cfg.validate()
 
 
-# ---------- 5. AGY idle watcher / hook wiring ----------
+# ---------- 5. ego run end / hook wiring ----------
 
-def test_start_idle_watch_spawns_one_watcher(root, set_cfg, monkeypatch):
-    _write_turns(root, SID)
-    set_cfg(_cfg())
-    calls = []
-
-    class P:
-        pid = os.getpid()  # a live pid: the second Stop must not start another watcher
-
-        def __init__(self, args, **kw):
-            calls.append(args)
-
-    monkeypatch.setattr(aa.subprocess, "Popen", P)
-    assert aa.start_idle_watch(root, SID)["status"] == "watching"
-    assert calls[0][1:] == ["-m", "ego", "session", "analyze", SID, "--when-idle"]
-    assert aa.start_idle_watch(root, SID)["reason"] == "watching" and len(calls) == 1
-
-
-def test_start_idle_watch_gating(root, popen, set_cfg):
-    set_cfg(_cfg(alter_analysis=False))
-    _write_turns(root, SID)
-    assert aa.start_idle_watch(root, SID)["status"] == "skipped"
-    set_cfg(_cfg())
-    _write_turns(root, "short", n=2)
-    assert aa.start_idle_watch(root, "short")["reason"] == "not enough turns"
-    assert popen == []
-
-
-def test_analyze_when_idle_waits_then_analyzes(root, set_cfg, fake_host):
-    _write_turns(root, SID, age_seconds=10)
-    set_cfg(_cfg())
-    naps = []
-
-    def nap(sec):  # each nap makes the file look older, as real time would
-        naps.append(sec)
-        path = memory.alter_turns_path(root, SID)
-        t = time.time() - 100
-        os.utime(path, (t, t))
-
-    res = aa.analyze_when_idle(root, SID, idle_seconds=60, poll_seconds=5, sleep=nap)
-    assert res["status"] == "analyzed" and len(naps) == 1 and len(fake_host["calls"]) == 1
-    assert _state(root)[SID]["watcher_pid"] is None
-
-
-def test_analyze_when_idle_gives_up_when_turns_pruned(root, set_cfg, fake_host):
-    set_cfg(_cfg())
-    assert aa.analyze_when_idle(root, SID, sleep=lambda s: None)["reason"] == "turns gone"
-    assert fake_host["calls"] == []
-
-
-def test_codex_gets_session_end_hook_and_agy_does_not():
+def test_no_host_gets_a_session_end_hook():
     from ego.domain.templates import generated_files
-    files = generated_files(Config(knowledge="alter", hosts=["codex", "agy"], auto_resume=False,
+    files = generated_files(Config(knowledge="alter", hosts=["claude", "codex", "opencode", "agy"], auto_resume=False,
                                    clear_suggest_tokens=0, usage_switch_percent=0))
     import json
-    codex = json.loads(files[".codex/hooks.json"])["hooks"]
-    assert "session-end --host codex" in codex["SessionEnd"][0]["hooks"][0]["command"]
+    assert "SessionEnd" not in json.loads(files[".claude/settings.json"])["hooks"]
+    assert "SessionEnd" not in json.loads(files[".codex/hooks.json"])["hooks"]
     assert "SessionEnd" not in json.loads(files[".agents/hooks.json"])["ego"]
+    assert "session-end" not in files[".opencode/plugins/ego.ts"]
+
+
+def test_docs_and_templates_do_not_mention_session_end():
+    repo = Path(__file__).resolve().parents[1]
+    sources = [repo / "src/ego/domain/templates.py", *sorted((repo / "docs").rglob("*.md"))]
+    assert sources
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        assert "SessionEnd" not in text, path
+        assert "session-end" not in text, path
 
 
 def test_hooks_noop_inside_analyzer(root, monkeypatch, capsys):
@@ -740,3 +633,67 @@ def test_hooks_noop_inside_analyzer(root, monkeypatch, capsys):
         rc = cli._cmd_hook(SimpleNamespace(root=str(root), event=event, host="claude"))
         assert rc == 0
         assert capsys.readouterr().out.strip() == "{}"
+
+
+def test_ego_run_end_launches_analysis_for_the_logical_session(root, set_cfg, monkeypatch):
+    from types import SimpleNamespace
+    recorder: list[tuple] = []
+    seen: dict = {}
+    mode = {"interrupt": False}
+
+    def fake_run(host, argv, run_root, threshold, *, env=None, **kw):
+        seen["run_id"] = env[ptyrun.RUN_ID_ENV]
+        if mode["interrupt"]:
+            raise KeyboardInterrupt
+        return (0, 0)
+
+    tty = SimpleNamespace(isatty=lambda: True)
+    monkeypatch.setattr(sys, "stdin", tty)
+    monkeypatch.setattr(sys, "stdout", tty)
+    monkeypatch.setattr(ptyrun.shutil, "which", lambda name: "/bin/true")
+    monkeypatch.setattr(aa, "launch_analysis", lambda r, sid: recorder.append((r, sid)) or {"status": "launched"})
+    monkeypatch.setattr(ptyrun, "run", fake_run)
+
+    # Normal end of the wrapper: one analysis for the whole ego run.
+    set_cfg(_cfg())
+    assert ptyrun.run_host("claude", [], root, 1000) == 0
+    assert recorder == [(root.resolve(), f"ego-run-{seen['run_id']}")]
+
+    # The wrapper is interrupted: the end still launches analysis, exactly once.
+    recorder.clear()
+    mode["interrupt"] = True
+    with pytest.raises(KeyboardInterrupt):
+        ptyrun.run_host("claude", [], root, 1000)
+    assert len(recorder) == 1
+
+    # alter analysis off: nothing launches.
+    recorder.clear()
+    mode["interrupt"] = False
+    set_cfg(_cfg(alter_analysis=False))
+    ptyrun.run_host("claude", [], root, 1000)
+    assert recorder == []
+
+
+def test_stop_hook_starts_no_watcher(root, set_cfg, monkeypatch, popen, capsys):
+    import io
+    import json
+    from types import SimpleNamespace
+    from ego import cli
+    recorded: list = []
+    monkeypatch.setattr(memory, "submit_alter_session_review", lambda *a, **k: recorded.append(k) or {"status": "submitted"})
+    set_cfg(_cfg())
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"session_id": SID, "cwd": str(root)})))
+    assert cli._cmd_hook(SimpleNamespace(root=str(root), event="stop", host="agy")) == 0
+    capsys.readouterr()
+    assert recorded  # the stop hook still submits the turn to alter
+    assert popen == []  # but it never starts an analysis or watcher process
+
+
+def test_end_detection_code_is_gone():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    banned = ("IDLE_SECONDS", "launch_pending", "start_idle_watch", "analyze_when_idle", "--when-idle")
+    hits = [f"{p.relative_to(repo)}: {b}"
+            for p in sorted((repo / "src").rglob("*.py"))
+            for b in banned if b in p.read_text(encoding="utf-8")]
+    assert hits == []
