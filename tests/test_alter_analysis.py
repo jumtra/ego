@@ -157,6 +157,29 @@ def test_launch_skipped_when_already_analyzed(root, popen, set_cfg):
     assert popen == []
 
 
+def test_launch_reanalyzes_when_session_grew_since_analysis(root, popen, set_cfg):
+    _write_turns(root, SID, n=6)
+    write_json(aa._state_path(root), {"schema_version": 1, "sessions": {SID: {"status": "analyzed", "turns": 4}}})
+    set_cfg(_cfg())
+    assert aa.launch_analysis(root, SID)["status"] == "launched"
+    write_json(aa._state_path(root), {"schema_version": 1, "sessions": {SID: {"status": "analyzed", "turns": 6}}})
+    assert aa.launch_analysis(root, SID)["reason"] == "analyzed"
+
+
+def test_pending_reanalyzes_grown_session(root, popen, set_cfg):
+    _write_turns(root, SID, n=6)
+    write_json(aa._state_path(root), {"schema_version": 1, "sessions": {SID: {"status": "analyzed", "turns": 4}}})
+    set_cfg(_cfg())
+    assert aa.launch_pending(root)["status"] == "launched"
+
+
+def test_analyze_records_analyzed_turn_count(root, set_cfg, fake_host):
+    _write_turns(root, SID, n=6)
+    set_cfg(_cfg())
+    assert aa.analyze_session(root, SID)["status"] == "analyzed"
+    assert _state(root)[SID]["turns"] == 6
+
+
 def test_launch_positive_spawns_detached_analyze(root, popen, set_cfg):
     _write_turns(root, SID)
     set_cfg(_cfg())
@@ -563,3 +586,64 @@ def test_config_rejects_invalid_alter_settings(kwargs, needle):
 def test_config_accepts_host_override():
     cfg = Config(alter_analyzer={"claude": {"model": "sonnet"}})
     cfg.validate()
+
+
+# ---------- 5. AGY idle watcher / hook wiring ----------
+
+def test_start_idle_watch_spawns_one_watcher(root, set_cfg, monkeypatch):
+    _write_turns(root, SID)
+    set_cfg(_cfg())
+    calls = []
+
+    class P:
+        pid = os.getpid()  # a live pid: the second Stop must not start another watcher
+
+        def __init__(self, args, **kw):
+            calls.append(args)
+
+    monkeypatch.setattr(aa.subprocess, "Popen", P)
+    assert aa.start_idle_watch(root, SID)["status"] == "watching"
+    assert calls[0][1:] == ["-m", "ego", "session", "analyze", SID, "--when-idle"]
+    assert aa.start_idle_watch(root, SID)["reason"] == "watching" and len(calls) == 1
+
+
+def test_start_idle_watch_gating(root, popen, set_cfg):
+    set_cfg(_cfg(alter_analysis=False))
+    _write_turns(root, SID)
+    assert aa.start_idle_watch(root, SID)["status"] == "skipped"
+    set_cfg(_cfg())
+    _write_turns(root, "short", n=2)
+    assert aa.start_idle_watch(root, "short")["reason"] == "not enough turns"
+    assert popen == []
+
+
+def test_analyze_when_idle_waits_then_analyzes(root, set_cfg, fake_host):
+    _write_turns(root, SID, age_seconds=10)
+    set_cfg(_cfg())
+    naps = []
+
+    def nap(sec):  # each nap makes the file look older, as real time would
+        naps.append(sec)
+        path = memory.alter_turns_path(root, SID)
+        t = time.time() - 100
+        os.utime(path, (t, t))
+
+    res = aa.analyze_when_idle(root, SID, idle_seconds=60, poll_seconds=5, sleep=nap)
+    assert res["status"] == "analyzed" and len(naps) == 1 and len(fake_host["calls"]) == 1
+    assert _state(root)[SID]["watcher_pid"] is None
+
+
+def test_analyze_when_idle_gives_up_when_turns_pruned(root, set_cfg, fake_host):
+    set_cfg(_cfg())
+    assert aa.analyze_when_idle(root, SID, sleep=lambda s: None)["reason"] == "turns gone"
+    assert fake_host["calls"] == []
+
+
+def test_codex_gets_session_end_hook_and_agy_does_not():
+    from ego.domain.templates import generated_files
+    files = generated_files(Config(knowledge="alter", hosts=["codex", "agy"], auto_resume=False,
+                                   clear_suggest_tokens=0, usage_switch_percent=0))
+    import json
+    codex = json.loads(files[".codex/hooks.json"])["hooks"]
+    assert "session-end --host codex" in codex["SessionEnd"][0]["hooks"][0]["command"]
+    assert "SessionEnd" not in json.loads(files[".agents/hooks.json"])["ego"]
