@@ -87,7 +87,7 @@ def _state(root: Path) -> dict:
 @pytest.fixture
 def fake_host(monkeypatch):
     """Fake inspect_host (controls availability/support) and run_agent (records calls, returns a scripted status)."""
-    ctl = {"available": True, "supported": True, "status": "PASS", "calls": [], "inspected": []}
+    ctl = {"available": True, "supported": True, "status": "PASS", "calls": [], "inspected": [], "output": None}
 
     def fake_inspect(host, **kw):
         ctl["inspected"].append(host)
@@ -97,7 +97,10 @@ def fake_host(monkeypatch):
     def fake_run(host, prompt, cwd, timeout=180, **kw):
         ctl["calls"].append({"host": host, "prompt": prompt, "cwd": cwd, "timeout": timeout, **kw})
         ok = ctl["status"] == "PASS"
-        return RunResult(status=ctl["status"], output="", stderr="", exit_code=0 if ok else 1,
+        # By default the analyzer reports that alter accepted the analysis for CONV; tests may override.
+        default = f"done\nALTER_ANALYSIS conversation={CONV} result=attached" if ok else ""
+        out = ctl["output"] if ctl["output"] is not None else default
+        return RunResult(status=ctl["status"], output=out, stderr="", exit_code=0 if ok else 1,
                          elapsed_seconds=0.0, host=host, reason="" if ok else "boom")
 
     monkeypatch.setattr(hostcompat, "inspect_host", fake_inspect)
@@ -260,6 +263,30 @@ def test_analyze_success_marks_done_and_targets_conversation(root, set_cfg, fake
     assert call["env"][aa.ANALYZER_ENV] == "1" and call["env"]["EGO_ALTER_AUTO_REVIEW"] == "0"
     entry = _state(root)[SID]
     assert entry["status"] == "analyzed" and entry["attempts"] == 1 and entry["host"] == host
+
+
+@pytest.mark.parametrize("output", [
+    "",                                                        # no marker at all
+    f"ALTER_ANALYSIS conversation={CONV} result=not_attached",  # analyzer says alter did not accept
+    "ALTER_ANALYSIS conversation=other-conv result=attached",  # marker names a different conversation
+    f"ALTER_ANALYSIS conversation={CONV} result=attached\nALTER_ANALYSIS conversation={CONV} result=not_attached",  # last marker wins
+])
+def test_analyze_not_marked_analyzed_without_confirmed_attachment(root, set_cfg, fake_host, output):
+    _write_turns(root, SID, host="claude")
+    set_cfg(_cfg())
+    fake_host["output"] = output
+    res = aa.analyze_session(root, SID)
+    assert res["status"] == "failed"
+    entry = _state(root)[SID]
+    assert entry["status"] == "failed" and entry["attempts"] == 1 and entry["reason"]
+
+
+def test_analyze_run_failure_is_failed_even_with_attached_marker(root, set_cfg, fake_host):
+    _write_turns(root, SID, host="claude")
+    set_cfg(_cfg())
+    fake_host["status"] = "FAIL"
+    fake_host["output"] = f"ALTER_ANALYSIS conversation={CONV} result=attached"
+    assert aa.analyze_session(root, SID)["status"] == "failed"
 
 
 def test_analyze_opencode_default_model(root, set_cfg, fake_host):
@@ -498,8 +525,8 @@ def test_config_defaults_valid():
     cfg = Config()
     cfg.validate()
     assert cfg.alter_analysis is False
-    assert cfg.alter_analysis_budget_usd == 0.5
     assert cfg.alter_analysis_timeout_seconds == 600
+    assert not hasattr(cfg, "alter_analysis_budget_usd")
 
 
 @pytest.mark.parametrize("kwargs, needle", [
@@ -510,8 +537,6 @@ def test_config_defaults_valid():
     ({"alter_analyzer": {"claude": {"model": "m", "effort": "low"}}}, "alter_analyzer.claude must be a table"),
     ({"alter_analyzer": {"claude": {"model": ""}}}, "alter_analyzer.claude.model must be a non-empty string"),
     ({"alter_analyzer": {"claude": {"model": 3}}}, "alter_analyzer.claude.model must be a non-empty string"),
-    ({"alter_analysis_budget_usd": -0.1}, "alter_analysis_budget_usd must be a number >= 0"),
-    ({"alter_analysis_budget_usd": True}, "alter_analysis_budget_usd must be a number >= 0"),
     ({"alter_analysis_timeout_seconds": 0}, "alter_analysis_timeout_seconds must be an integer > 0"),
     ({"alter_analysis_timeout_seconds": 1.5}, "alter_analysis_timeout_seconds must be an integer > 0"),
 ])
@@ -521,6 +546,6 @@ def test_config_rejects_invalid_alter_settings(kwargs, needle):
     assert exc.value.code == "INVALID_CONFIG" and needle in str(exc.value)
 
 
-def test_config_accepts_zero_budget_and_host_override():
-    cfg = Config(alter_analysis_budget_usd=0, alter_analyzer={"claude": {"model": "sonnet"}})
+def test_config_accepts_host_override():
+    cfg = Config(alter_analyzer={"claude": {"model": "sonnet"}})
     cfg.validate()

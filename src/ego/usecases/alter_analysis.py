@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -136,14 +137,31 @@ def launch_pending(root: Path) -> dict[str, Any]:
         return {"status": "error", "reason": str(exc)[:200]}
 
 
+ATTACHED_RE = re.compile(r"ALTER_ANALYSIS conversation=(\S+) result=(attached|not_attached)")
+
+
 def _analyzer_prompt(conversation_id: str, turns: list[dict[str, Any]]) -> str:
     body = json.dumps(turns, ensure_ascii=False)[:MAX_PROMPT_CHARS]
     return (
         "Use the alter-session-analyzer skill to analyze the ALTER conversation whose id is "
         f"`{conversation_id}` and attach the analysis to that conversation. Capture only durable, "
         "owner-attributed knowledge. Do not record a new conversation.\n\n"
+        "When you finish, print exactly one final line and nothing after it:\n"
+        f"ALTER_ANALYSIS conversation={conversation_id} result=attached\n"
+        "only if alter accepted the analysis for that conversation (for example the analysis was "
+        "submitted for owner review, or alter_extract_cognitive succeeded with that conversation_id). "
+        "Otherwise print the same line with result=not_attached.\n\n"
         "Recorded turns (redacted, JSON):\n" + body
     )
+
+
+def _attachment_confirmed(output: str, conversation_id: str) -> bool:
+    """True only when the analyzer's last marker names this conversation and reports alter accepted it."""
+    found = ATTACHED_RE.findall(output or "")
+    if not found:
+        return False
+    marker_id, result = found[-1]
+    return marker_id == conversation_id and result == "attached"
 
 
 def analyze_session(root: Path, sid: str) -> dict[str, Any]:
@@ -182,12 +200,14 @@ def analyze_session(root: Path, sid: str) -> dict[str, Any]:
         env = {**os.environ, ANALYZER_ENV: "1", "EGO_ALTER_AUTO_REVIEW": "0"}  # analyzer must not record itself
         result = run_agent(host, _analyzer_prompt(conversation_id, turns["turns"]), root,
                            timeout=int(cfg.alter_analysis_timeout_seconds), model=model, read_only=False,
-                           max_turns=ANALYZER_MAX_TURNS, lean=True, mcp_servers=["alter"],
-                           max_budget_usd=float(cfg.alter_analysis_budget_usd), env=env,
+                           max_turns=ANALYZER_MAX_TURNS, lean=True, mcp_servers=["alter"], env=env,
                            allowed_tools=ANALYZER_TOOLS)
-        status = "analyzed" if result.status == "PASS" else "failed"
-        _save_entry(root, sid, {"status": status, "attempts": attempts, "reason": "" if status == "analyzed" else
-                                (result.reason or result.status)})
+        # Analyzed only when the run passed AND the analyzer reports alter accepted the analysis for this conversation.
+        confirmed = result.status == "PASS" and _attachment_confirmed(result.output, conversation_id)
+        status = "analyzed" if confirmed else "failed"
+        reason = "" if confirmed else (result.reason or result.status if result.status != "PASS"
+                                       else "analysis not confirmed as attached by alter")
+        _save_entry(root, sid, {"status": status, "attempts": attempts, "reason": reason})
         return {"status": status, "session_id": sid, "conversation_id": conversation_id, "host": host, "attempts": attempts}
     except Exception as exc:  # fail open
         try:
