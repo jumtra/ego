@@ -5,7 +5,7 @@ import json
 import shutil
 import time
 from ..domain.config import Config, save_config, dump_config
-from ..domain.templates import generated_files, root_instructions, MARK_BEGIN, MARK_END, LEGACY_SKILL_HASHES
+from ..domain.templates import generated_files, MARK_BEGIN, MARK_END, LEGACY_SKILL_HASHES
 from .. import __version__
 from ..shared.util import EgoError, safe_path, filehash, sha256, read_json, write_json, atomic_text, ident, exclusive_lock, now
 import os
@@ -13,16 +13,16 @@ from typing import Any
 
 OWNERSHIP = ".ego/ownership.json"
 
-def _apply_block(previous: str, block: str) -> str:
-    if MARK_BEGIN in previous and MARK_END in previous:
-        if previous.count(MARK_BEGIN) != 1 or previous.count(MARK_END) != 1:
-            raise EgoError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
-        a = previous.index(MARK_BEGIN)
-        b = previous.index(MARK_END) + len(MARK_END)
-        return previous[:a] + block.rstrip("\n") + previous[b:]
-    if MARK_BEGIN not in previous and MARK_END not in previous:
-        return previous.rstrip() + ("\n\n" if previous.strip() else "") + block
-    raise EgoError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
+def _strip_block(text: str) -> str:
+    """Remove a managed block that an earlier version appended to CLAUDE.md / AGENTS.md."""
+    if MARK_BEGIN not in text and MARK_END not in text:
+        return text
+    if text.count(MARK_BEGIN) != 1 or text.count(MARK_END) != 1:
+        raise EgoError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
+    a = text.index(MARK_BEGIN)
+    b = text.index(MARK_END) + len(MARK_END)
+    kept = (text[:a] + text[b:]).strip()
+    return kept + "\n" if kept else ""
 
 
 def installation_plan(root: Path, cfg: Config) -> dict:
@@ -64,7 +64,12 @@ def installation_plan(root: Path, cfg: Config) -> dict:
         wanted[".ego/config.toml"] = cfg_file.read_text(encoding="utf-8") if current == cfg else dump_config(cfg)
     else:
         wanted[".ego/config.toml"] = dump_config(cfg)
-    wanted.update({k: _apply_block(safe_path(root, k).read_text(encoding="utf-8") if safe_path(root,k).exists() else "", v) for k,v in root_instructions(cfg).items()})
+    # The managed block is never persisted into CLAUDE.md / AGENTS.md: `ego run` overlays it for the session
+    # only (usecases/overlay.py). A block left by an earlier version is removed, the rest is kept.
+    for rel in ("CLAUDE.md", "AGENTS.md"):
+        path = safe_path(root, rel)
+        if path.exists() and MARK_BEGIN in path.read_text(encoding="utf-8"):
+            wanted[rel] = _strip_block(path.read_text(encoding="utf-8"))
     changes = []
     for rel, content in sorted(wanted.items()):
         path = safe_path(root, rel)
@@ -76,10 +81,8 @@ def installation_plan(root: Path, cfg: Config) -> dict:
             action = "create"
         elif rel == ".ego/config.toml":
             action = "update_config"
-        elif rel in ("CLAUDE.md", "AGENTS.md") and MARK_BEGIN in path.read_text(encoding="utf-8"):
-            action = "update_block"
         elif rel in ("CLAUDE.md", "AGENTS.md"):
-            action = "append_block"
+            action = "strip_block"
         elif rel in prev and prev[rel] == old:
             action = "replace_owned"
         else:
@@ -118,11 +121,16 @@ def apply_install(root: Path, cfg: Config) -> dict:
                     bpath.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(path, bpath)
                 else: meta["paths"][item["path"]] = False
-                if item["action"] == "remove_owned":
-                    path.unlink()
+                content = plan["wanted"].get(item["path"])
+                if item["action"] == "remove_owned" or (item["action"] == "strip_block" and not content):
+                    path.unlink()  # an instruction file that only held the legacy block goes away
                 else:
                     atomic_text(path, plan["wanted"][item["path"]])
-            files = {rel: filehash(safe_path(root, rel)) for rel in plan["wanted"]}
+            files = {}
+            for rel in plan["wanted"]:
+                digest = filehash(safe_path(root, rel))
+                if digest is not None:
+                    files[rel] = digest
             write_json(ownership_path, {"schema_version": 1, "installed_version": __version__, "last_snapshot_id": snapshot_id, "files": files})
             meta["previous_ownership"] = old_data
             write_json(backup / "meta.json", meta)

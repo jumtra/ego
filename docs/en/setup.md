@@ -69,7 +69,7 @@ In an interactive terminal, with none of the selection flags below given, a wiza
 | Detect test commands | yes / no (only when none are configured) | no |
 | Apply these changes? | yes / no, after the list of changed files | **no** |
 
-With knowledge `alter`, the managed block in CLAUDE.md / AGENTS.md (all hosts) requires calling `alter_bootstrap` (cwd = repo root) before planning or editing, and the SessionStart hook injects the same requirement (also inside `ego run`, where only the checkpoint resume stands down). Register each host's alter MCP against the same vault.
+With knowledge `alter`, the managed block that `ego run` places at the top of CLAUDE.md / AGENTS.md for the session requires calling `alter_bootstrap` (cwd = repo root) before planning or editing, and the SessionStart hook injects the same requirement (also inside `ego run`, where only the checkpoint resume stands down). Register each host's alter MCP against the same vault.
 
 Answer with a number or a name; hosts accept `1,2` or `all`. Enter keeps the current value, `q` cancels. On re-apply the existing `.ego/config.toml` supplies the defaults. Prompts are currently in Japanese.
 
@@ -122,13 +122,13 @@ ego apply --interactive --dry-run  # try different choices without writing
 | `.ego/spec/skills/{work,harness-init}/` | Canonical skills (source for the host copies) | always |
 | `.ego/spec/prompts/tool-guide.md` | Tool guidance | always |
 | `.ego/knowledge/index.md`, `.ego/knowledge/topics/*.md` | Project knowledge: an index and one file per topic. Created by `ego knowledge add`, not by `ego apply` | `knowledge = "file"`, on first write |
-| `CLAUDE.md` | Managed instruction block | host `claude` |
+| `CLAUDE.md` (existing content kept) | Managed block placed on top only while `ego run` is open (never persisted) | host `claude` |
 | `.claude/skills/`, `.claude/agents/`, `.claude/rules/` | `/work` and `/harness-init` skills, 4 agents, 2 rules | host `claude` |
 | `.claude/settings.json` | Hooks / status line | host `claude`, and any of: profile `full`, `auto_resume` (default on), `clear_suggest_tokens > 0`, `usage_switch_percent > 0` |
 | `.codex/hooks.json` | Hooks | host `codex`, and any of: `auto_resume` (default on), `clear_suggest_tokens > 0`, `usage_switch_percent > 0` |
 | `.agents/hooks.json` | Hooks | host `agy`, and `auto_resume` (default on), `clear_suggest_tokens > 0` or `knowledge = "alter"` |
 | `.opencode/plugins/ego.ts` | Plugin (hooks) | host `opencode`, and `auto_resume` (default on), `clear_suggest_tokens > 0` or `knowledge = "alter"`. The plugin pins the absolute `ego` path at `ego apply` time |
-| `AGENTS.md` | Managed instruction block | host `codex`, `opencode` or `agy` |
+| `AGENTS.md` (existing content kept) | Managed block placed on top only while `ego run` is open (never persisted) | host `codex`, `opencode` or `agy` |
 | `.agents/skills/` | Skills | host `codex`, `opencode` or `agy` |
 | `.codex/agents/*.toml` | 4 agents | host `codex` |
 | `.opencode/agents/*.md` | 4 agents | host `opencode` |
@@ -136,7 +136,7 @@ ego apply --interactive --dry-run  # try different choices without writing
 
 The four agents are `implementer`, `reviewer` (read-only), `fixer` and `evolver`.
 
-In `CLAUDE.md` / `AGENTS.md`, ego only manages the block between its `EGO:BEGIN` / `EGO:END` markers; the rest of the file is yours. Every other generated file is tracked by hash: ego replaces a file only while it still matches what ego wrote, and reports a conflict (`BLOCKED`) otherwise.
+`ego apply` never changes `CLAUDE.md` / `AGENTS.md`. `ego run` places the `EGO:BEGIN` / `EGO:END` block on top at launch and removes only that block at exit, restoring the original content (after a crash, the next `ego run` restores it). A file ego created is deleted at exit. The rest of the file is yours. Every other generated file is tracked by hash: ego replaces a file only while it still matches what ego wrote, and reports a conflict (`BLOCKED`) otherwise.
 
 Runtime state lives under `.ego/` too: `state/` (runs, loops, events), `memory/` (memory items, checkpoints in `handoffs/`), `backups/` (apply snapshots), `locks/`. Keep `.ego/state/`, `.ego/backups/`, `.ego/locks/` and `.ego/memory/handoffs/` out of Git.
 
