@@ -105,9 +105,16 @@ def git_head(root: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+ALTER_ROOT_ENV = "EGO_ALTER_PROJECT_ROOT"
+
+
 def alter_project_root(root: Path) -> Path:
     """The checkout alter knows the project by: a linked worktree maps to its main checkout, so alter never
-    creates a separate project for a worktree."""
+    creates a separate project for a worktree. A managed worker runs in a throwaway copy without .git that git
+    cannot map back, so its parent pins the project root through the environment."""
+    pinned = os.environ.get(ALTER_ROOT_ENV, "").strip()
+    if pinned:
+        return Path(pinned)
     try:
         r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
                            cwd=root, capture_output=True, text=True, timeout=5)

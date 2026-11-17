@@ -718,9 +718,17 @@ def drive(tmp_path, monkeypatch, replies, tokens, host="claude", read_only=False
 
     monkeypatch.setattr(worker, "worker_context_tokens", lambda cwd, sid: tokens)
     events = []
-    r = run_worker(host, "DO IT", tmp_path, 600, agent=agent, threshold=1000, segment_turns=2, tag="n-1-x",
+    r = run_worker(host, "DO IT", tmp_path, 600, agent=agent, threshold=1000, segment_turns=2, tag="n-1-x", project_root=tmp_path / "main",
                    max_turns=kw.pop("max_turns", 10), read_only=read_only, on_event=lambda **f: events.append(f), **kw)
     return r, calls, events
+
+
+@pytest.mark.parametrize("host,read_only", [("claude", False), ("codex", False), ("claude", True)])
+def test_every_worker_is_told_the_project_root_alter_knows_it_by(tmp_path, monkeypatch, host, read_only):
+    # Arrange / Act
+    _, calls, _ = drive(tmp_path, monkeypatch, [result(stop="success")], tokens=500, host=host, read_only=read_only)
+    # Assert
+    assert calls[0]["env"]["EGO_ALTER_PROJECT_ROOT"] == str((tmp_path / "main").resolve())
 
 
 def test_below_the_limit_the_same_session_continues(tmp_path, monkeypatch):

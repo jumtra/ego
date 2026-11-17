@@ -656,3 +656,12 @@ def test_alter_project_root_maps_a_linked_worktree_to_its_main_checkout(tmp_path
     # Act / Assert
     assert alter_project_root(linked) == main.resolve()
     assert alter_project_root(main) == main
+
+
+def test_alter_project_root_follows_the_root_a_worker_was_pinned_to(tmp_path: Path, monkeypatch):
+    # Arrange: a throwaway copy has no .git, so git alone cannot map it back
+    copy = tmp_path / "copy"
+    copy.mkdir()
+    monkeypatch.setenv("EGO_ALTER_PROJECT_ROOT", str(tmp_path / "main"))
+    # Act / Assert
+    assert alter_project_root(copy) == tmp_path / "main"

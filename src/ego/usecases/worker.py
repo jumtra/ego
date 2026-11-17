@@ -16,7 +16,7 @@ from typing import Any, Callable
 from ..adapters.runner import RunResult
 from .session import RUN_ID_ENV, context_tokens, latest_open_checkpoint, resume_prompt
 from ..domain.usage import TOKEN_KEYS
-from ..shared.util import read_json
+from ..shared.util import ALTER_ROOT_ENV, read_json
 
 CONTINUE_PROMPT = "Continue the task from where you stopped."
 
@@ -59,13 +59,15 @@ def _drop_handoffs(cwd: Path, tag: str) -> None:
 
 def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callable[..., RunResult], threshold: int,
                segment_turns: int, tag: str, max_turns: int, read_only: bool,
-               on_event: Callable[..., None] | None = None, max_budget_usd: float | None = None, **kw: Any) -> RunResult:
+               project_root: Path, on_event: Callable[..., None] | None = None,
+               max_budget_usd: float | None = None, **kw: Any) -> RunResult:
     emit = on_event or (lambda **_: None)
+    env = {**os.environ, ALTER_ROOT_ENV: str(project_root.resolve())}
     if host != "claude" or read_only or threshold <= 0:
         return agent(host, prompt, cwd, timeout, max_turns=max_turns, read_only=read_only,
-                     max_budget_usd=max_budget_usd, **kw)
+                     max_budget_usd=max_budget_usd, env=env, **kw)
     from .session import _save_request
-    env = {**os.environ, "EGO_RUN": "claude", RUN_ID_ENV: tag}
+    env |= {"EGO_RUN": "claude", RUN_ID_ENV: tag}
     deadline = time.monotonic() + timeout
     results: list[RunResult] = []
     used = rotations = 0
