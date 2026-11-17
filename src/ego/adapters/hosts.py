@@ -126,7 +126,8 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
                   read_only: bool = True, max_turns: int = 4, use_stdin: bool = False,
                   autonomy: str = "auto", isolated: bool = False, lean: bool = False,
                   mcp_servers: list[str] | tuple[str, ...] | None = None, cwd: Path | None = None,
-                  max_budget_usd: float | None = None, resume_session: str | None = None) -> list[str]:
+                  max_budget_usd: float | None = None, resume_session: str | None = None,
+                  allowed_tools: list[str] | tuple[str, ...] | None = None) -> list[str]:
     cap=capability(host)
     if not cap.supported:raise EgoError("HOST_UNAVAILABLE",cap.reason,3)
     if host=="mock":return []
@@ -161,6 +162,10 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         if autonomy=="bypass":
             require_flags(info,"--dangerously-skip-permissions")
             argv.append("--dangerously-skip-permissions")
+        elif allowed_tools:
+            # Headless run with an explicit tool allowlist: anything outside it is denied, never prompted.
+            require_flags(info,"--allowedTools","--permission-mode")
+            argv += ["--allowedTools",",".join(allowed_tools),"--permission-mode","dontAsk"]
         elif read_only or autonomy=="safe":
             require_flags(info,"--permission-mode")
             argv += ["--permission-mode","plan"]

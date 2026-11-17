@@ -157,6 +157,19 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 
 `memory` は `knowledge` キーの旧名です。`memory = "..."` が残る古い `.ego/config.toml` は `knowledge` として読まれ、次の `ego apply` で書き換えられます。`--memory` は `--knowledge` の別名として引き続き使えます。
 
+### セッション後の分析（`alter_analysis`）
+
+オプトインです。`knowledge = "alter"` のときだけ有効になります。モデル費用が発生するため、既定では無効です。
+
+`alter_analysis = true` にすると、alter に記録済みのセッションが終了した後に分析されます。ego が分析ホストを headless で（`ego session analyze <sid>`、切り離し実行で）起動し、`alter-session-analyzer` スキルを実行して、分析結果を同じ記録済みの会話 ID に付与します。分析はセッション終了後に行われるため、セッション終了をブロックしません。失敗は無視されます（fail open）。手動では `ego session analyze <sid>` で実行できます。
+
+| キー | 既定 | 範囲 | 効果 |
+|---|---|---|---|
+| `alter_analysis` | `false` | bool | 上記のセッション後分析を有効にする |
+| `alter_analyzer` | `{opencode = {model = "opencode/glm-5.3-flash-free"}}` | ホスト → `{model = "..."}` の表 | ホスト別の分析モデル。一覧にないホストはセッションのホストを使うため、上書きしない限り分析ホストはセッションのホストです |
+| `alter_analysis_budget_usd` | `0.5` | 数値 ≥ 0 | 1回の分析の費用上限（USD） |
+| `alter_analysis_timeout_seconds` | `600` | 整数 > 0 | 1回の分析の制限時間（秒） |
+
 ## 環境変数
 
 | 変数 | 用途 |

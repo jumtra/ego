@@ -141,7 +141,7 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
               autonomy: str = "auto", isolated: bool = False, lean: bool = False,
               mcp_servers: list[str]|tuple[str,...]|None = None,
               max_budget_usd: float|None = None, resume_session: str|None = None,
-              env: dict[str,str]|None = None) -> RunResult:
+              env: dict[str,str]|None = None, allowed_tools: list[str]|tuple[str,...]|None = None) -> RunResult:
     start = time.monotonic()
     if host == "mock":
         # Offline deterministic test driver; it never edits a file and is not an LLM.
@@ -150,7 +150,8 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
         return RunResult("PASS", output, "", 0, elapsed(start), "mock", 0, 0.0, model="mock", effort=effort)
     stdin_supported = host in ("claude", "codex")
     command = build_command(host, prompt, model=model, effort=effort, read_only=read_only, max_turns=max_turns, use_stdin=stdin_supported, autonomy=autonomy, isolated=isolated,
-                            lean=lean, mcp_servers=mcp_servers, cwd=cwd, max_budget_usd=max_budget_usd, resume_session=resume_session)
+                            lean=lean, mcp_servers=mcp_servers, cwd=cwd, max_budget_usd=max_budget_usd, resume_session=resume_session,
+                            allowed_tools=allowed_tools)
     try:
         code,stdout,stderr,seconds = run_process(command, cwd, timeout, input_text=prompt if stdin_supported else None, env=env)
     except OSError as exc:

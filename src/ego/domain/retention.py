@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ from ..shared.util import EgoError, exclusive_lock, read_json, write_json
 
 RUNS_KEEP = 30               # run directories (including their staging copies)
 ALTER_SESSIONS_KEEP = 200    # per-session ALTER submission digests
+ALTER_TURNS_KEEP = 50        # per-session persisted ALTER turn files (analyzer input)
+ALTER_TURNS_MAX_AGE_DAYS = 7
 EVENTS_KEEP_LINES = 5000     # lines of the append-only event journal
 BACKUPS_KEEP = 20            # install snapshots under .ego/backups
 
@@ -88,6 +91,27 @@ def _prune_alter_sessions(root: Path) -> int:
     return len(sessions) - len(kept)
 
 
+def _prune_alter_turns(root: Path) -> int:
+    """Remove persisted turn files older than ALTER_TURNS_MAX_AGE_DAYS, then keep at most ALTER_TURNS_KEEP newest."""
+    base = root / ".ego" / "state" / "alter_turns"
+    if not base.is_dir():
+        return 0
+    cutoff = time.time() - ALTER_TURNS_MAX_AGE_DAYS * 86400
+    removed = 0
+    files = [p for p in base.glob("*.json") if p.is_file()]
+    fresh: list[Path] = []
+    for path in files:
+        if path.stat().st_mtime < cutoff:
+            path.unlink(missing_ok=True)
+            removed += 1
+        else:
+            fresh.append(path)
+    for path in _newest_first(fresh)[ALTER_TURNS_KEEP:]:
+        path.unlink(missing_ok=True)
+        removed += 1
+    return removed
+
+
 def _prune_events(root: Path) -> int:
     path = root / ".ego" / "state" / "events.jsonl"
     if not path.is_file():
@@ -117,7 +141,8 @@ def prune_state(root: Path) -> dict[str, Any]:
     root = Path(root).resolve()
     report: dict[str, Any] = {}
     for name, step in (("runs", _prune_runs), ("run_locks", _prune_run_locks),
-                       ("alter_sessions", _prune_alter_sessions), ("events", _prune_events),
+                       ("alter_sessions", _prune_alter_sessions), ("alter_turns", _prune_alter_turns),
+                       ("events", _prune_events),
                        ("backups", _prune_backups)):
         try:
             report[name] = step(root)
