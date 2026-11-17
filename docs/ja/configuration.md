@@ -152,7 +152,7 @@ roles = {coder = {host = "claude", claude = [{model = "haiku", effort = ["low", 
 
 - **ルール:** `CLAUDE.md` / `AGENTS.md` と `.claude/rules/` に加えて、alter のプロジェクト AI 利用ルール（`alter_ai_usage`。セッション開始時に注入）。
 - **読む:** プロンプトごとに `alter_task_context`（UserPromptSubmit、AGY は `PreInvocation`、OpenCode は `chat.message`）。managed 実行では alter MCP サーバーを使えるままにします（`lean = False`）。
-- **書く:** 自動。Stop / SessionEnd フックと `ego session checkpoint` が、秘匿化した会話とチェックポイントの要点を alter に送ります（`alter_record_conversation`、`alter_session_digest`。alter 側で確認を経ます）。`EGO_ALTER_AUTO_REVIEW=0` で無効にできます。このモードでは `ego knowledge ...` はエラーです。
+- **書く:** 自動。Stop フックと `ego session checkpoint` が、秘匿化した会話とチェックポイントの要点を alter に送ります（`alter_record_conversation`、`alter_session_digest`。alter 側で確認を経ます）。`EGO_ALTER_AUTO_REVIEW=0` で無効にできます。このモードでは `ego knowledge ...` はエラーです。
 - **alter に接続できないとき:** SessionStart と UserPromptSubmit のフックが、黙らずに `ego ERROR: alter に接続できません (...)` をユーザーとエージェントに伝えます。ターンはブロックしません。`ego doctor` の `knowledge_health` でも確認できます。
 
 `memory` は `knowledge` キーの旧名です。`memory = "..."` が残る古い `.ego/config.toml` は `knowledge` として読まれ、次の `ego apply` で書き換えられます。`--memory` は `--knowledge` の別名として引き続き使えます。

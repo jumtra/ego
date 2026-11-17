@@ -16,7 +16,7 @@
 | Skill and prompt changes | Limited to harness-owned skill descriptions, marker-bounded skill bodies and the tool guide. Promotion needs evaluation evidence and `--approve`, and is reversible |
 | Spending | Planner model calls need `--execute` |
 | Updates | `ego update` pins the GitHub repository, HTTPS, the wheel name, a stable version and the SHA256 from the GitHub API. No arbitrary URLs, shell pipelines or dependency installation. A git checkout is only fast-forwarded |
-| Stored data | Checkpoints, process memory and (with `knowledge = "file"`) project knowledge stay in the project. ego keeps no conversation transcripts itself. With `knowledge = "alter"` the Stop / SessionEnd hooks send a redacted conversation and checkpoint facts to alter for review; `EGO_ALTER_AUTO_REVIEW=0` turns that off. A redactor removes typical credential formats from persisted run results and from what is sent to alter. Knowledge written with `ego knowledge add` is not redacted: do not put secrets in it |
+| Stored data | Checkpoints, process memory and (with `knowledge = "file"`) project knowledge stay in the project. ego keeps no conversation transcripts itself. With `knowledge = "alter"` the Stop hook sends a redacted conversation and checkpoint facts to alter for review; `EGO_ALTER_AUTO_REVIEW=0` turns that off. A redactor removes typical credential formats from persisted run results and from what is sent to alter. Knowledge written with `ego knowledge add` is not redacted: do not put secrets in it |
 
 ## What it does not protect
 

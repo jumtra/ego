@@ -1,7 +1,7 @@
 """Headless analysis of a recorded alter conversation (alter_analysis = true, knowledge = "alter").
 
-After a session is recorded, the analyzer host runs the alter-session-analyzer skill in a detached
-`ego session analyze <sid>` process and attaches the analysis to the recorded conversation id.
+The analysis runs after an `ego run` wrapper ends: the analyzer host runs the alter-session-analyzer skill in a
+detached `ego session analyze <sid>` process and attaches the analysis to the recorded conversation id.
 Everything here fails open: nothing may raise into, or block, a host hook."""
 from __future__ import annotations
 import datetime as dt
@@ -17,15 +17,10 @@ from typing import Any
 from ..shared.util import now, read_json, write_json
 
 MIN_TURNS = 4
-MAX_ATTEMPTS = 2
-LOOKBACK_SECONDS = 48 * 3600
 ANALYZER_ENV = "EGO_ALTER_ANALYZER"
 ANALYZER_TOOLS = ["Read", "Skill", "ToolSearch", "mcp__alter"]
 ANALYZER_MAX_TURNS = 12
 MAX_PROMPT_CHARS = 100_000
-IDLE_SECONDS = 15 * 60          # AGY has no session-end event: a session idle this long counts as ended
-IDLE_POLL_SECONDS = 30
-IDLE_WATCH_MAX_SECONDS = 24 * 3600
 
 
 def _state_path(root: Path) -> Path:
@@ -84,7 +79,7 @@ def _spawn_analysis(root: Path, sid: str) -> bool:
 
 
 def launch_analysis(root: Path, sid: str) -> dict[str, Any]:
-    """Called from a session-end hook (or the AGY idle watcher) after the turns were persisted. Never raises."""
+    """Called when an `ego run` wrapper ends, for its logical session. Never raises."""
     try:
         if _inside_analyzer():
             return {"status": "skipped", "reason": "inside analyzer"}
@@ -115,38 +110,6 @@ def _running(entry: dict[str, Any], timeout: int) -> bool:
     except (ValueError, TypeError):
         return False
     return time.time() - started < timeout + 60
-
-
-def launch_pending(root: Path) -> dict[str, Any]:
-    """Called on session start: pick at most one unanalyzed saved session and launch its analysis. Never raises."""
-    try:
-        if _inside_analyzer() or not _enabled(root):
-            return {"status": "skipped", "reason": "disabled"}
-        base = root.resolve() / ".ego" / "state" / "alter_turns"
-        if not base.is_dir():
-            return {"status": "skipped", "reason": "no saved sessions"}
-        state = _load_state(root)
-        timeout = _limit(root)
-        cutoff = time.time() - LOOKBACK_SECONDS
-        candidates = sorted((p for p in base.glob("*.json") if p.stat().st_mtime >= cutoff),
-                            key=lambda p: p.stat().st_mtime, reverse=True)
-        for path in candidates:
-            data = read_json(path, None)
-            if not isinstance(data, dict) or not isinstance(data.get("turns"), list):
-                continue
-            sid = str(data.get("session_id") or "").strip()
-            if not sid or len(data["turns"]) < MIN_TURNS:
-                continue
-            entry = state.get(sid) if isinstance(state.get(sid), dict) else {}
-            if _up_to_date(entry, len(data["turns"])) or _running(entry, timeout):
-                continue
-            if int(entry.get("attempts") or 0) >= MAX_ATTEMPTS:
-                continue
-            _spawn_analysis(root, sid)
-            return {"status": "launched", "session_id": sid}
-        return {"status": "skipped", "reason": "nothing pending"}
-    except Exception as exc:  # fail open
-        return {"status": "error", "reason": str(exc)[:200]}
 
 
 ATTACHED_RE = re.compile(r"ALTER_ANALYSIS conversation=(\S+) result=(attached|not_attached)")
@@ -235,65 +198,3 @@ def analyze_session(root: Path, sid: str) -> dict[str, Any]:
         return {"status": "error", "reason": str(exc)[:200]}
 
 
-def _pid_alive(pid: Any) -> bool:
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
-
-
-def start_idle_watch(root: Path, sid: str) -> dict[str, Any]:
-    """AGY has no session-end event: from its Stop hook, start one detached watcher per session that analyzes
-    the session once it has been idle for IDLE_SECONDS. Never raises."""
-    try:
-        if _inside_analyzer() or not _enabled(root):
-            return {"status": "skipped", "reason": "disabled"}
-        sid = str(sid or "").strip()
-        if not sid:
-            return {"status": "skipped", "reason": "missing session_id"}
-        turns = _turns_file(root, sid)
-        if turns is None or len(turns["turns"]) < MIN_TURNS:
-            return {"status": "skipped", "reason": "not enough turns", "session_id": sid}
-        entry = _load_state(root).get(sid)
-        if isinstance(entry, dict) and _pid_alive(entry.get("watcher_pid")):
-            return {"status": "skipped", "reason": "watching", "session_id": sid}
-        env = {**os.environ, ANALYZER_ENV: "1"}
-        proc = subprocess.Popen([sys.executable, "-m", "ego", "session", "analyze", sid, "--when-idle"],
-                                cwd=str(root.resolve()), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, start_new_session=True, env=env)
-        pid = getattr(proc, "pid", None)
-        _save_entry(root, sid, {"watcher_pid": pid if isinstance(pid, int) else None})
-        return {"status": "watching", "session_id": sid}
-    except Exception as exc:  # fail open
-        return {"status": "error", "reason": str(exc)[:200]}
-
-
-def analyze_when_idle(root: Path, sid: str, *, idle_seconds: int = IDLE_SECONDS, poll_seconds: float = IDLE_POLL_SECONDS,
-                      max_seconds: int = IDLE_WATCH_MAX_SECONDS, sleep=time.sleep) -> dict[str, Any]:
-    """Wait until the saved turns of a session stop changing for idle_seconds, then analyze it once. Never raises."""
-    try:
-        sid = str(sid or "").strip()
-        if not sid or not _enabled(root):
-            return {"status": "skipped", "reason": "disabled"}
-        from ..adapters.memory import alter_turns_path
-        path = alter_turns_path(root, sid)
-        deadline = time.time() + max_seconds
-        while time.time() < deadline:
-            try:
-                idle = time.time() - path.stat().st_mtime
-            except OSError:
-                return {"status": "skipped", "reason": "turns gone", "session_id": sid}
-            if idle >= idle_seconds:
-                result = analyze_session(root, sid)
-                _save_entry(root, sid, {"watcher_pid": None})
-                return result
-            sleep(max(1.0, min(poll_seconds, idle_seconds - idle)))
-        _save_entry(root, sid, {"watcher_pid": None})
-        return {"status": "skipped", "reason": "watch expired", "session_id": sid}
-    except Exception as exc:  # fail open
-        return {"status": "error", "reason": str(exc)[:200]}

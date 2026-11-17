@@ -451,7 +451,7 @@ def test_alter_mcp_spec_uses_active_host_and_env_detection(tmp_path: Path, monke
     assert memory._alter_mcp_spec(proj) == (["node", "agy-mcp.mjs", "--profile", "p1"], {"ALTER_DATA_DIR": "/tmp/d"})
 
 
-def test_hook_session_end_records_conversation_and_skips_auto_clear(
+def test_hook_session_end_is_a_noop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -462,20 +462,16 @@ def test_hook_session_end_records_conversation_and_skips_auto_clear(
     save_config(proj, Config(knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     payload = _write_host_payload(tmp_path, "claude", proj)
 
-    # `ego run` rotates sessions itself (automatic clear): nothing is recorded
-    monkeypatch.setenv("EGO_RUN", "claude")
-    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
-    assert main(["hook", "session-end", "--host", "claude", "--root", str(proj)]) == 0
-    capsys.readouterr()
-    assert _read_calls(log_path) == []
-
-    monkeypatch.delenv("EGO_RUN")
-    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
-    assert main(["hook", "session-end", "--host", "claude", "--root", str(proj)]) == 0
-    capsys.readouterr()
-    calls = _read_calls(log_path)
-    assert len(calls) == 1 and calls[0]["name"] == "alter_record_conversation"
-    assert calls[0]["arguments"]["session_id"] == "sess-claude"
+    # Kept for hooks.json written by older versions: exits 0, prints {}, records nothing, inside or outside `ego run`.
+    for ego_run in ("claude", None):
+        if ego_run is None:
+            monkeypatch.delenv("EGO_RUN", raising=False)
+        else:
+            monkeypatch.setenv("EGO_RUN", ego_run)
+        monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+        assert main(["hook", "session-end", "--host", "claude", "--root", str(proj)]) == 0
+        assert capsys.readouterr().out.strip() == "{}"
+        assert _read_calls(log_path) == []
 
 
 def test_file_memory(project):

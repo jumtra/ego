@@ -265,7 +265,7 @@ def test_status_shows_version_difference_and_apply_sets_the_clear_limit(tmp_path
     capsys.readouterr()
     assert load_config(root).clear_suggest_tokens == 90000
     hooks = json.loads((root / ".claude/settings.json").read_text())["hooks"]
-    assert set(hooks) == {"Stop", "SessionStart", "UserPromptSubmit", "SessionEnd"}  # memory = alter adds the prompt lookup and the session-end review
+    assert set(hooks) == {"Stop", "SessionStart", "UserPromptSubmit"}  # memory = alter adds the prompt lookup
     _age(root, "0.0.2")
     assert main(["status", "--root", str(root)]) == 0
     status = json.loads(capsys.readouterr().out)
@@ -1029,14 +1029,14 @@ def test_removed_peripheral_command_fails_with_exit_2(command, capsys):
 
 def test_sync_moves_file_memory_to_alter_when_alter_mcp_is_configured(tmp_path: Path, monkeypatch):
     root = _apply(tmp_path / "a", knowledge="file", hosts=["claude"])
-    assert "SessionEnd" not in (root / ".claude/settings.json").read_text() if (root / ".claude/settings.json").exists() else True
+    assert "UserPromptSubmit" not in (root / ".claude/settings.json").read_text() if (root / ".claude/settings.json").exists() else True
     monkeypatch.setenv("EGO_ALTER_MCP_COMMAND", "true")
     monkeypatch.setenv("EGO_ALTER_AUTO_REGISTER", "0")
     assert project_info(root.resolve())["status"] == "CHANGES_PENDING"
     row = sync_project(root.resolve(), apply=True)
     assert row["status"] == "APPLIED" and row["knowledge_migrated"] == "file -> alter"
     assert load_config(root).knowledge == "alter"
-    assert "SessionEnd" in (root / ".claude/settings.json").read_text()
+    assert "UserPromptSubmit" in (root / ".claude/settings.json").read_text()
     assert project_info(root.resolve())["status"] == "UP_TO_DATE"
 
 

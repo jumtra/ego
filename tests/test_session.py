@@ -994,7 +994,7 @@ def test_alter_memory_installs_the_same_hooks_on_every_host(tmp_path: Path):
     claude = json.loads(files[".claude/settings.json"])["hooks"]
     codex = json.loads(files[".codex/hooks.json"])["hooks"]
     agy = json.loads(files[".agents/hooks.json"])["ego"]
-    assert "session-end" in claude["SessionEnd"][0]["hooks"][0]["command"]
+    assert "SessionEnd" not in claude
     assert "SessionStart" in claude and "UserPromptSubmit" in claude  # the requirement and rules, then the per-prompt lookup
     assert "SessionStart" in codex and "UserPromptSubmit" in codex
     assert "session-start --host agy" in agy["SessionStart"][0]["command"]
