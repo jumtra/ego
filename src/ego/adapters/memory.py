@@ -471,14 +471,17 @@ def alter_turns_path(root: Path, sid: str) -> Path:
 
 
 def _ensure_turn_ids(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return copies of the turns where each has a stable id and sequence (index-based when missing)."""
+    """Return copies of the turns with the id and sequence alter assigns when storing them.
+
+    alter defaults a missing sequence to the index and a missing id to `turn-{sequence}`; the
+    analyzer cites these ids, so they must match what alter stored for the conversation."""
     out: list[dict[str, Any]] = []
     for index, turn in enumerate(turns):
         item = dict(turn)
-        if not (isinstance(item.get("id"), str) and item["id"].strip()):
-            item["id"] = f"turn-{index}"
         if not (isinstance(item.get("sequence"), int) and not isinstance(item.get("sequence"), bool)):
             item["sequence"] = index
+        if not (isinstance(item.get("id"), str) and item["id"].strip()):
+            item["id"] = f"turn-{item['sequence']}"
         out.append(item)
     return out
 

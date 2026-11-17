@@ -257,6 +257,9 @@ def test_analyze_success_marks_done_and_targets_conversation(root, set_cfg, fake
     call = fake_host["calls"][0]
     assert call["host"] == host
     assert CONV in call["prompt"] and "Do not record a new conversation" in call["prompt"]
+    # The conversation is already recorded: go straight to the skill's fallback (extract) step.
+    assert "Skip step 1" in call["prompt"] and f"alter_extract_cognitive` with `conversation_id: \"{CONV}\"" in call["prompt"]
+    assert "`turn_id` = the turn's `id`" in call["prompt"] and "`turn_seq` = its `sequence`" in call["prompt"]
     assert call["allowed_tools"] == aa.ANALYZER_TOOLS
     assert call["mcp_servers"] == ["alter"]
     assert call["read_only"] is False and call["lean"] is True
@@ -458,6 +461,17 @@ def test_keep_turns_persists_turns_and_conversation_id(root, alter_submit):
     assert saved["session_id"] == SID and saved["host"] == "claude" and saved["conversation_id"] == CONV
     assert len(saved["turns"]) == 5
     assert all(isinstance(t["id"], str) and isinstance(t["sequence"], int) for t in saved["turns"])
+
+
+def test_ensure_turn_ids_mirrors_alter_defaults():
+    # alter stores a missing id as `turn-${sequence}` and a missing sequence as the index;
+    # the analyzer cites these ids, so ego's saved copy must use the same rule.
+    turns = [{"role": "user", "text": "a"},                          # neither: index 0
+             {"role": "assistant", "text": "b", "sequence": 7},      # sequence only
+             {"role": "user", "text": "c", "id": "u-1", "sequence": 9},
+             {"role": "assistant", "text": "d", "id": "a-1"}]        # id only: sequence = index
+    out = memory._ensure_turn_ids(turns)
+    assert [(t["id"], t["sequence"]) for t in out] == [("turn-0", 0), ("turn-7", 7), ("u-1", 9), ("a-1", 3)]
 
 
 def test_keep_turns_false_writes_no_turn_file(root, alter_submit):

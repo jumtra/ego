@@ -145,7 +145,11 @@ def _analyzer_prompt(conversation_id: str, turns: list[dict[str, Any]]) -> str:
     return (
         "Use the alter-session-analyzer skill to analyze the ALTER conversation whose id is "
         f"`{conversation_id}` and attach the analysis to that conversation. Capture only durable, "
-        "owner-attributed knowledge. Do not record a new conversation.\n\n"
+        "owner-attributed knowledge. Do not record a new conversation.\n"
+        "The conversation is already recorded: Skip step 1 (`alter_record_conversation`) and go straight "
+        f"to the skill's fallback step: call `alter_extract_cognitive` with `conversation_id: \"{conversation_id}\"` "
+        "and your `{items, cards, terms}`. Cite turns from the JSON below exactly: `turn_id` = the turn's `id`, "
+        "`turn_seq` = its `sequence`, and quote owner (`role: user`) text verbatim.\n\n"
         "When you finish, print exactly one final line and nothing after it:\n"
         f"ALTER_ANALYSIS conversation={conversation_id} result=attached\n"
         "only if alter accepted the analysis for that conversation (for example the analysis was "
