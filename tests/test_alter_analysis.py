@@ -523,6 +523,22 @@ def test_resolve_alter_session_groups_ego_run_segments(monkeypatch):
     monkeypatch.setenv("EGO_RUN_ID", "abc123")
     assert memory.resolve_alter_session("host-1") == ("ego-run-abc123", "host-1")
     assert memory.resolve_alter_session("host-2") == ("ego-run-abc123", "host-2")
+    assert memory.resolve_alter_session("") == ("ego-run-abc123", "default")
+    sid_a, seg_a = memory.resolve_alter_session("", transcript="/tmp/seg-a.jsonl")
+    sid_a2, seg_a2 = memory.resolve_alter_session("", transcript="/tmp/seg-a.jsonl")
+    sid_b, seg_b = memory.resolve_alter_session("", transcript="/tmp/seg-b.jsonl")
+    assert sid_a == sid_a2 == sid_b == "ego-run-abc123"
+    assert seg_a == seg_a2 and seg_a != seg_b and seg_a.startswith("transcript-")
+
+
+def test_merge_segment_turns_guarantees_unique_custom_ids():
+    merged = memory._merge_segment_turns([
+        {"id": "s1", "turns": [{"role": "user", "text": "a", "id": "foo"}, {"role": "assistant", "text": "b", "id": "foo-2"}]},
+        {"id": "s2", "turns": [{"role": "user", "text": "c", "id": "foo"}]},
+    ])
+    ids = [t["id"] for t in merged]
+    assert ids == ["foo", "foo-2", "foo-2-1"]
+    assert len(set(ids)) == len(ids)
 
 
 def test_submit_alter_session_review_merges_cleared_segments(root, monkeypatch):

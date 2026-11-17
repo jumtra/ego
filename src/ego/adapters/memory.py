@@ -474,12 +474,14 @@ def alter_run_session_id(run_id: str) -> str:
     return f"ego-run-{run_id}"
 
 
-def resolve_alter_session(host_session_id: str) -> tuple[str, str | None]:
+def resolve_alter_session(host_session_id: str, transcript: Path | str | None = None) -> tuple[str, str | None]:
     """Return `(session_id, segment_id)` for Alter recording, grouping `ego run` rotations under `EGO_RUN_ID`."""
     run_id = os.environ.get("EGO_RUN_ID", "").strip() if os.environ.get("EGO_RUN") else ""
+    sid = str(host_session_id or "").strip()
     if run_id:
-        return alter_run_session_id(run_id), (str(host_session_id or "").strip() or "default")
-    return str(host_session_id or "").strip(), None
+        seg = sid or (f"transcript-{sha256(str(transcript).strip())[:12]}" if transcript and str(transcript).strip() else "default")
+        return alter_run_session_id(run_id), seg
+    return sid, None
 
 
 def alter_turns_path(root: Path, sid: str) -> Path:
@@ -527,7 +529,12 @@ def _merge_segment_turns(segments: list[dict[str, Any]], *, max_turns: int = 200
         else:
             tid = raw_id.strip()
         if tid in seen_ids:
-            tid = f"{tid}-{seq}"
+            base = tid
+            tid = f"{base}-{seq}"
+            suffix = 1
+            while tid in seen_ids:
+                tid = f"{base}-{seq}-{suffix}"
+                suffix += 1
         seen_ids.add(tid)
         item["id"] = tid
         out.append(item)

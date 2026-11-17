@@ -480,12 +480,13 @@ def _cmd_hook(args):
                 if cfg.knowledge == "alter":
                     try:
                         from .adapters.memory import resolve_alter_session, submit_alter_session_review
-                        alter_sid, segment_id = resolve_alter_session(str(obj.get("session_id") or ""))
+                        transcript = obj.get("transcript_path") if isinstance(obj.get("transcript_path"), str) else None
+                        alter_sid, segment_id = resolve_alter_session(str(obj.get("session_id") or ""), transcript=transcript)
                         submit_alter_session_review(
                             root,
                             session_id=alter_sid,
                             host=host,
-                            transcript=obj.get("transcript_path") if isinstance(obj.get("transcript_path"), str) else None,
+                            transcript=transcript,
                             messages=obj.get("messages") if isinstance(obj.get("messages"), list) else None,
                             keep_turns=cfg.alter_analysis,
                             segment_id=segment_id,

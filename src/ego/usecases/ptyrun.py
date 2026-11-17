@@ -561,7 +561,8 @@ def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool 
         try:
             from ..adapters.memory import alter_run_session_id
             from ..domain.config import load_config
-            if load_config(root).alter_analysis:
+            cfg = load_config(root)
+            if cfg.knowledge == "alter" and cfg.alter_analysis:
                 from .alter_analysis import launch_analysis
                 launch_analysis(root, alter_run_session_id(run_id))
         except Exception:
