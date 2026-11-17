@@ -414,6 +414,8 @@ def _cmd_hook(args):
     from .domain.config import load_config
     root=_root(args)
     raw=sys.stdin.read(1024*1024)
+    if os.environ.get("EGO_ALTER_ANALYZER","").strip() not in ("","0") and args.event in ("stop","session-start","session-end","user-prompt"):
+        print("{}");return 0
     if args.event=="context-probe":
         # Status line of a host started by `ego run`: report its context size to the wrapper.
         try:

@@ -486,6 +486,12 @@ def test_keep_turns_persists_turns_and_conversation_id(root, alter_submit):
     assert all(isinstance(t["id"], str) and isinstance(t["sequence"], int) for t in saved["turns"])
 
 
+def test_conversation_id_unwraps_mcp_content_text_json():
+    res = {"content": [{"type": "text", "text": f'{{"saved": true, "id": "{CONV}"}}'}]}
+    assert memory._conversation_id(res) == CONV
+    assert memory._conversation_id({"content": [{"type": "text", "text": "not json"}]}) is None
+
+
 def test_ensure_turn_ids_mirrors_alter_defaults():
     # alter stores a missing id as `turn-${sequence}` and a missing sequence as the index;
     # the analyzer cites these ids, so ego's saved copy must use the same rule.
@@ -647,3 +653,15 @@ def test_codex_gets_session_end_hook_and_agy_does_not():
     codex = json.loads(files[".codex/hooks.json"])["hooks"]
     assert "session-end --host codex" in codex["SessionEnd"][0]["hooks"][0]["command"]
     assert "SessionEnd" not in json.loads(files[".agents/hooks.json"])["ego"]
+
+
+def test_hooks_noop_inside_analyzer(root, monkeypatch, capsys):
+    import io, sys
+    from types import SimpleNamespace
+    from ego import cli
+    monkeypatch.setenv(aa.ANALYZER_ENV, "1")
+    for event in ("stop", "session-start", "session-end", "user-prompt"):
+        monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+        rc = cli._cmd_hook(SimpleNamespace(root=str(root), event=event, host="claude"))
+        assert rc == 0
+        assert capsys.readouterr().out.strip() == "{}"

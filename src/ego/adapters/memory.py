@@ -490,7 +490,18 @@ def _conversation_id(result: Any) -> str | None:
     """Tolerantly extract the conversation id from an alter_record_conversation result."""
     if not isinstance(result, dict):
         return None
-    for container in (result, result.get("structuredContent"), result.get("conversation")):
+    containers: list[Any] = [result, result.get("structuredContent"), result.get("conversation")]
+    content = result.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                try:
+                    parsed = json.loads(item["text"])
+                except ValueError:
+                    continue
+                if isinstance(parsed, dict):
+                    containers.extend([parsed, parsed.get("conversation")])
+    for container in containers:
         if not isinstance(container, dict):
             continue
         for key in ("conversation_id", "conversationId", "id"):
