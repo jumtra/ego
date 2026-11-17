@@ -157,7 +157,7 @@ def _effective_status(root:Path, record:dict)->str:
 
 def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
               autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
-              budget_usd: float|None=None, progress:Progress|None=None)->dict:
+              budget_usd: float|None=None, progress:Progress|None=None, project_root:Path)->dict:
     """A task node sees a private copy; fallback never reuses failed edits.
 
     Compare runs have their own isolated copies and never merge any candidate.
@@ -195,7 +195,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 # `ego apply` no longer writes the managed block, so the worker's private copy gets it for its session.
                 with overlaid(work,chosen_host,cfg):
                     try:
-                        r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,threshold=cfg.clear_suggest_tokens,
+                        r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,project_root=project_root,threshold=cfg.clear_suggest_tokens,
                                      segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
                                      on_event=lambda **f:progress.emit("worker_segment",node=node["id"],attempt=iteration,**f),
                                      model=chosen_model,effort=chosen_effort,
@@ -498,7 +498,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             # Prompt-only knowledge hint; record['spec'] stays the user's spec so resume comparisons are unchanged.
             prompt_spec=({**spec,'knowledge':cfg.knowledge} if 'knowledge' not in spec else spec)
             with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-                futures={pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress):n["id"] for n in wave}
+                futures={pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress,project_root=root):n["id"] for n in wave}
                 # Each node is persisted as soon as it finishes: a crash or cancel loses only the unfinished nodes.
                 for fut in as_completed(futures):
                     result=fut.result()
