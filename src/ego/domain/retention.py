@@ -91,12 +91,11 @@ def _prune_alter_sessions(root: Path) -> int:
     return len(sessions) - len(kept)
 
 
-def _prune_alter_turns(root: Path) -> int:
-    """Remove persisted turn files older than ALTER_TURNS_MAX_AGE_DAYS, then keep at most ALTER_TURNS_KEEP newest."""
-    base = root / ".ego" / "state" / "alter_turns"
+def _prune_json_dir(base: Path, max_age_days: int, keep: int) -> int:
+    """Remove JSON state files older than `max_age_days`, then keep at most `keep` newest."""
     if not base.is_dir():
         return 0
-    cutoff = time.time() - ALTER_TURNS_MAX_AGE_DAYS * 86400
+    cutoff = time.time() - max_age_days * 86400
     removed = 0
     files = [p for p in base.glob("*.json") if p.is_file()]
     fresh: list[Path] = []
@@ -106,10 +105,20 @@ def _prune_alter_turns(root: Path) -> int:
             removed += 1
         else:
             fresh.append(path)
-    for path in _newest_first(fresh)[ALTER_TURNS_KEEP:]:
+    for path in _newest_first(fresh)[keep:]:
         path.unlink(missing_ok=True)
         removed += 1
     return removed
+
+
+def _prune_alter_turns(root: Path) -> int:
+    """Remove persisted turn files older than ALTER_TURNS_MAX_AGE_DAYS, then keep at most ALTER_TURNS_KEEP newest."""
+    return _prune_json_dir(root / ".ego" / "state" / "alter_turns", ALTER_TURNS_MAX_AGE_DAYS, ALTER_TURNS_KEEP)
+
+
+def _prune_alter_segments(root: Path) -> int:
+    """Remove persisted segment files older than ALTER_TURNS_MAX_AGE_DAYS, then keep at most ALTER_TURNS_KEEP newest."""
+    return _prune_json_dir(root / ".ego" / "state" / "alter_segments", ALTER_TURNS_MAX_AGE_DAYS, ALTER_TURNS_KEEP)
 
 
 def _prune_events(root: Path) -> int:
@@ -142,7 +151,7 @@ def prune_state(root: Path) -> dict[str, Any]:
     report: dict[str, Any] = {}
     for name, step in (("runs", _prune_runs), ("run_locks", _prune_run_locks),
                        ("alter_sessions", _prune_alter_sessions), ("alter_turns", _prune_alter_turns),
-                       ("events", _prune_events),
+                       ("alter_segments", _prune_alter_segments), ("events", _prune_events),
                        ("backups", _prune_backups)):
         try:
             report[name] = step(root)

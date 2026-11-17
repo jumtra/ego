@@ -515,6 +515,81 @@ def test_alter_turns_path_sanitises_session_id(root):
     assert p.name.endswith(".json") and "/" not in p.name
 
 
+def test_resolve_alter_session_groups_ego_run_segments(monkeypatch):
+    monkeypatch.delenv("EGO_RUN", raising=False)
+    monkeypatch.delenv("EGO_RUN_ID", raising=False)
+    assert memory.resolve_alter_session("host-1") == ("host-1", None)
+    monkeypatch.setenv("EGO_RUN", "claude")
+    monkeypatch.setenv("EGO_RUN_ID", "abc123")
+    assert memory.resolve_alter_session("host-1") == ("ego-run-abc123", "host-1")
+    assert memory.resolve_alter_session("host-2") == ("ego-run-abc123", "host-2")
+    assert memory.resolve_alter_session("") == ("ego-run-abc123", "default")
+    sid_a, seg_a = memory.resolve_alter_session("", transcript="/tmp/seg-a.jsonl")
+    sid_a2, seg_a2 = memory.resolve_alter_session("", transcript="/tmp/seg-a.jsonl")
+    sid_b, seg_b = memory.resolve_alter_session("", transcript="/tmp/seg-b.jsonl")
+    assert sid_a == sid_a2 == sid_b == "ego-run-abc123"
+    assert seg_a == seg_a2 and seg_a != seg_b and seg_a.startswith("transcript-")
+
+
+def test_merge_segment_turns_guarantees_unique_custom_ids():
+    merged = memory._merge_segment_turns([
+        {"id": "s1", "turns": [{"role": "user", "text": "a", "id": "foo"}, {"role": "assistant", "text": "b", "id": "foo-2"}]},
+        {"id": "s2", "turns": [{"role": "user", "text": "c", "id": "foo"}]},
+    ])
+    ids = [t["id"] for t in merged]
+    assert ids == ["foo", "foo-2", "foo-2-1"]
+    assert len(set(ids)) == len(ids)
+
+
+def test_submit_alter_session_review_merges_cleared_segments(root, monkeypatch):
+    sent: list[dict[str, object]] = []
+    current: list[dict[str, object]] = []
+    monkeypatch.setattr(memory, "extract_session_messages", lambda *a, **k: [dict(t) for t in current])
+    monkeypatch.setattr(memory, "use_host", lambda host: contextlib.nullcontext())
+    monkeypatch.setattr(memory, "_alter_mcp_spec", lambda r: (["fake-alter"], None))
+    monkeypatch.setattr(memory, "_alter_auto_review_enabled", lambda: True)
+
+    class FakeMCP:
+        def __init__(self, cmd, timeout=10, env=None):
+            pass
+
+        def call_tool(self, name, args):
+            assert name == "alter_record_conversation"
+            sent.append(args)
+            return {"structuredContent": {"conversation_id": CONV}}
+
+    monkeypatch.setattr(memory, "MCPStdio", FakeMCP)
+
+    run_sid = memory.alter_run_session_id("run-1")
+    current[:] = [
+        {"role": "user", "text": "seg1 u0", "id": "turn-0", "sequence": 0},
+        {"role": "assistant", "text": "seg1 a1", "id": "turn-1", "sequence": 1},
+    ]
+    r1 = memory.submit_alter_session_review(root, session_id=run_sid, host="claude", keep_turns=True, segment_id="seg-1")
+    assert r1["status"] == "submitted" and r1["count"] == 2
+
+    current[:] = [
+        {"role": "user", "text": "seg2 u0", "id": "turn-0", "sequence": 0},
+        {"role": "assistant", "text": "seg2 a1", "id": "turn-1", "sequence": 1},
+    ]
+    r2 = memory.submit_alter_session_review(root, session_id=run_sid, host="claude", keep_turns=True, segment_id="seg-2")
+    assert r2["status"] == "submitted" and r2["count"] == 4
+    msgs2 = sent[-1]["messages"]
+    assert [m["text"] for m in msgs2] == ["seg1 u0", "seg1 a1", "seg2 u0", "seg2 a1"]
+    assert [(m["id"], m["sequence"]) for m in msgs2] == [("turn-0", 0), ("turn-1", 1), ("turn-2", 2), ("turn-3", 3)]
+
+    # Re-sending the same segment does not duplicate; growing seg-2 updates it in place.
+    r_same = memory.submit_alter_session_review(root, session_id=run_sid, host="claude", keep_turns=True, segment_id="seg-2")
+    assert r_same["status"] == "skipped" and r_same["reason"] == "unchanged"
+
+    current.append({"role": "user", "text": "seg2 u2", "id": "turn-2", "sequence": 2})
+    r3 = memory.submit_alter_session_review(root, session_id=run_sid, host="claude", keep_turns=True, segment_id="seg-2")
+    assert r3["status"] == "submitted" and r3["count"] == 5
+    saved_turns = read_json(memory.alter_turns_path(root, run_sid), {})
+    assert len(saved_turns["turns"]) == 5
+    assert [t["text"] for t in saved_turns["turns"]] == ["seg1 u0", "seg1 a1", "seg2 u0", "seg2 a1", "seg2 u2"]
+
+
 # ---------- 4c. _prune_alter_turns: 7 days / 50 files ----------
 
 def _touch(path: Path, age_seconds: float) -> None:

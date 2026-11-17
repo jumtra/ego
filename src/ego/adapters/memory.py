@@ -465,9 +465,80 @@ def _alter_auto_review_enabled() -> bool:
     return os.environ.get("EGO_ALTER_AUTO_REVIEW", "1").strip().lower() not in ("0", "false", "off", "no")
 
 
+def _safe_sid(sid: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(sid or "").strip()) or "unknown"
+
+
+def alter_run_session_id(run_id: str) -> str:
+    """Logical Alter session_id shared across automatic /clear rotations of a single `ego run`."""
+    return f"ego-run-{run_id}"
+
+
+def resolve_alter_session(host_session_id: str, transcript: Path | str | None = None) -> tuple[str, str | None]:
+    """Return `(session_id, segment_id)` for Alter recording, grouping `ego run` rotations under `EGO_RUN_ID`."""
+    run_id = os.environ.get("EGO_RUN_ID", "").strip() if os.environ.get("EGO_RUN") else ""
+    sid = str(host_session_id or "").strip()
+    if run_id:
+        seg = sid or (f"transcript-{sha256(str(transcript).strip())[:12]}" if transcript and str(transcript).strip() else "default")
+        return alter_run_session_id(run_id), seg
+    return sid, None
+
+
 def alter_turns_path(root: Path, sid: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(sid or "").strip()) or "unknown"
-    return root.resolve() / ".ego" / "state" / "alter_turns" / f"{safe}.json"
+    return root.resolve() / ".ego" / "state" / "alter_turns" / f"{_safe_sid(sid)}.json"
+
+
+def alter_segments_path(root: Path, sid: str) -> Path:
+    return root.resolve() / ".ego" / "state" / "alter_segments" / f"{_safe_sid(sid)}.json"
+
+
+def _upsert_segment(existing: list[dict[str, Any]], segment_id: str, turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Replace `segment_id` in place if already recorded, otherwise append a new segment."""
+    out: list[dict[str, Any]] = []
+    replaced = False
+    for seg in existing:
+        if not isinstance(seg, dict) or not isinstance(seg.get("turns"), list):
+            continue
+        if seg.get("id") == segment_id:
+            out.append({"id": segment_id, "turns": turns})
+            replaced = True
+        else:
+            out.append({"id": str(seg.get("id") or ""), "turns": seg["turns"]})
+    if not replaced:
+        out.append({"id": segment_id, "turns": turns})
+    return out
+
+
+def _merge_segment_turns(segments: list[dict[str, Any]], *, max_turns: int = 200) -> list[dict[str, Any]]:
+    """Concatenate segment turns in order and renumber sequence/auto-generated ids to avoid collisions across /clear."""
+    merged: list[dict[str, Any]] = []
+    for seg in segments:
+        turns = seg.get("turns")
+        if isinstance(turns, list):
+            merged.extend(turns)
+    if len(merged) > max_turns:
+        merged = merged[-max_turns:]
+    out: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for seq, turn in enumerate(merged):
+        item = dict(turn)
+        item["sequence"] = seq
+        raw_id = item.get("id")
+        if not (isinstance(raw_id, str) and raw_id.strip()) or re.fullmatch(r"turn-\d+", raw_id.strip()):
+            tid = f"turn-{seq}"
+        else:
+            tid = raw_id.strip()
+        if tid in seen_ids:
+            base = tid
+            tid = f"{base}-{seq}"
+            suffix = 1
+            while tid in seen_ids:
+                tid = f"{base}-{seq}-{suffix}"
+                suffix += 1
+        seen_ids.add(tid)
+        item["id"] = tid
+        out.append(item)
+    return out
 
 
 def _ensure_turn_ids(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -521,9 +592,12 @@ def submit_alter_session_review(
     title: str | None = None,
     timeout: int = 10,
     keep_turns: bool = False,
+    segment_id: str | None = None,
 ) -> dict[str, Any]:
     """Extract, redact, deduplicate, and submit session turns to Alter fail-open.
 
+    With segment_id, turns from multiple cleared host segments are accumulated under one
+    logical session_id so automatic /clear rotations record as a single Alter conversation.
     With keep_turns=True, a successful submission also persists the turns and the Alter
     conversation id to `alter_turns_path` so a later analyzer can attach to that conversation."""
     if not _alter_auto_review_enabled():
@@ -535,6 +609,14 @@ def submit_alter_session_review(
         extracted = extract_session_messages(transcript, host=host, messages=messages)
         if not extracted:
             return {"status": "skipped", "reason": "empty", "session_id": sid}
+
+        seg_key = str(segment_id or "").strip()
+        segments_to_save: list[dict[str, Any]] | None = None
+        if seg_key:
+            seg_data = read_json(alter_segments_path(root, sid), {})
+            existing = seg_data.get("segments") if isinstance(seg_data, dict) and isinstance(seg_data.get("segments"), list) else []
+            segments_to_save = _upsert_segment(existing, seg_key, extracted)
+            extracted = _merge_segment_turns(segments_to_save)
 
         digest = sha256(json.dumps(extracted, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
         state_path = _alter_session_state_path(root)
@@ -560,6 +642,14 @@ def submit_alter_session_review(
             args["title"] = redact(str(title).strip())
 
         result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_record_conversation", args)
+
+        if segments_to_save is not None:
+            write_json(alter_segments_path(root, sid), {
+                "schema_version": 1,
+                "session_id": sid,
+                "segments": segments_to_save,
+                "updated_at": now(),
+            })
 
         updated_sessions = dict(sessions)
         updated_sessions[sid] = {

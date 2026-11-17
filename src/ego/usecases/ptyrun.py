@@ -558,6 +558,15 @@ def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool 
         session.unlink(missing_ok=True)
         if state is not None:
             state.unlink(missing_ok=True)
+        try:
+            from ..adapters.memory import alter_run_session_id
+            from ..domain.config import load_config
+            cfg = load_config(root)
+            if cfg.knowledge == "alter" and cfg.alter_analysis:
+                from .alter_analysis import launch_analysis
+                launch_analysis(root, alter_run_session_id(run_id))
+        except Exception:
+            pass
     if rotations:
         print(f"ego: cleared and resumed {rotations} time(s) at {threshold} context tokens", file=sys.stderr)
     return code

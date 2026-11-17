@@ -479,18 +479,21 @@ def _cmd_hook(args):
                 cfg=load_config(root)
                 if cfg.knowledge == "alter":
                     try:
-                        from .adapters.memory import submit_alter_session_review
+                        from .adapters.memory import resolve_alter_session, submit_alter_session_review
+                        transcript = obj.get("transcript_path") if isinstance(obj.get("transcript_path"), str) else None
+                        alter_sid, segment_id = resolve_alter_session(str(obj.get("session_id") or ""), transcript=transcript)
                         submit_alter_session_review(
                             root,
-                            session_id=str(obj.get("session_id") or ""),
+                            session_id=alter_sid,
                             host=host,
-                            transcript=obj.get("transcript_path") if isinstance(obj.get("transcript_path"), str) else None,
+                            transcript=transcript,
                             messages=obj.get("messages") if isinstance(obj.get("messages"), list) else None,
                             keep_turns=cfg.alter_analysis,
+                            segment_id=segment_id,
                         )
                         if cfg.alter_analysis and host == "agy":  # AGY has no session-end event: analyze once it has gone idle
                             from .usecases.alter_analysis import start_idle_watch
-                            start_idle_watch(root, str(obj.get("session_id") or ""))  # detached; fail open
+                            start_idle_watch(root, alter_sid)  # detached; fail open
                     except Exception:
                         pass
                 # A nearly spent usage limit outranks a large context: there may be no later turn to save in.
