@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..shared.util import EgoError, exclusive_lock, is_locked, now, read_json, redact, safe_path, write_json
+from ..shared.util import EgoError, alter_project_root, exclusive_lock, is_locked, now, read_json, redact, safe_path, write_json
 from ..shared.util import HOST_ENV, _id, detect_host, handoff_relpath
 from ..domain.task_routing import resume_prompt
 
@@ -763,7 +763,7 @@ def alter_status(root: Path, timeout: int = 8) -> tuple[list[str], str]:
     and common rules must not be applied here. `error` is non-empty when alter cannot be reached, so a hook can say so."""
     if os.environ.get("EGO_ALTER_SESSION_RULES", "1").lower() in ("0", "false", "off", "no"):
         return [], ""
-    payload, error = _alter_call(root, "alter_ai_usage", {"cwd": str(root)}, timeout)
+    payload, error = _alter_call(root, "alter_ai_usage", {"cwd": str(alter_project_root(root))}, timeout)
     if error:
         return [], error
     if not isinstance(payload, dict) or payload.get("source") != "project":
@@ -794,7 +794,7 @@ def alter_prompt_status(root: Path, prompt: str, timeout: int = 8) -> tuple[str,
         task = task.partition(" ")[2].strip()
     if len(task) < 6:
         return "", ""
-    payload, error = _alter_call(root, "alter_task_context", {"task": task[:500], "cwd": str(root)}, timeout)
+    payload, error = _alter_call(root, "alter_task_context", {"task": task[:500], "cwd": str(alter_project_root(root))}, timeout)
     if error:
         return "", error
     evidence = payload.get("evidence") if isinstance(payload, dict) else None

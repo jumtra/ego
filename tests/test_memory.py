@@ -15,7 +15,8 @@ from ego.adapters.runner import run_agent, parse_host_response
 from ego.cli import main
 from ego.domain.config import Config, save_config
 from ego.domain.policy import check_command, check_hook_payload
-from ego.shared.util import EgoError
+import subprocess
+from ego.shared.util import EgoError, alter_project_root
 from ego.usecases.session import list_checkpoints
 
 
@@ -641,3 +642,17 @@ def test_apply_install_auto_installs_alter_skills_and_npx_fallback(tmp_path: Pat
     res3 = apply_install(proj, Config(knowledge="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     assert res3["alter_skills"] == {"status": "already_installed"}
     assert len(seen) == 4
+
+
+def test_alter_project_root_maps_a_linked_worktree_to_its_main_checkout(tmp_path: Path):
+    # Arrange
+    main = tmp_path / "main"
+    main.mkdir()
+    git = lambda *a, cwd=main: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)
+    git("init", "-q")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-q", "-m", "init")
+    linked = tmp_path / "linked"
+    git("worktree", "add", "-q", str(linked), "-b", "wt")
+    # Act / Assert
+    assert alter_project_root(linked) == main.resolve()
+    assert alter_project_root(main) == main

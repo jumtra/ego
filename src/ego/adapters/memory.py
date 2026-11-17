@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import time
 from typing import Any
-from ..shared.util import EgoError, ident, now, read_json, write_json, exclusive_lock, redact, sha256
+from ..shared.util import EgoError, alter_project_root, ident, now, read_json, write_json, exclusive_lock, redact, sha256
 
 class FileMemory:
     def __init__(self, root: Path):
@@ -232,7 +232,7 @@ def ensure_alter_project(root: Path, *, force: bool = False, timeout: int = 10) 
     """Ensure the repository at root is registered in Alter via alter_bootstrap(cwd=...)."""
     if os.environ.get("EGO_ALTER_AUTO_REGISTER", "1").lower() in ("0", "false", "off", "no"):
         return {"status": "skipped", "reason": "disabled"}
-    key = str(root.resolve())
+    key = str(alter_project_root(root).resolve())
     reg_path = _alter_registry_path()
     reg = read_json(reg_path)
     projects = reg.get("projects") if isinstance(reg, dict) and isinstance(reg.get("projects"), dict) else {}
@@ -633,7 +633,7 @@ def submit_alter_session_review(
         cmd, env = spec
 
         args: dict[str, Any] = {
-            "cwd": str(root.resolve()),
+            "cwd": str(alter_project_root(root).resolve()),
             "session_id": sid,
             "messages": extracted,
             "capture": "important",
@@ -734,7 +734,7 @@ def submit_alter_checkpoint_review(
 
         args = {
             "action": "patch",
-            "cwd": str(root.resolve()),
+            "cwd": str(alter_project_root(root).resolve()),
             "session_id": sid,
             "title": title,
             "add": add,

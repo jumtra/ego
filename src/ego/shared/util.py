@@ -105,6 +105,20 @@ def git_head(root: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def alter_project_root(root: Path) -> Path:
+    """The checkout alter knows the project by: a linked worktree maps to its main checkout, so alter never
+    creates a separate project for a worktree."""
+    try:
+        r = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+                           cwd=root, capture_output=True, text=True, timeout=5)
+        git_dir, common_dir = r.stdout.split("\n")[:2] if r.returncode == 0 else ("", "")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return root
+    if git_dir and common_dir and Path(git_dir).resolve() != Path(common_dir).resolve():
+        return Path(common_dir).resolve().parent
+    return root
+
+
 def git_is_repo(root: Path) -> bool:
     result = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=root, capture_output=True, text=True, timeout=5)
     return result.returncode == 0 and result.stdout.strip() == "true"
