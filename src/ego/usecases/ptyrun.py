@@ -37,6 +37,7 @@ from urllib.parse import quote
 from .session import (_save_request, HOST_CLEAR, RESUGGEST_GROWTH, RUN_ID_ENV, RUN_SESSION_ENV, context_tokens,
                       latest_open_checkpoint, resume_prompt)
 from ..shared.util import EgoError, read_json, safe_path, write_json
+from .overlay import begin_overlay, end_overlay
 
 RUN_ENV = "EGO_RUN"              # set for the host: its own ego hooks stand down, this process rotates instead
 STATE_ENV = "EGO_RUN_STATE"      # where a host status line reports context size (hosts without a readable record)
@@ -526,6 +527,7 @@ def with_yolo(host: str, args: list[str]) -> list[str]:
 
 def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool = False) -> int:
     """`ego run`: the host CLI, interactive as usual, rotated automatically at `threshold` context tokens."""
+    from ..domain.config import load_config
     if yolo:
         args = with_yolo(host, args)
     if threshold <= 0:
@@ -552,15 +554,18 @@ def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool 
         env[STATE_ENV] = str(state)
         probe_command = shlex.join([sys.executable, "-m", "ego", "hook", "context-probe"])
         argv = [binary, "--settings", json.dumps({"statusLine": {"type": "command", "command": probe_command}}), *args]
+    overlay = None
     try:
+        # The managed instructions sit on CLAUDE.md / AGENTS.md only while this session is open.
+        overlay = begin_overlay(root, host, load_config(root))
         code, rotations = run(host, argv, root, threshold, env=env, state=state, session=session, run_id=run_id)
     finally:
         session.unlink(missing_ok=True)
         if state is not None:
             state.unlink(missing_ok=True)
+        end_overlay(overlay)
         try:
             from ..adapters.memory import alter_run_session_id
-            from ..domain.config import load_config
             cfg = load_config(root)
             if cfg.knowledge == "alter" and cfg.alter_analysis:
                 from .alter_analysis import launch_analysis

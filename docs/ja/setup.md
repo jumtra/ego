@@ -71,7 +71,7 @@ ego apply
 | テストコマンドを検出 | はい / いいえ（テストが未設定のときのみ） | いいえ |
 | この変更を適用しますか？ | はい / いいえ（変更ファイル一覧の後に表示） | **いいえ** |
 
-ナレッジに `alter` を選ぶと、全ホスト共通の CLAUDE.md / AGENTS.md 管理ブロックに「計画や編集の前に `alter_bootstrap`（cwd = リポジトリ直下）を呼ぶ」という必須ルールが入ります。SessionStart フックも同じ要求を注入します（`ego run` 内でも注入し、checkpoint の再開だけを止めます）。各ホストの alter MCP は同じ vault を向くように登録してください。
+ナレッジに `alter` を選ぶと、`ego run` のセッション中だけ CLAUDE.md / AGENTS.md の先頭に重ねる管理ブロックに「計画や編集の前に `alter_bootstrap`（cwd = リポジトリ直下）を呼ぶ」という必須ルールが入ります。SessionStart フックも同じ要求を注入します（`ego run` 内でも注入し、checkpoint の再開だけを止めます）。各ホストの alter MCP は同じ vault を向くように登録してください。
 
 番号か名前で答えます。Hosts は `1,2` や `all` と入力できます。Enter で現在の値を維持、`q` でキャンセルです。再適用時は既存の `.ego/config.toml` が既定値になります。プロンプトは現在日本語で表示されます。
 
@@ -124,13 +124,13 @@ ego apply --interactive --dry-run  # 書き込まずに選択を試す
 | `.ego/spec/skills/{work,harness-init}/` | 正本の skill（ホスト向けコピーの元） | 常に |
 | `.ego/spec/prompts/tool-guide.md` | ツールガイド | 常に |
 | `.ego/knowledge/index.md`、`.ego/knowledge/topics/*.md` | プロジェクトのナレッジ（index とトピックごとのファイル）。`ego apply` ではなく `ego knowledge add` が作成 | `knowledge = "file"` で、最初の書き込み時 |
-| `CLAUDE.md` | 管理対象の指示ブロック | ホスト `claude` |
+| `CLAUDE.md`（既存の内容は残す） | `ego run` の間だけ先頭に重ねる管理ブロック（永続化しない） | ホスト `claude` |
 | `.claude/skills/`、`.claude/agents/`、`.claude/rules/` | `/work` と `/harness-init` の skill、agent 4 種、rule 2 種 | ホスト `claude` |
 | `.claude/settings.json` | フック / ステータスライン | ホスト `claude` かつ、Profile `full`、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
 | `.codex/hooks.json` | フック | ホスト `codex` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
 | `.agents/hooks.json` | フック | ホスト `agy` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0` または `knowledge = "alter"` |
 | `.opencode/plugins/ego.ts` | プラグイン（フック） | ホスト `opencode` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0` または `knowledge = "alter"`。プラグインは `ego apply` 時の `ego` の絶対パスを固定します |
-| `AGENTS.md` | 管理対象の指示ブロック | ホスト `codex`、`opencode`、`agy` |
+| `AGENTS.md`（既存の内容は残す） | `ego run` の間だけ先頭に重ねる管理ブロック（永続化しない） | ホスト `codex`、`opencode`、`agy` |
 | `.agents/skills/` | skill | ホスト `codex`、`opencode`、`agy` |
 | `.codex/agents/*.toml` | agent 4 種 | ホスト `codex` |
 | `.opencode/agents/*.md` | agent 4 種 | ホスト `opencode` |
@@ -138,7 +138,7 @@ ego apply --interactive --dry-run  # 書き込まずに選択を試す
 
 agent は `implementer`、`reviewer`（読み取り専用）、`fixer`、`evolver` の 4 種です。
 
-`CLAUDE.md` / `AGENTS.md` では、ego は `EGO:BEGIN` / `EGO:END` マーカーの間のブロックだけを管理します。それ以外の部分はユーザーのものです。その他の生成ファイルはハッシュで追跡され、ego が書いた内容のままの場合にのみ置き換えます。変更されていれば衝突（`BLOCKED`）として報告します。
+`CLAUDE.md` / `AGENTS.md` は `ego apply` では変更しません。`ego run` は起動時に `EGO:BEGIN` / `EGO:END` の管理ブロックを先頭に入れ、終了時にそのブロックだけを取り除いて元の内容に戻します（異常終了した場合は次回の `ego run` で戻します）。ファイルが無かった場合は作成し、終了時に削除します。ブロック以外の部分はユーザーのものです。その他の生成ファイルはハッシュで追跡され、ego が書いた内容のままの場合にのみ置き換えます。変更されていれば衝突（`BLOCKED`）として報告します。
 
 実行時の状態も `.ego/` 配下にあります。`state/`（run、loop、イベント）、`memory/`（メモリ項目と、`handoffs/` のチェックポイント）、`backups/`（適用時のスナップショット）、`locks/` です。`.ego/state/`、`.ego/backups/`、`.ego/locks/`、`.ego/memory/handoffs/` は Git に含めないでください。
 

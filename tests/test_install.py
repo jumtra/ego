@@ -43,14 +43,23 @@ from ego.usecases.projects import list_projects, project_info, registry_path, sc
 from ego.usecases.work import execute, validate_task
 
 
-def test_non_destructive_managed_block(tmp_path):
+def test_apply_leaves_existing_instruction_files_untouched(tmp_path):
     root=tmp_path
     (root/"CLAUDE.md").write_text("# My notes\n",encoding="utf8")
     result=apply_install(root,Config())
-    assert (root/"CLAUDE.md").read_text().startswith("# My notes")
+    assert (root/"CLAUDE.md").read_text()=="# My notes\n"
     rollback(root,result["snapshot_id"])
     assert (root/"CLAUDE.md").read_text()=="# My notes\n"
     assert not (root/".agents/skills/work/SKILL.md").exists()
+
+
+def test_apply_strips_block_persisted_by_an_earlier_version(tmp_path):
+    from ego.domain.templates import instruction_block
+    (tmp_path/"CLAUDE.md").write_text("# My notes\n\n"+instruction_block(Config()),encoding="utf8")
+    (tmp_path/"AGENTS.md").write_text(instruction_block(Config(hosts=["codex"])),encoding="utf8")
+    apply_install(tmp_path,Config())
+    assert (tmp_path/"CLAUDE.md").read_text(encoding="utf8")=="# My notes\n"
+    assert not (tmp_path/"AGENTS.md").exists()
 
 
 def test_owned_edit_conflict(project):
@@ -905,8 +914,8 @@ def test_uninstall_project_cleans_owned_files(tmp_path):
     
     assert (tmp_path / ".ego").exists()
     assert (tmp_path / ".claude").exists()
-    assert (tmp_path / "CLAUDE.md").exists()
-    
+    assert not (tmp_path / "CLAUDE.md").exists()  # the managed block is an ego run overlay, never persisted
+
     res = uninstall_project(tmp_path)
     assert res["status"] == "UNINSTALLED"
     assert not (tmp_path / ".ego").exists()
