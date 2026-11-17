@@ -93,7 +93,8 @@ class MCPStdio:
             except subprocess.TimeoutExpired:p.kill();p.wait()
 
 ALTER_HOST_HINT="Add the alter MCP server to the host (alter_task_context / alter_ai_usage) or set EGO_ALTER_MCP_COMMAND"
-ALTER_SKILLS_SOURCE="github:jumtra/alter-skills"
+ALTER_SKILLS_VERSION="v0.2.1"
+ALTER_SKILLS_SOURCE=f"github:jumtra/alter-skills#{ALTER_SKILLS_VERSION}"
 ALTER_SKILLS_CLIENTS=("claude","codex","opencode","agy")
 ALTER_SKILLS_MARKER="alter-context-loader"
 
