@@ -25,7 +25,7 @@
 
 | コマンド | 用途 |
 |---|---|
-| `ego apply [flags]` | プロジェクトを設定し、ホスト向けファイルを生成。フラグ: `--hosts`、`--profile`、`--policy`、`--models`、`--graph`、`--knowledge`（`--memory` は別名）、`--runtime`、`--clear-suggest-tokens`、`--detect-tests`、`--install-alter-skills`、`--dry-run`、`--check`、`--interactive`、`--non-interactive` |
+| `ego apply [flags]` | プロジェクトを設定し、ホスト向けファイルを生成。フラグ: `--hosts`、`--profile`、`--policy`、`--models`、`--graph`、`--knowledge`（`--memory` は別名）、`--runtime`、`--clear-suggest-tokens`、`--detect-tests`、`--install-alter-skills`、`--roles`、`--plan-schema`、`--session-schema`、`--dry-run`、`--check`、`--interactive`、`--non-interactive` |
 | `ego status` | ドリフトの状態、導入済みと実行中のバージョン、最後のスナップショット |
 | `ego sync [--apply] [--all]` | `.ego/config.toml` から再生成。`--all` は登録済みの全プロジェクトを対象にする |
 | `ego rollback [snapshot]` | 直前の（または指定した）apply のスナップショットを復元 |
@@ -63,7 +63,7 @@
 | コマンド | 用途 |
 |---|---|
 | `ego run <claude\|codex\|opencode\|agy> [--clear-tokens N] [--yolo\|--no-yolo] [-- <cli args>]` | ego がチェックポイント、クリア、再開を行う CLI を起動（しきい値到達時） |
-| `ego session checkpoint --task-id <id> --goal <text> [notes] [--status <s>] [--host <cli>]` | チェックポイントを保存。メモ: `--completed`、`--next`、`--decision`、`--blocker`、`--evidence` |
+| `ego session checkpoint --task-id <id> --goal <text> [notes] [--status <s>] [--kind <k>] [--host <cli>]` | チェックポイントを保存。メモ: `--completed`、`--next`、`--decision`、`--blocker`、`--evidence` |
 | `ego session list [--all]` / `status <task_id>` | チェックポイントを一覧、または表示 |
 | `ego session resume [task_id] [--host <cli>] [--from <cli>]` | クリア指示と再開プロンプトを表示。`--from` は、クリアせずに別の CLI のチェックポイントを続ける |
 | `ego session handoff [task_id] --to <cli> [--from <cli>] [--launch]` | 別の CLI で続けるための起動コマンド |

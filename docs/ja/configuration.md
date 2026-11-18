@@ -80,8 +80,9 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `clear_suggest_tokens` | `200000` | `0` または 20000〜2000000 | このコンテキストサイズに達したらセッションをチェックポイント保存してクリアします。各 CLI の生成フック（[セッション](sessions.md) を参照）と `ego run` が使います |
 | `usage_switch_percent` | `99` | `0` または 50〜99 | Claude Code と Codex（使用上限を報告する CLI）のみ。5 時間枠または 7 日枠の使用量がこの割合に達したら、チェックポイントを保存し、別の CLI への切り替えを提案します（`0` でオフ） |
 | `run_yolo` | `true` | bool | `ego run` が CLI を権限確認スキップのスイッチ付きで起動します。`--yolo` / `--no-yolo` で run ごとに上書き |
+| `session_schema` | `{}` | 1 以上の整数のテーブル | チェックポイントと再開プロンプトの上限の上書き（`max_goal_chars`, `max_item_chars`, `max_notes`, `max_prompt_chars`）。既定値は 800, 350, 8, 1600 |
 
-3 つの詳細は [セッション](sessions.md) を参照してください。
+詳細は [セッション](sessions.md) を参照してください。
 
 ## ポリシーモード
 

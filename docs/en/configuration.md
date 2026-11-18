@@ -80,8 +80,9 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `clear_suggest_tokens` | `200000` | `0` or 20000–2000000 | Context size at which a session is checkpointed and cleared. Used by the generated hooks of every CLI (see [Sessions](sessions.md)) and by `ego run` |
 | `usage_switch_percent` | `99` | `0` or 50–99 | Claude Code and Codex (the CLIs that report their usage limit): at this percentage of the 5-hour or 7-day usage limit, save a checkpoint and propose continuing in another CLI (`0` disables) |
 | `run_yolo` | `true` | bool | `ego run` starts the CLI with its skip-permissions switch. `--yolo` / `--no-yolo` override per run |
+| `session_schema` | `{}` | table of `>= 1` ints | Overrides for checkpoint and resume-prompt limits (`max_goal_chars`, `max_item_chars`, `max_notes`, `max_prompt_chars`). Defaults: 800, 350, 8, 1600 |
 
-Details of all three: [Sessions](sessions.md).
+Details: [Sessions](sessions.md).
 
 ## Policy mode
 
