@@ -159,6 +159,7 @@ def test_planner_prompt_requires_requirement_and_steps(tmp_path: Path, monkeypat
     prompt = captured['prompt']
     assert 'requirement' in prompt and 'steps' in prompt
     assert "Never write 'consider'" in prompt
+    assert 'shared contracts/types in an upstream node' in prompt
     assert result['task']['nodes'][0]['steps'] == ['Edit src/ego/x.py function f: return 1']
 
 
@@ -390,7 +391,7 @@ def test_resume_after_cancel_continues_the_run(tmp_path):
 def task():
     return {"goal": "g", "nodes": [
         {"id": "a", "prompt": "p", "write_allowlist": ["src/*"]},
-        {"id": "b", "prompt": "p", "write_allowlist": ["src/*"], "depends_on": ["a"]}]}
+        {"id": "b", "prompt": "p", "write_allowlist": ["src/*"], "depends_on": ["a"], "write_allowlist": ["**"]}]}
 
 
 def events(root, run_id):
@@ -1083,7 +1084,7 @@ def test_seeded_run_skips_verified_agent_nodes_and_reruns_only_the_failed_one(tm
     ran = _writing_agent(monkeypatch)
     (tmp_path / "check_b.py").write_text("from pathlib import Path\nimport sys\nsys.exit(Path('b.txt').read_text()!='ok')\n")
     (tmp_path / "noop.py").write_text("print('ok')\n")
-    gate = {"id": "gate", "kind": "gate", "depends_on": ["a"], "argv": ["python3", "noop.py"]}
+    gate = {"id": "gate", "kind": "gate", "depends_on": ["a"], "write_allowlist": ["**"], "argv": ["python3", "noop.py"]}
     first = {"goal": "g", "nodes": [_wagent("a", "a.txt=A"), gate,
                                     _wagent("b", "b.txt=bad", ["gate"], [["python3", "check_b.py"]])]}
     r1 = execute(tmp_path, first, extra_allow=["*.py"])
@@ -1593,3 +1594,177 @@ def test_select_mcp_servers_and_build_command_resolve_project_root_from_isolated
     assert "--mcp-config" in argv
     loaded = json.loads(argv[argv.index("--mcp-config") + 1])
     assert loaded["mcpServers"]["alter"]["args"] == ["project-alter.js"]
+
+
+def _init_git_repo(repo: Path, files: dict[str, str]) -> None:
+    import subprocess
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True, capture_output=True)
+    for rel, content in files.items():
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
+
+
+def test_node_runs_in_git_worktree_and_merges_non_overlapping_same_file_edits(tmp_path: Path):
+    import subprocess
+    from unittest.mock import patch
+    from ego.usecases import work
+    from ego.domain.config import Config, save_config
+
+    # Arrange
+    lines = [f"line {i}" for i in range(1, 11)]
+    _init_git_repo(tmp_path, {"shared.txt": "\n".join(lines) + "\n"})
+    save_config(tmp_path, Config(max_parallel=2))
+    node_has_git: dict[str, bool] = {}
+
+    def fake_non_overlapping(host, prompt, cwd, timeout=180, **kw):
+        p = Path(cwd) / "shared.txt"
+        content = p.read_text().splitlines()
+        if "NODE:top" in prompt:
+            node_has_git["top"] = (Path(cwd) / ".git").exists()
+            content[0] = "TOP_EDITED"
+        else:
+            node_has_git["bottom"] = (Path(cwd) / ".git").exists()
+            content[-1] = "BOTTOM_EDITED"
+        p.write_text("\n".join(content) + "\n")
+        return RunResult("PASS", "ok", "", 0, 0.0, host)
+
+    task_ok = {
+        "goal": "parallel non-overlapping edits",
+        "nodes": [
+            {"id": "top", "kind": "agent", "intent": "NODE:top", "prompt": "NODE:top", "depends_on": [], "write_allowlist": ["**"]},
+            {"id": "bottom", "kind": "agent", "intent": "NODE:bottom", "prompt": "NODE:bottom", "depends_on": [], "write_allowlist": ["**"]},
+        ],
+    }
+
+    # Act
+    with patch("ego.usecases.work.run_agent", side_effect=fake_non_overlapping):
+        res_ok = work._execute(tmp_path, task_ok, work.Progress(tmp_path / "progress.jsonl"), worktree=True, apply=False, cleanup_worktree=False)
+
+    # Assert
+    assert res_ok["final_status"] == "PASSED"
+    assert node_has_git == {"top": True, "bottom": True}
+    staging_ok = tmp_path / ".ego" / "state" / "runs" / res_ok["run_id"] / "staging"
+    merged = (staging_ok / "shared.txt").read_text().splitlines()
+    assert merged[0] == "TOP_EDITED"
+    assert merged[-1] == "BOTTOM_EDITED"
+    branches = subprocess.run(["git", "branch", "--list", "ego-node-*"], cwd=tmp_path, capture_output=True, text=True, check=True)
+    assert branches.stdout.strip() == ""
+    worktrees = subprocess.run(["git", "worktree", "list"], cwd=tmp_path, capture_output=True, text=True, check=True)
+    assert "ego-node-" not in worktrees.stdout
+
+    # Arrange (conflicting same-line edits)
+    def fake_conflicting(host, prompt, cwd, timeout=180, **kw):
+        p = Path(cwd) / "shared.txt"
+        content = p.read_text().splitlines()
+        content[0] = "CONFLICT_A" if "NODE:c1" in prompt else "CONFLICT_B"
+        p.write_text("\n".join(content) + "\n")
+        return RunResult("PASS", "ok", "", 0, 0.0, host)
+
+    task_conflict = {
+        "goal": "parallel conflicting edits",
+        "nodes": [
+            {"id": "c1", "kind": "agent", "intent": "NODE:c1", "prompt": "NODE:c1", "depends_on": [], "write_allowlist": ["**"]},
+            {"id": "c2", "kind": "agent", "intent": "NODE:c2", "prompt": "NODE:c2", "depends_on": [], "write_allowlist": ["**"]},
+        ],
+    }
+
+    # Act & Assert
+    import pytest
+    from ego.shared.util import EgoError
+    with patch("ego.usecases.work.run_agent", side_effect=fake_conflicting):
+        with pytest.raises(EgoError) as exc_info:
+            work._execute(tmp_path, task_conflict, work.Progress(tmp_path / "progress.jsonl"), worktree=True, apply=False, cleanup_worktree=False)
+    assert exc_info.value.code == "MERGE_CONFLICT"
+
+
+def test_seeded_run_preserves_git_worktree_across_from_rerun(tmp_path: Path, monkeypatch):
+    from ego.usecases import work
+
+    # Arrange
+    _init_git_repo(tmp_path, {"base.txt": "base\n"})
+    task = {
+        "goal": "seed_from worktree preservation",
+        "nodes": [
+            {"id": "a", "kind": "agent", "intent": "create a", "prompt": "PROMPT_TOKEN_A", "depends_on": [], "write_allowlist": ["**"]},
+            {"id": "b", "kind": "agent", "intent": "create b", "prompt": "PROMPT_TOKEN_B", "depends_on": ["a"], "write_allowlist": ["**"]},
+        ],
+    }
+
+    def fake_first_run(host, prompt, cwd, timeout=180, **kw):
+        if "PROMPT_TOKEN_B" in prompt:
+            return RunResult("FAIL", "", "boom", 1, 0.0, host)
+        (Path(cwd) / "a.txt").write_text("from a\n")
+        return RunResult("PASS", "ok", "", 0, 0.0, host)
+
+    monkeypatch.setattr(work, "run_agent", fake_first_run)
+    res1 = work._execute(tmp_path, task, work.Progress(tmp_path / "progress.jsonl"), worktree=True, apply=False, cleanup_worktree=False)
+    assert res1["final_status"] == "FAILED"
+
+    def fake_second_run(host, prompt, cwd, timeout=180, **kw):
+        (Path(cwd) / "b.txt").write_text("from b\n")
+        return RunResult("PASS", "ok", "", 0, 0.0, host)
+
+    monkeypatch.setattr(work, "run_agent", fake_second_run)
+
+    # Act
+    res2 = work._execute(tmp_path, task, work.Progress(tmp_path / "progress.jsonl"), worktree=True, seed_from=res1["run_id"], apply=False, cleanup_worktree=False)
+
+    # Assert
+    assert res2["final_status"] == "PASSED"
+    assert res2["worktree"] is True
+    assert "a" in res2["carried"]
+    staging = tmp_path / ".ego" / "state" / "runs" / res2["run_id"] / "staging"
+    assert (staging / "a.txt").read_text() == "from a\n"
+    assert (staging / "b.txt").read_text() == "from b\n"
+
+
+def test_dynamic_dag_scheduler_starts_dependent_node_before_slow_sibling_finishes(tmp_path: Path, monkeypatch):
+    import threading
+    from ego.usecases import work
+    from ego.domain.config import Config, save_config
+
+    # Arrange
+    save_config(tmp_path, Config(max_parallel=2))
+    slow_started = threading.Event()
+    allow_slow_finish = threading.Event()
+    events: list[str] = []
+    lock = threading.Lock()
+
+    def record(ev: str) -> None:
+        with lock:
+            events.append(ev)
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        if "PROMPT_TOKEN_AFTER" in prompt:
+            assert slow_started.wait(timeout=5)
+            record("after_fast:end")
+            allow_slow_finish.set()
+        elif "PROMPT_TOKEN_SLOW" in prompt:
+            slow_started.set()
+            assert allow_slow_finish.wait(timeout=5)
+            record("slow:end")
+        elif "PROMPT_TOKEN_FAST" in prompt:
+            record("fast:end")
+        return RunResult("PASS", "ok", "", 0, 0.0, host)
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    task = {
+        "goal": "dynamic dag scheduling",
+        "nodes": [
+            {"id": "fast", "kind": "agent", "intent": "fast", "prompt": "PROMPT_TOKEN_FAST", "depends_on": [], "write_allowlist": ["**"]},
+            {"id": "slow", "kind": "agent", "intent": "slow", "prompt": "PROMPT_TOKEN_SLOW", "depends_on": [], "write_allowlist": ["**"]},
+            {"id": "after_fast", "kind": "agent", "intent": "after", "prompt": "PROMPT_TOKEN_AFTER", "depends_on": ["fast"], "write_allowlist": ["**"]},
+        ],
+    }
+
+    # Act
+    res = work._execute(tmp_path, task, work.Progress(tmp_path / "progress.jsonl"), worktree=False, apply=False)
+
+    # Assert
+    assert res["final_status"] == "PASSED"
+    assert events.index("after_fast:end") < events.index("slow:end")
