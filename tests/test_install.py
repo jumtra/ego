@@ -175,7 +175,7 @@ def test_project_apply_lifecycle(tmp_path: Path):
     assert cmd(proj, "apply", "--check").returncode == 0
     status = output(cmd(proj, "status"))
     assert status["status"] == "UP_TO_DATE"
-    assert status["installed_version"] == "0.0.39"
+    assert status["installed_version"] == "0.0.40"
     assert status["last_snapshot_id"] == snapshot_id
 
     # 5. Rollback restores previous state
@@ -692,14 +692,40 @@ def test_update_installer_falls_back_to_uv_without_pip(monkeypatch,tmp_path):
     import importlib.util
     wheel=tmp_path/'x.whl'
     monkeypatch.setattr(importlib.util,'find_spec',lambda name:object())
-    assert selfupdate._installer_argv(wheel)[1:4]==['-m','pip','install']
+    pip_online=selfupdate._installer_argv(wheel)
+    assert pip_online[1:4]==['-m','pip','install'] and '--no-deps' not in pip_online and '--no-index' not in pip_online
+    pip_offline=selfupdate._installer_argv(wheel,offline=True)
+    assert pip_offline[1:4]==['-m','pip','install'] and '--no-deps' in pip_offline and '--no-index' in pip_offline
+
     monkeypatch.setattr(importlib.util,'find_spec',lambda name:None)
     monkeypatch.setattr(selfupdate.shutil,'which',lambda name:'/opt/uv' if name=='uv' else None)
-    argv=selfupdate._installer_argv(wheel)
-    assert argv[:5]==['/opt/uv','pip','install','--python',selfupdate.sys.executable] and '--no-deps' in argv and '--no-index' in argv
+    uv_online=selfupdate._installer_argv(wheel)
+    assert uv_online[:5]==['/opt/uv','pip','install','--python',selfupdate.sys.executable]
+    assert '--reinstall-package' in uv_online and '--no-deps' not in uv_online and '--no-index' not in uv_online
+    uv_offline=selfupdate._installer_argv(wheel,offline=True)
+    assert uv_offline[:5]==['/opt/uv','pip','install','--python',selfupdate.sys.executable]
+    assert '--no-deps' in uv_offline and '--no-index' in uv_offline
+
     monkeypatch.setattr(selfupdate.shutil,'which',lambda name:None)
     with pytest.raises(EgoError,match='neither pip nor uv'):
         selfupdate._installer_argv(wheel)
+
+
+def test_install_wheel_healthcheck_verifies_runtime_imports(monkeypatch,tmp_path):
+    wheel=tmp_path/'ego-1.4.2-py3-none-any.whl'
+    wheel.write_bytes(fake_wheel('1.4.2'))
+    monkeypatch.setattr(selfupdate,'_check_venv_or_raise',lambda:None)
+    monkeypatch.setattr(selfupdate,'_installer_argv',lambda path,offline=False:['true'])
+    class Proc:
+        def __init__(self,rc,stdout='',stderr=''):
+            self.returncode=rc;self.stdout=stdout;self.stderr=stderr
+    def fake_run(argv,**kwargs):
+        if argv[0]=='true':return Proc(0)
+        if '--version' in argv:return Proc(0,stdout='ego 1.4.2\n')
+        return Proc(1,stderr="ModuleNotFoundError: No module named 'pydantic'")
+    monkeypatch.setattr(selfupdate.subprocess,'run',fake_run)
+    with pytest.raises(EgoError,match='pydantic'):
+        selfupdate.install_wheel(wheel,'1.4.2',approved=True)
 
 
 def test_node_precedence_over_task_and_code_node_under_compare_defaults(project):

@@ -1,6 +1,6 @@
 """Conservative self-update: a git checkout fast-forwards to its upstream; otherwise the publisher's GitHub Release wheel.
 
-No arbitrary update URL, no shell interpolation, no dependency resolution, and
+No arbitrary update URL, no shell interpolation, and
 no changes to project .ego state. Only stable newer versions with an
 API-provided SHA256 digest may be installed. Release publishing is external.
 """
@@ -130,29 +130,38 @@ def _check_venv_or_raise() -> None:
                        f"Reinstall with: pipx install {INSTALL_SPEC}",3)
 
 
-def _installer_argv(path: Path) -> list[str]:
+def _installer_argv(path: Path, *, offline: bool=False) -> list[str]:
     """pip of this environment, else uv: environments made by 'uv tool' or uv-backed pipx carry no pip."""
     import importlib.util
     if importlib.util.find_spec("pip"):
-        return [sys.executable,"-m","pip","install","--no-deps","--no-index","--force-reinstall",str(path)]
+        if offline:
+            return [sys.executable,"-m","pip","install","--no-deps","--no-index","--force-reinstall",str(path)]
+        return [sys.executable,"-m","pip","install","--upgrade",str(path)]
     uv=shutil.which("uv")
     if uv:
-        return [uv,"pip","install","--python",sys.executable,"--no-deps","--no-index","--reinstall",str(path)]
+        if offline:
+            return [uv,"pip","install","--python",sys.executable,"--no-deps","--no-index","--reinstall",str(path)]
+        # Reinstall ego from the verified wheel while allowing new/updated dependencies (e.g. pydantic) to resolve.
+        return [uv,"pip","install","--python",sys.executable,"--reinstall-package",PACKAGE,str(path)]
     raise EgoError("UPDATE_NO_INSTALLER","This environment has neither pip nor uv. "
                    f"Reinstall with: pipx install --force {INSTALL_SPEC}  (or: uv tool install --force {INSTALL_SPEC})",3)
 
 
-def install_wheel(path: Path, version: str, *, approved: bool=False) -> dict:
+def install_wheel(path: Path, version: str, *, approved: bool=False, offline: bool=False) -> dict:
     if not approved:
         raise EgoError("APPROVAL_REQUIRED","Use --yes or confirm interactively to install an update",3)
     _check_venv_or_raise()
-    proc=subprocess.run(_installer_argv(path),capture_output=True,text=True,timeout=180,check=False)
+    proc=subprocess.run(_installer_argv(path,offline=offline),capture_output=True,text=True,timeout=180,check=False)
     if proc.returncode:
         raise EgoError("UPDATE_INSTALL_FAILED",(proc.stderr or proc.stdout)[-1600:],3)
     check=subprocess.run([sys.executable,"-m","ego","--version"],capture_output=True,text=True,timeout=15,check=False)
-    good=check.returncode==0 and version in check.stdout
+    dep_check=subprocess.run([sys.executable,"-c","import ego.domain.config, ego.usecases.projects"],capture_output=True,text=True,timeout=15,check=False)
+    good=check.returncode==0 and version in check.stdout and dep_check.returncode==0
     if not good:
-        raise EgoError("UPDATE_HEALTHCHECK_FAILED","New package installed but version check failed. Reinstall previous wheel from local backup; project data was not modified.",3)
+        detail=(dep_check.stderr or check.stderr or "").strip()[-400:]
+        msg="New package installed but version check failed. Reinstall previous wheel from local backup; project data was not modified."
+        if detail:msg=f"{msg} ({detail})"
+        raise EgoError("UPDATE_HEALTHCHECK_FAILED",msg,3)
     return {"status":"INSTALLED","version":version,"restart_required":True,
             "project_data_changed":False,"warning":"The previous wheel should be saved for rollback before updating"}
 
@@ -250,4 +259,4 @@ def update_from_local_wheel(path: Path, digest: str, current_version: str, *, ye
     if _version_tuple(version)<=_version_tuple(current_version):
         raise EgoError("NOT_NEWER","Local wheel must be a newer stable version",3)
     validate_wheel(data,version)
-    return install_wheel(path,version,approved=True)
+    return install_wheel(path,version,approved=True,offline=True)
