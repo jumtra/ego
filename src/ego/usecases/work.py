@@ -21,12 +21,12 @@ from ..shared.util import (EgoError, ident, now, read_json, write_json, snapshot
                    filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove, git_branch_delete,
                    copy_ignored_files, sha256, json_text, is_locked, atomic_bytes)
 from ..domain.task_routing import validate_task_context, resolve_routes, build_task_prompt
+from ..domain.task_schema import validate_task_schema
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 from ..shared.util import clip_output
 from ..domain.judge import parse_verdict, format_findings
 from ..domain.usage import TOKEN_KEYS, tokens_of, summary_line
 
-KINDS={"worker","agent","code","gate","splitter"}
 # Serializes copies out of and writes into a run's staging tree across parallel node threads.
 _STAGING_LOCK=threading.Lock()
 
@@ -61,54 +61,36 @@ def _brief_findings(findings)->list[str]:
 
 
 def validate_task(spec: dict) -> list[dict]:
-    if not isinstance(spec,dict) or not isinstance(spec.get("nodes"),list) or not spec["nodes"]:
-        raise EgoError("INVALID_TASK", "Task must contain non-empty nodes array", 2)
+    validate_task_schema(spec)
     nodes=spec["nodes"]
-    ids=[n.get("id") for n in nodes if isinstance(n,dict)]
-    if len(ids)!=len(nodes) or any(not isinstance(x,str) or not x.replace("-","").replace("_","").isalnum() for x in ids) or len(set(ids))!=len(ids):
-        raise EgoError("INVALID_TASK", "Invalid/duplicate node ids", 2)
     amap={n["id"]:n for n in nodes}
     for n in nodes:
-        if n.get("kind","agent") not in KINDS: raise EgoError("INVALID_TASK", "Unknown kind", 2)
-        if not isinstance(n.get("depends_on",[]),list) or any(d not in amap for d in n.get("depends_on",[])):
+        if any(d not in amap for d in (n.get("depends_on") or [])):
             raise EgoError("INVALID_TASK", "Missing dependency", 2)
-        if n.get("kind","agent") in ("code","gate") and not (n.get("argv") or n.get("checks")):
-            raise EgoError("INVALID_TASK", "Code/gate nodes need argv or checks", 2)
-        if n.get("kind","agent") not in ("code","gate") and not isinstance(n.get("prompt"),str):
-            raise EgoError("INVALID_TASK", "Agent nodes need prompt", 2)
-        if not isinstance(n.get("write_allowlist",[]),list):raise EgoError("INVALID_TASK", "Invalid allowlist", 2)
-        if n.get("role")=="judge" and n.get("write_allowlist"):raise EgoError("INVALID_TASK", f"judge {n['id']} is read-only: no write_allowlist", 2)
-        if n.get("role")=="tester" and any(not str(p).startswith("tests/") for p in n.get("write_allowlist",[])):
-            raise EgoError("INVALID_TASK", f"tester {n['id']} may only write under tests/", 2)
-        if n.get("kind","agent") not in ("gate",) and n.get("role")!="judge" and not n.get("write_allowlist"):
-            # Explicitly require scope declarations to avoid broad accidental merges.
-            raise EgoError("INVALID_TASK", f"write_allowlist required for {n['id']}",2)
     temp=set();done=set()
     def visit(nid):
         if nid in temp:raise EgoError("TASK_CYCLE",nid,2)
         if nid in done:return
         temp.add(nid)
-        for d in amap[nid].get("depends_on",[]):visit(d)
+        for d in (amap[nid].get("depends_on") or []):visit(d)
         temp.remove(nid);done.add(nid)
-    for nid in ids:visit(nid)
-    validate_task_context(spec, nodes)
+    for nid in amap:visit(nid)
+    validate_task_context(spec, nodes, validated=True)
     for n in nodes:
         if n.get("role")!="judge":continue
         target=n.get("reviews")
         if target not in _ancestors(amap,n["id"]) or amap[target].get("role")!="coder" or amap[target].get("kind","agent") in ("code","gate"):
             raise EgoError("INVALID_TASK", f"judge {n['id']} needs reviews: a coder node it depends on", 2)
-        if not any(amap[d].get("kind","agent") in ("gate","code") for d in n.get("depends_on",[])):
+        if not any(amap[d].get("kind","agent") in ("gate","code") for d in (n.get("depends_on") or [])):
             raise EgoError("INVALID_TASK", f"judge {n['id']} must depend on a gate or code node", 2)
-        if not isinstance(n.get("max_retries",1),int) or not 0<=n.get("max_retries",1)<=2:
-            raise EgoError("INVALID_TASK", f"max_retries of {n['id']} must be 0-2", 2)
     return nodes
 
 
 def _ancestors(amap:dict, nid:str)->set:
-    out=set();stack=list(amap[nid].get("depends_on",[]))
+    out=set();stack=list(amap[nid].get("depends_on") or [])
     while stack:
         d=stack.pop()
-        if d not in out:out.add(d);stack.extend(amap[d].get("depends_on",[]))
+        if d not in out:out.add(d);stack.extend(amap[d].get("depends_on") or [])
     return out
 
 

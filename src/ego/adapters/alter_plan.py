@@ -4,19 +4,20 @@ import json
 import shlex
 from pathlib import Path
 from ..shared.util import EgoError
+from ..domain.task_schema import MAX_PROMPT_CHARS as PROMPT_MAX, validate_alter_plan_spec
 from .memory import MCPStdio, _alter_mcp_spec, ALTER_HOST_HINT
 
 NODE_EXTRA_KEYS=('kind','role','reviews','host','hosts','model','models','agent','mcp','max_retries','strategy','fallback_on','argv','outputs','notes','timeout_seconds')
 TASK_EXTRA_KEYS=('defaults','instructions_file')
-PROMPT_MAX=200
 
 def task_to_spec(task: dict, slug: str) -> dict:
-    return {'slug':slug,'goal':task.get('goal',''),'done':task.get('done',''),'instructions':task.get('instructions',''),
-            'extra':{k:task[k] for k in TASK_EXTRA_KEYS if k in task},'nodes':[_node_to_spec(n) for n in task.get('nodes',[])]}
+    spec={'slug':slug,'goal':task.get('goal',''),'done':task.get('done',''),'instructions':task.get('instructions',''),
+          'extra':{k:task[k] for k in TASK_EXTRA_KEYS if k in task},'nodes':[_node_to_spec(n) for n in task.get('nodes',[])]}
+    validate_alter_plan_spec(spec)
+    return spec
 
 def _node_to_spec(n: dict) -> dict:
     prompt=n.get('prompt','')
-    if len(prompt)>PROMPT_MAX: raise EgoError('INVALID_TASK', f"prompt of {n['id']} exceeds {PROMPT_MAX} characters; shorten it and move detail into steps", 2)
     return {'node_id':n['id'],'prompt':prompt,'depends_on':list(n.get('depends_on',[])),'intent':n.get('intent',''),'requirement':n.get('requirement',{}),
             'steps':n.get('steps',[]),'where':n.get('write_allowlist',[]),'done_when':n.get('done_when',[]),
             'checks':[shlex.join(c) if isinstance(c,list) else str(c) for c in n.get('checks',[])],
@@ -24,6 +25,7 @@ def _node_to_spec(n: dict) -> dict:
             'extra':{k:n[k] for k in NODE_EXTRA_KEYS if k in n}}
 
 def spec_to_task(spec: dict, plan_id: str, spec_hash: str) -> dict:
+    validate_alter_plan_spec(spec)
     task={'goal':spec['goal'],'instructions':spec.get('instructions',''),**spec.get('extra',{}),
           'source':{'alter_plan':{'plan_id':plan_id,'spec_hash':spec_hash,'slug':spec['slug']}},'nodes':[_spec_to_node(n) for n in spec['nodes']]}
     if spec.get('done'): task['done']=spec['done']

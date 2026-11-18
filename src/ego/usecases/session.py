@@ -21,11 +21,14 @@ from typing import Any
 from ..shared.util import EgoError, alter_project_root, exclusive_lock, is_locked, now, read_json, redact, safe_path, write_json
 from ..shared.util import HOST_ENV, _id, detect_host, handoff_relpath
 from ..domain.task_routing import resume_prompt
+from ..domain.session_schema import (
+    MAX_GOAL_CHARS,
+    MAX_ITEM_CHARS,
+    MAX_NOTES,
+    SCHEMA,
+    validate_checkpoint_schema,
+)
 
-SCHEMA = 1
-MAX_ITEM_CHARS = 350
-MAX_GOAL_CHARS = 800
-MAX_NOTES = 8
 MAX_PROMPT_CHARS = 1600
 HOST_CLEAR = {"claude": "/clear", "codex": "/clear", "opencode": "/new", "agy": "/clear"}
 # How each CLI opens a NEW interactive session that starts with a prompt (checked against each CLI's --help).
@@ -69,8 +72,9 @@ def load_checkpoint(root: Path, task_id: str) -> dict[str, Any] | None:
     record = read_json(path)
     if record is None:
         return None
-    if not isinstance(record, dict) or record.get("schema_version") != SCHEMA or record.get("task_id") != task_id:
-        raise EgoError("INVALID_HANDOFF", "Checkpoint schema or task ID mismatch", 2)
+    validate_checkpoint_schema(record)
+    if record.get("task_id") != task_id:
+        raise EgoError("INVALID_HANDOFF", "Checkpoint task ID mismatch", 2)
     return record
 
 
@@ -95,12 +99,6 @@ def save_checkpoint(
     Redaction is best-effort; callers must not pass secrets or raw logs.
     """
     _id(task_id)
-    if status not in {"IN_PROGRESS", "VERIFIED", "COMPLETED", "BLOCKED"}:
-        raise EgoError("INVALID_HANDOFF", "Unsupported checkpoint status", 2)
-    if source not in {"interactive", "managed"}:
-        raise EgoError("INVALID_HANDOFF", "Unsupported source", 2)
-    if not isinstance(goal, str) or not goal.strip():
-        raise EgoError("INVALID_HANDOFF", "Nonempty goal required", 2)
     if host is not None and host not in HOST_CLEAR:
         raise EgoError("UNKNOWN_HOST", f"Unsupported interactive host: {host}", 2)
     root = root.resolve()
@@ -112,7 +110,7 @@ def save_checkpoint(
             "schema_version": SCHEMA,
             "task_id": task_id,
             "status": status,
-            "goal": redact(goal.strip())[:MAX_GOAL_CHARS],
+            "goal": redact(goal.strip())[:MAX_GOAL_CHARS] if isinstance(goal, str) else goal,
             "completed": _notes(completed),
             "next_steps": _notes(next_steps),
             "decisions": _notes(decisions),
@@ -129,6 +127,7 @@ def save_checkpoint(
             record["host"] = host
         if run:
             record["run"] = str(run)[:64]
+        validate_checkpoint_schema(record)
         write_json(path, record)
     return {**record, "path": handoff_relpath(task_id)}
 
