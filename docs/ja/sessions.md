@@ -77,10 +77,10 @@ ego session handoff bug-142 --to claude --launch   # このターミナルで対
 
 | 対象 | `launch_command` |
 |---|---|
-| Claude Code | `claude '<resume_prompt>'` |
-| Codex | `codex '<resume_prompt>'` |
-| OpenCode | `opencode --prompt '<resume_prompt>'` |
-| AGY | `agy --prompt-interactive '<resume_prompt>'` |
+| Claude Code | `ego run claude -- '<resume_prompt>'` |
+| Codex | `ego run codex -- '<resume_prompt>'` |
+| OpenCode | `ego run opencode -- --prompt '<resume_prompt>'` |
+| AGY | `ego run agy -- --prompt-interactive '<resume_prompt>'` |
 
 - 保存側の CLI は、各 CLI が子プロセスに渡す環境変数（`CLAUDECODE`、`CODEX_THREAD_ID`、`OPENCODE`、`ANTIGRAVITY_AGENT`）から記録されます。見えるものがない、または複数ある場合は記録されないため、`--host` を指定してください。
 - 指定した CLI がチェックポイントを保存していない場合、コマンドは `HANDOFF_MISSING` を返します。別の CLI のタスクに置き換えられることはありません。先に元の CLI でチェックポイントを保存してください。

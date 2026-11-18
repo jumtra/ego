@@ -77,10 +77,10 @@ ego session handoff bug-142 --to claude --launch   # start the target CLI in thi
 
 | Target | `launch_command` |
 |---|---|
-| Claude Code | `claude '<resume_prompt>'` |
-| Codex | `codex '<resume_prompt>'` |
-| OpenCode | `opencode --prompt '<resume_prompt>'` |
-| AGY | `agy --prompt-interactive '<resume_prompt>'` |
+| Claude Code | `ego run claude -- '<resume_prompt>'` |
+| Codex | `ego run codex -- '<resume_prompt>'` |
+| OpenCode | `ego run opencode -- --prompt '<resume_prompt>'` |
+| AGY | `ego run agy -- --prompt-interactive '<resume_prompt>'` |
 
 - The saving CLI is recorded from the environment variable each CLI gives its child processes (`CLAUDECODE`, `CODEX_THREAD_ID`, `OPENCODE`, `ANTIGRAVITY_AGENT`). When none or several are visible it is not recorded: pass `--host`.
 - If the named CLI saved no checkpoint, the command returns `HANDOFF_MISSING`; another CLI's task is never substituted. Save a checkpoint in the source CLI first.
