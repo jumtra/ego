@@ -301,8 +301,10 @@ def test_any_cli_can_find_and_hand_off_another_clis_checkpoint(tmp_path: Path, m
     assert resolve_task(tmp_path, None) == "feat-7"
 
     monkeypatch.setattr("ego.usecases.session.shutil.which", lambda name: f"/bin/{name}")
-    expected = {"claude": ["claude"], "codex": ["codex"], "opencode": ["opencode", "--prompt"],
-                "agy": ["agy", "--prompt-interactive"]}
+    expected = {"claude": ["ego", "run", "claude", "--"],
+                "codex": ["ego", "run", "codex", "--"],
+                "opencode": ["ego", "run", "opencode", "--", "--prompt"],
+                "agy": ["ego", "run", "agy", "--", "--prompt-interactive"]}
     for host, prefix in expected.items():
         info = handoff(tmp_path, None, host)
         assert (info["task_id"], info["from_host"], info["to_host"]) == ("feat-7", "codex", host)
@@ -321,7 +323,7 @@ def test_any_cli_can_find_and_hand_off_another_clis_checkpoint(tmp_path: Path, m
     out = json.loads(capsys.readouterr().out)
     assert out["task_id"] == "feat-7" and out["clear_command"] == "/new"
     assert main(["session", "handoff", "--to", "claude", "--root", str(tmp_path)]) == 0
-    assert json.loads(capsys.readouterr().out)["launch_argv"][0] == "claude"
+    assert json.loads(capsys.readouterr().out)["launch_argv"][:4] == ["ego", "run", "claude", "--"]
 
 
 def test_handoff_launch_refuses_without_terminal_or_cli(tmp_path: Path, monkeypatch, capsys):
@@ -338,8 +340,9 @@ def test_handoff_launch_refuses_without_terminal_or_cli(tmp_path: Path, monkeypa
     monkeypatch.setattr("ego.cli.sys.stdin.isatty", lambda: True, raising=False)
     monkeypatch.setattr("ego.cli.sys.stdout.isatty", lambda: True, raising=False)
     monkeypatch.setattr("ego.cli.os.chdir", lambda p: None)
+    monkeypatch.setattr("ego.cli.shutil.which", lambda name: f"/bin/{name}")
     main(["session", "handoff", "feat-7", "--to", "codex", "--launch", "--root", str(tmp_path)])
-    assert called and called[0][0] == "codex" and called[0][1][0] == "codex"
+    assert called and called[0][0] == "ego" and called[0][1][:4] == ["ego", "run", "codex", "--"]
 
 
 _HOST_VARS = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_CI", "OPENCODE",
@@ -1617,3 +1620,71 @@ def test_loop_accounts_for_a_planner_call_whose_plan_was_rejected(tmp_path: Path
     assert result["iterations"][0]["status"] == "PLAN_REJECTED"
     assert "PLAN_INVALID_JSON" in result["iterations"][0]["failures"][0]["feedback"]
     assert result["cost_usd"] == 0.5 and result["usage"]["plan_tokens"] == 2400  # two calls, then STALLED
+
+
+def test_checkpoint_kind_changes_resume_prompt_priority_and_framing(tmp_path: Path, capsys):
+    # Arrange & Act: plan_ready prioritizes Next/Decisions over Evidence; plan_resume prioritizes Blockers
+    assert main([
+        "session", "checkpoint", "--root", str(tmp_path), "--task-id", "plan-task",
+        "--goal", "Build feature", "--completed", "plan approved",
+        "--next", "ego work run --task .ego/state/tasks/plan-task.json",
+        "--decision", "use table-driven profiles", "--kind", "plan_ready",
+    ]) == 0
+    ready_saved = json.loads(capsys.readouterr().out)
+    ready_record = load_checkpoint(tmp_path, "plan-task")
+    ready_prompt = resume_prompt(ready_record)
+
+    pause_record = save_checkpoint(
+        tmp_path, "plan-wip", goal="Design API",
+        blockers=["need auth choice"], next_steps=["finalize schema"],
+        decisions=["REST over GraphQL"], kind="plan_resume", status="BLOCKED",
+    )
+    pause_prompt = resume_prompt(pause_record)
+
+    done_record = save_checkpoint(
+        tmp_path, "done-task", goal="Ship API",
+        completed=["merged handler"], evidence=["pytest passed"], status="COMPLETED",
+    )
+    done_prompt = resume_prompt(done_record)
+
+    # Assert
+    assert ready_saved["task_id"] == "plan-task"
+    assert ready_record["kind"] == "plan_ready"
+    assert "(plan_ready)" in ready_prompt
+    assert "Plan is ready:" in ready_prompt
+    assert ready_prompt.index("Decisions:") < ready_prompt.index("Done:")
+
+    assert pause_record["kind"] == "plan_resume"
+    assert "Planning is in progress:" in pause_prompt
+    assert pause_prompt.index("Blockers:") < pause_prompt.index("Next:")
+
+    assert done_record["kind"] == "completed"
+    assert "Work is marked completed:" in done_prompt
+    assert done_prompt.index("Done:") < done_prompt.index("Evidence:")
+
+
+def test_session_schema_limits_from_config_bound_checkpoint_and_resume_prompt(tmp_path: Path):
+    # Arrange
+    from ego.domain.config import save_config
+    (tmp_path / ".ego").mkdir()
+    save_config(tmp_path, Config(session_schema={
+        "max_goal_chars": 25,
+        "max_item_chars": 12,
+        "max_notes": 2,
+        "max_prompt_chars": 260,
+    }))
+
+    # Act
+    saved = save_checkpoint(
+        tmp_path, "bounded",
+        goal="This goal is definitely longer than 25 characters",
+        completed=["item-one-too-long", "item-two-too-long", "item-three-ok"],
+        next_steps=["next-one-long-text", "next-two-long-text", "next-three"],
+    )
+    prompt = rotation_instructions(tmp_path, "bounded", "claude")["resume_prompt"]
+
+    # Assert
+    assert len(saved["goal"]) == 25
+    assert len(saved["completed"]) == 2
+    assert all(len(x) <= 12 for x in saved["completed"])
+    assert len(prompt) <= 260

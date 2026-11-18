@@ -23,6 +23,13 @@ from .task_schema import (
     MAX_STEP_ITEMS,
     PlanSchemaLimits,
 )
+from .session_schema import (
+    MAX_GOAL_CHARS as SESSION_MAX_GOAL_CHARS,
+    MAX_ITEM_CHARS as SESSION_MAX_ITEM_CHARS,
+    MAX_NOTES as SESSION_MAX_NOTES,
+    MAX_PROMPT_CHARS as SESSION_MAX_PROMPT_CHARS,
+    SessionSchemaLimits,
+)
 
 HOSTS = ("claude", "codex", "opencode", "agy")
 PROVIDERS = ("codegraph", "graphify", "none")
@@ -146,6 +153,14 @@ class PlanSchemaConfigSpec(BaseModel):
     max_prompt_chars: PositiveInt = MAX_PROMPT_CHARS
 
 
+class SessionSchemaConfigSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    max_goal_chars: PositiveInt = SESSION_MAX_GOAL_CHARS
+    max_item_chars: PositiveInt = SESSION_MAX_ITEM_CHARS
+    max_notes: PositiveInt = SESSION_MAX_NOTES
+    max_prompt_chars: PositiveInt = SESSION_MAX_PROMPT_CHARS
+
+
 class ConfigSpec(BaseModel):
     """Pydantic schema for validating Config attributes mechanically."""
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -177,6 +192,7 @@ class ConfigSpec(BaseModel):
     tests: list[Annotated[list[str], Field(min_length=1)]]
     allow_commands: list[str]
     plan_schema: PlanSchemaConfigSpec = Field(default_factory=PlanSchemaConfigSpec)
+    session_schema: SessionSchemaConfigSpec = Field(default_factory=SessionSchemaConfigSpec)
 
     @field_validator("hosts")
     @classmethod
@@ -264,9 +280,13 @@ class Config:
     tests: list[list[str]] = field(default_factory=list)
     allow_commands: list[str] = field(default_factory=lambda: ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"])
     plan_schema: dict[str, int] = field(default_factory=dict)  # overrides for PlanSchemaLimits (max_goal_chars, max_note_chars, max_step_items, etc.)
+    session_schema: dict[str, int] = field(default_factory=dict)  # overrides for SessionSchemaLimits (max_goal_chars, max_item_chars, max_notes, max_prompt_chars)
 
     def plan_schema_limits(self) -> PlanSchemaLimits:
         return PlanSchemaLimits(**self.plan_schema)
+
+    def session_schema_limits(self) -> SessionSchemaLimits:
+        return SessionSchemaLimits(**self.session_schema)
 
     def validate(self) -> None:
         try:
@@ -334,6 +354,9 @@ def dump_config(cfg: Config) -> str:
         "#\n"
         "# 計画・タスクスキーマの文字数・項目数上限 (plan_schema, 未指定の項目は既定値を使用):\n"
         "#   plan_schema = {max_goal_chars = 6000, max_instructions_chars = 65536, max_instructions_file_chars = 512, max_note_chars = 400, max_note_items = 6, max_step_items = 10, max_agent_chars = 128, max_mcp_items = 8, max_mcp_chars = 64, max_context_files = 24, max_node_id_chars = 64, max_prompt_chars = 200}\n"
+        "#\n"
+        "# セッションチェックポイント・再開プロンプトの文字数・項目数上限 (session_schema, 未指定の項目は既定値を使用):\n"
+        "#   session_schema = {max_goal_chars = 800, max_item_chars = 350, max_notes = 8, max_prompt_chars = 1600}\n"
     )
     return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in vars(cfg).items()) + "\n"
 

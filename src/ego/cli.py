@@ -5,6 +5,7 @@ import difflib
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 from . import __version__
 from .shared.util import EgoError, read_json, write_json, now
@@ -52,6 +53,13 @@ def _cmd_apply(args):
             cfg.plan_schema = parsed
         except Exception as exc:
             raise EgoError("INVALID_CONFIG", f"plan_schema must be a valid JSON object: {exc}", 2)
+    if getattr(args, "session_schema", None) is not None:
+        try:
+            parsed = json.loads(args.session_schema)
+            if not isinstance(parsed, dict): raise ValueError("must be JSON object")
+            cfg.session_schema = parsed
+        except Exception as exc:
+            raise EgoError("INVALID_CONFIG", f"session_schema must be a valid JSON object: {exc}", 2)
     # No extra import or stdin inspection on scripted apply/check/dry-run.
     from .usecases.apply_wizard import should_prompt, select_options, confirm_apply, WizardCancelled
     interactive = should_prompt(args)
@@ -361,7 +369,7 @@ def _cmd_session(args):
             root, args.task_id, goal=args.goal, completed=args.completed,
             next_steps=args.next_steps, decisions=args.decision,
             blockers=args.blocker, evidence=args.evidence,
-            status=args.status, source="interactive", host=args.host or detect_host(),
+            status=args.status, kind=args.kind, source="interactive", host=args.host or detect_host(),
             run=os.environ.get(RUN_ID_ENV),
         )
         try:
@@ -392,7 +400,10 @@ def _cmd_session(args):
                 raise EgoError("LAUNCH_NEEDS_TTY", "--launch opens an interactive CLI and needs a terminal; "
                                "run launch_command yourself: " + result["launch_command"], 3)
             os.chdir(root)
-            os.execvp(result["launch_argv"][0], result["launch_argv"])
+            exec_argv = result["launch_argv"]
+            if exec_argv[0] == "ego" and shutil.which("ego") is None:
+                exec_argv = [sys.executable, "-m", "ego", *exec_argv[1:]]
+            os.execvp(exec_argv[0], exec_argv)
     elif args.action == "analyze":
         from .usecases.alter_analysis import analyze_session
         result = analyze_session(root, args.session_id)
@@ -641,6 +652,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--models",help="Default models JSON mapping, e.g. '{\"claude\":\"sonnet\"}'")
     sp.add_argument("--roles",help="Per-role host/model/effort JSON, e.g. '{\"judge\":{\"host\":\"agy\",\"effort\":\"high\"}}'")
     sp.add_argument("--plan-schema",help="Task/plan schema limit overrides JSON, e.g. '{\"max_note_chars\":800,\"max_step_items\":15}'")
+    sp.add_argument("--session-schema",help="Session checkpoint/prompt limit overrides JSON, e.g. '{\"max_item_chars\":500,\"max_prompt_chars\":2400}'")
     sp.add_argument("--clear-suggest-tokens",type=int,metavar="N",help="At N context tokens the Stop hook (Claude Code, Codex, AGY, OpenCode plugin) has the session checkpoint and suggests /clear (0 = off)")
     mode = sp.add_mutually_exclusive_group()
     mode.add_argument("--interactive",action="store_true",help="Always ask for choices, even when stdin is redirected")
@@ -760,6 +772,8 @@ def build_parser()->argparse.ArgumentParser:
     r.add_argument("--decision",action="append");r.add_argument("--blocker",action="append")
     r.add_argument("--evidence",action="append")
     r.add_argument("--status",choices=["IN_PROGRESS","VERIFIED","COMPLETED","BLOCKED"],default="IN_PROGRESS")
+    r.add_argument("--kind",choices=["ongoing","plan_ready","plan_resume","completed"],default=None,
+                   help="Checkpoint profile: ongoing (in-progress work), plan_ready (plan finished), plan_resume (planning paused), completed")
     r.add_argument("--host",choices=["claude","codex","opencode","agy"],help="CLI saving this checkpoint (default: detected from the environment)")
     r=s.add_parser("list",help="List saved checkpoints, newest first (open ones unless --all)");r.add_argument("--all",action="store_true")
     r=s.add_parser("status");r.add_argument("task_id")
