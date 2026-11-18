@@ -71,6 +71,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `isolation` | `"copy"` | `copy`、`worktree` | run の作業場所。ステージング用コピーか Git worktree か。`--worktree` で run ごとに上書き |
 | `cleanup_worktree` | `true` | bool | run 後に worktree を削除。`--keep-worktree` で run ごとに上書き |
 | `allow_commands` | 一般的なツールチェーン | コマンド名のリスト | `checks` と `--done-check` が起動してよい実行ファイル。シェルと `python -c` は常に拒否されます |
+| `plan_schema` | `{}` | 1 以上の整数のテーブル | 計画・タスクスキーマの文字数・項目数上限の上書き（`max_goal_chars`, `max_instructions_chars`, `max_instructions_file_chars`, `max_note_chars`, `max_note_items`, `max_step_items`, `max_agent_chars`, `max_mcp_items`, `max_mcp_chars`, `max_context_files`, `max_node_id_chars`, `max_prompt_chars`） |
 
 ### セッション
 

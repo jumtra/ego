@@ -243,7 +243,63 @@ def test_config_pydantic_schema_rejects_out_of_range_and_wrong_types():
         Config(max_turns=201),
         Config(clear_suggest_tokens=500),
         Config(cleanup_worktree="yes"),
+        Config(plan_schema={"unknown_limit": 10}),
+        Config(plan_schema={"max_note_chars": 0}),
+        Config(plan_schema={"max_note_chars": True}),
     ):
         with pytest.raises(EgoError) as exc_info:
             bad_cfg.validate()
         assert exc_info.value.code == "INVALID_CONFIG"
+
+
+def test_plan_schema_limits_from_config_override_validation_and_prompt_schema(tmp_path):
+    # Arrange
+    from ego.domain.config import Config, load_config, save_config
+    from ego.usecases.planner import plan_work
+
+    (tmp_path / ".ego").mkdir()
+    save_config(tmp_path, Config(plan_schema={"max_note_chars": 600, "max_step_items": 2, "max_goal_chars": 20}))
+    cfg = load_config(tmp_path)
+    limits = cfg.plan_schema_limits()
+
+    long_note_spec = {
+        "goal": "short goal",
+        "nodes": [
+            {
+                "id": "impl",
+                "kind": "agent",
+                "intent": "x" * 500,
+                "prompt": "Implement",
+                "steps": ["step 1", "step 2"],
+                "write_allowlist": ["src/**"],
+            }
+        ],
+    }
+    too_many_steps_spec = {
+        "goal": "short goal",
+        "nodes": [
+            {
+                "id": "impl",
+                "kind": "agent",
+                "prompt": "Implement",
+                "steps": ["step 1", "step 2", "step 3"],
+                "write_allowlist": ["src/**"],
+            }
+        ],
+    }
+
+    # Act & Assert
+    assert len(validate_task(long_note_spec, limits=limits)) == 1
+    with pytest.raises(EgoError) as exc_steps:
+        validate_task(too_many_steps_spec, limits=limits)
+    assert exc_steps.value.code == "INVALID_TASK"
+    assert "max items of 2" in str(exc_steps.value)
+
+    schema = get_plan_prompt_schema(limits)
+    assert schema["properties"]["goal"]["maxLength"] == 20
+    steps_schema = next(s for s in schema["$defs"]["NodeSpec"]["properties"]["steps"]["anyOf"] if s.get("type") == "array")
+    assert steps_schema["maxItems"] == 2
+
+    with pytest.raises(EgoError) as exc_goal:
+        plan_work(tmp_path, "x" * 21, host="mock")
+    assert exc_goal.value.code == "INVALID_GOAL"

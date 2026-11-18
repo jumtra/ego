@@ -12,6 +12,7 @@ from ..shared.util import EgoError, clip_output, handoff_relpath, _id, safe_path
 from .policy import ROLES
 from .task_schema import (
     MAX_INSTRUCTIONS_CHARS as MAX_INSTRUCTION_BYTES,
+    PlanSchemaLimits,
     REQUIREMENT_KEYS,
     validate_node_schema,
     validate_task_schema,
@@ -135,9 +136,9 @@ def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_m
     return strategy, routes, frozenset(on)
 
 
-def validate_node_notes(node: dict) -> None:
+def validate_node_notes(node: dict, *, limits: PlanSchemaLimits | None = None) -> None:
     """Validate node notes, requirement, steps, and options mechanically via schema."""
-    validate_node_schema(node)
+    validate_node_schema(node, limits=limits)
 
 
 def _agent_file(cwd: Path, name: str) -> Path | None:
@@ -155,11 +156,12 @@ def _bullets(items: list[str]) -> str:
     return "\n".join("- " + i.strip() for i in items)
 
 
-def validate_task_context(spec: dict, nodes: list[dict], *, default_host: str = "mock", validated: bool = False) -> None:
+def validate_task_context(spec: dict, nodes: list[dict], *, default_host: str = "mock", validated: bool = False, limits: PlanSchemaLimits | None = None) -> None:
     if not validated:
         candidate = spec if (isinstance(spec, dict) and "nodes" in spec) else ({**spec, "nodes": nodes} if isinstance(spec, dict) else spec)
-        validate_task_schema(candidate)
-    if len(spec.get("goal", "")) + len(spec.get("instructions", "")) > MAX_INSTRUCTION_BYTES:
+        validate_task_schema(candidate, limits=limits)
+    max_bytes = limits.max_instructions_chars if limits is not None else MAX_INSTRUCTION_BYTES
+    if len(spec.get("goal", "")) + len(spec.get("instructions", "")) > max_bytes:
         raise EgoError("INSTRUCTIONS_TOO_LARGE", "Task-wide instructions too long", 2)
     for node in nodes:
         kind = node.get("kind", "agent")

@@ -159,7 +159,8 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
     from .work import execute, validate_task
     root = root.resolve()
     cfg = load_config(root)
-    if not isinstance(goal, str) or not goal.strip() or len(goal) > 6000:
+    limits = cfg.plan_schema_limits()
+    if not isinstance(goal, str) or not goal.strip() or len(goal) > limits.max_goal_chars:
         raise EgoError("INVALID_GOAL", "Missing/oversized goal", 2)
     if not done_checks or any(not isinstance(c, list) or not c for c in done_checks):
         raise EgoError("DONE_CHECK_REQUIRED", "A loop needs at least one measurable check command (argv array)", 2)
@@ -184,7 +185,7 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
         if cfg.models and "models" not in seed_task.get("defaults", {}):
             seed_task["defaults"] = {**seed_task.get("defaults", {}), "models": dict(cfg.models)}
         # Reject a broken approved plan before the ledger exists; replanning it would silently replace it.
-        validate_task(seed_task)
+        validate_task(seed_task, limits=limits)
         for node in seed_task["nodes"]:
             for argv in ([node["argv"]] if node.get("argv") else []) + list(node.get("checks") or []):
                 check_command(argv, cfg.allow_commands, cfg.policy_mode)

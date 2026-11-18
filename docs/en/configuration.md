@@ -71,6 +71,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `isolation` | `"copy"` | `copy`, `worktree` | Where a run works: a staging copy, or a Git worktree. `--worktree` overrides per run |
 | `cleanup_worktree` | `true` | bool | Remove the worktree after the run. `--keep-worktree` overrides per run |
 | `allow_commands` | common toolchains | list of command names | Executables that `checks` and `--done-check` may start. Shells and `python -c` are always refused |
+| `plan_schema` | `{}` | table of `>= 1` ints | Overrides for task/plan schema limits (`max_goal_chars`, `max_instructions_chars`, `max_instructions_file_chars`, `max_note_chars`, `max_note_items`, `max_step_items`, `max_agent_chars`, `max_mcp_items`, `max_mcp_chars`, `max_context_files`, `max_node_id_chars`, `max_prompt_chars`) |
 
 ### Sessions
 
