@@ -464,9 +464,9 @@ def _cmd_hook(args):
             from .usecases.session import adapt_output,bind_run_session,clear_advice,clear_resume,codex_limits,normalize_payload,project_root,usage_advice
             obj=normalize_payload(host,json.loads(raw))
             root=project_root(root,obj.get("cwd"))
-            bind_run_session(root,obj)
             info={}
             if args.event=="stop":
+                bind_run_session(root,obj)
                 cfg=load_config(root)
                 if cfg.knowledge == "alter":
                     try:
@@ -501,6 +501,8 @@ def _cmd_hook(args):
                     from .usecases.session import with_alter_mandate
                     with use_host(host):
                         out=with_alter_mandate(out, root)
+                # Bound last: ego run's resume prompt waits for this, so it must follow the SessionStart work.
+                bind_run_session(root,obj)
             out=adapt_output(host,args.event,out,once=bool(info.get("once")))
         except (ValueError,OSError,EgoError,KeyError,TypeError):out={}
         print(json.dumps(out,ensure_ascii=False));return 0

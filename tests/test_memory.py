@@ -10,7 +10,7 @@ import sys
 from ego.adapters.codeintel import health, search, symbol
 from ego.adapters.hosts import capability, build_command
 from ego.adapters.memory import FileMemory
-from ego.adapters.memory import extract_session_messages
+from ego.adapters.memory import extract_session_messages, submit_alter_checkpoint_review
 from ego.adapters.runner import run_agent, parse_host_response
 from ego.cli import main
 from ego.domain.config import Config, save_config
@@ -313,6 +313,46 @@ def test_session_checkpoint_calls_alter_session_digest(
     assert calls[0]["name"] == "alter_session_digest"
     assert calls[0]["arguments"]["action"] == "patch"
     assert calls[0]["arguments"]["cwd"] == str(proj.resolve())
+
+
+_SESSION_ENV = ("EGO_RUN_ID", "EGO_RUN", "EGO_RUN_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID")
+
+
+@pytest.fixture
+def no_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _SESSION_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
+def _submitted_arguments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checkpoint: dict) -> dict:
+    _, log_path = _setup_fake_alter_mcp(tmp_path, monkeypatch)
+    submit_alter_checkpoint_review(tmp_path, checkpoint)
+    calls = _read_calls(log_path)
+    assert len(calls) == 1
+    return calls[0]["arguments"]
+
+
+def test_a_checkpoint_from_an_ego_run_reports_to_the_run_session(tmp_path: Path, monkeypatch, no_session_env):
+    args = _submitted_arguments(tmp_path, monkeypatch, {"task_id": "t1", "goal": "g", "run": "n-1-x", "next_steps": ["go"]})
+    assert args["session_id"] == "ego-run-n-1-x"
+
+
+def test_outside_an_ego_run_the_host_session_is_used(tmp_path: Path, monkeypatch, no_session_env):
+    monkeypatch.setenv("CODEX_THREAD_ID", "codex-thread-7")
+    args = _submitted_arguments(tmp_path, monkeypatch, {"task_id": "t1", "goal": "g", "next_steps": ["go"]})
+    assert args["session_id"] == "codex-thread-7"
+
+
+def test_without_any_session_the_checkpoint_names_its_own_session(tmp_path: Path, monkeypatch, no_session_env):
+    args = _submitted_arguments(tmp_path, monkeypatch, {"task_id": "t1", "goal": "g", "next_steps": ["go"]})
+    assert args["session_id"] == "checkpoint-t1"
+
+
+def test_each_field_submits_at_most_eight_items(tmp_path: Path, monkeypatch, no_session_env):
+    items = [f"item {i}" for i in range(10)]
+    args = _submitted_arguments(tmp_path, monkeypatch, {"task_id": "t1", "goal": "g", "completed": items, "evidence": items})
+    assert [a["text"] for a in args["add"] if a["kind"] == "evidence"] == items[:8]
+    assert len([a for a in args["add"] if a["kind"] == "fact"]) == 8
 
 
 def test_session_checkpoint_succeeds_when_alter_mcp_fails(

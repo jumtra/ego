@@ -45,13 +45,20 @@ MAX_LIST_GOAL_CHARS = 120
 
 
 def _notes(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Clean and bound notes mechanically: the newest MAX_NOTES survive, so a longer list never fails."""
     if values is None:
         return []
-    if not isinstance(values, (list, tuple)) or len(values) > MAX_NOTES:
-        raise EgoError("INVALID_HANDOFF", f"At most {MAX_NOTES} notes per field", 2)
+    if not isinstance(values, (list, tuple)):
+        raise EgoError("INVALID_HANDOFF", "Notes must be a list", 2)
     if not all(isinstance(x, str) for x in values):
         raise EgoError("INVALID_HANDOFF", "Notes must be strings", 2)
-    return [redact(x.strip())[:MAX_ITEM_CHARS] for x in values if x.strip()]
+    cleaned = [redact(x.strip())[:MAX_ITEM_CHARS] for x in values if x.strip()]
+    return list(dict.fromkeys(cleaned))[-MAX_NOTES:]
+
+
+def _merge_notes(prev_items: list[str], new_items: list[str]) -> list[str]:
+    """Keep earlier revisions' notes (e.g. past decisions) when a checkpoint is saved again."""
+    return list(dict.fromkeys([*prev_items, *new_items]))[-MAX_NOTES:]
 
 
 
@@ -106,16 +113,28 @@ def save_checkpoint(
     lock = safe_path(root, f".ego/locks/handoff-{task_id}.lock")
     with exclusive_lock(lock):
         prev = load_checkpoint(root, task_id)
+        # A re-save of an open task keeps what earlier saves recorded; a COMPLETED one starts fresh.
+        prev_open = prev if prev is not None and prev.get("status") != "COMPLETED" else None
+
+        def history(key: str, values) -> list[str]:
+            new = _notes(values)
+            return _merge_notes(prev_open.get(key) or [], new) if prev_open else new
+
+        def inherit(key: str, values, statuses: tuple[str, ...]) -> list[str]:
+            if values is None and prev is not None and status in statuses:
+                return list(prev.get(key) or [])
+            return _notes(values)
+
         record = {
             "schema_version": SCHEMA,
             "task_id": task_id,
             "status": status,
             "goal": redact(goal.strip())[:MAX_GOAL_CHARS] if isinstance(goal, str) else goal,
-            "completed": _notes(completed),
-            "next_steps": _notes(next_steps),
-            "decisions": _notes(decisions),
-            "blockers": _notes(blockers),
-            "evidence": _notes(evidence),
+            "completed": history("completed", completed),
+            "next_steps": inherit("next_steps", next_steps, ("IN_PROGRESS", "BLOCKED")),
+            "decisions": history("decisions", decisions),
+            "blockers": inherit("blockers", blockers, ("BLOCKED",)),
+            "evidence": history("evidence", evidence),
             "source": source,
             "created_at": prev.get("created_at", now()) if prev else now(),
             "updated_at": now(),
@@ -145,6 +164,8 @@ _PROMPT_TAIL = ("A record, not proof: check files/git diff first, run the narrow
 RUN_ID_ENV = "EGO_RUN_ID"  # set by ego run: which wrapper a checkpoint belongs to
 RUN_SESSION_ENV = "EGO_RUN_SESSION"  # set by ego run: where its hooks record the host session
 ADVICE_STATE = ".ego/state/session_advice.json"
+# Revisions already resumed after /clear, per task: stored beside the per-session entries in ADVICE_STATE.
+CONSUMED_KEY = "_consumed"
 CLEAR_PENDING = ".ego/state/clear_pending.json"
 PENDING_TTL = 1800
 FRESH_CHECKPOINT = 1800
@@ -239,13 +260,17 @@ def _age_seconds(stamp: str) -> float:
 
 
 def latest_open_checkpoint(root: Path, max_age: int = FRESH_CHECKPOINT,
-                           exclude: set[str] | frozenset[str] = frozenset(), run: str | None = None) -> dict[str, Any] | None:
+                           exclude: set[str] | frozenset[str] = frozenset(), run: str | None = None,
+                           consumed: dict[str, int] | None = None) -> dict[str, Any] | None:
     best = None
     for path in (root / ".ego" / "memory" / "handoffs").glob("*.json"):
         record = read_json(path)
         if (not isinstance(record, dict) or record.get("schema_version") != SCHEMA or record.get("status") == "COMPLETED"
                 or record.get("source") != "interactive" or record.get("task_id") in exclude or _age_seconds(record.get("updated_at", "")) > max_age
                 or (run is not None and record.get("run") != run)):
+            continue
+        # Already resumed after /clear: that revision was consumed, so it must not be offered again.
+        if consumed and record.get("task_id") in consumed and int(record.get("revision") or 0) <= int(consumed[record["task_id"]]):
             continue
         if best is None or record["updated_at"] > best["updated_at"]:
             best = record
@@ -366,12 +391,13 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int, host: str 
         foreign = {t for t, e in _pending_tasks(root).items() if e.get("session") and e["session"] != session}
         # At a growth step the checkpoint must postdate the previous step: the work since is not in it.
         max_age = min(FRESH_CHECKPOINT, time.time() - float(entry.get("at") or 0)) if step and last is not None else FRESH_CHECKPOINT
-        checkpoint = latest_open_checkpoint(root, max_age, exclude=foreign)
+        consumed = state.get(CONSUMED_KEY) if isinstance(state.get(CONSUMED_KEY), dict) else None
+        checkpoint = latest_open_checkpoint(root, max_age, exclude=foreign, consumed=consumed)
         # The extra turn this hook asked for (or another hook's) is ending: never block it again.
         save = step and checkpoint is None and not payload.get("stop_hook_active")
         if step and (checkpoint is not None or save):
             state[session] = {"tokens": tokens, "at": time.time()}
-            for old in sorted(state, key=lambda k: state[k].get("at", 0))[:-20]:
+            for old in sorted((k for k in state if k != CONSUMED_KEY), key=lambda k: state[k].get("at", 0))[:-20]:
                 state.pop(old)
             write_json(state_path, state)
     size = f"約 {tokens // 1000}k トークン（しきい値 {threshold // 1000}k）"
@@ -386,7 +412,7 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int, host: str 
                 "decision": "block",
                 "reason": f"ego: this conversation's context is {tokens} tokens, at or above this project's limit "
                           f"(clear_suggest_tokens = {threshold}). Do no further task work in this turn. Save this conversation's state with one "
-                          "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... "
+                          "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... --decision ... --blocker ... "
                           "--status <IN_PROGRESS|VERIFIED|BLOCKED|COMPLETED> --root .` (facts only; include uncommitted changes and "
                           "known failures; reuse the task ID if one was already checkpointed). Then tell the user, briefly and in "
                           "their language, that the checkpoint is saved and that they should run /clear and then send "
@@ -488,7 +514,7 @@ def usage_advice(root: Path, payload: dict[str, Any], percent: int, hosts: list[
             "decision": "block",
             "reason": f"ego: the {HOST_NAME.get(host, host)} usage limit is nearly spent ({key} {used:.0f}% used, resets {reset}). "
                       "Do no further task work now. Save this conversation's state with one "
-                      "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... "
+                      "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... --decision ... --blocker ... "
                       "--status <IN_PROGRESS|VERIFIED|BLOCKED|COMPLETED> --root .` (facts only; include uncommitted changes and "
                       "known failures; reuse the task ID if one was already checkpointed). " + switch +
                       "Reply to the user briefly in their language, then stop."}
@@ -520,6 +546,11 @@ def clear_resume(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         return {}
     if record is None:
         return {}
+    with exclusive_lock(safe_path(root, ".ego/locks/session-advice.lock")):
+        state = read_json(safe_path(root, ADVICE_STATE), {})
+        state = state if isinstance(state, dict) else {}
+        state.setdefault(CONSUMED_KEY, {})[record["task_id"]] = int(record.get("revision", 1))
+        write_json(safe_path(root, ADVICE_STATE), state)
     # additionalContext is silent and starts no turn, so also tell the user what to do next.
     return {"systemMessage": f"ego: チェックポイント {record['task_id']} の再開コンテキストを読み込みました。「続けて」と送ると再開します。",
             "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": resume_prompt(record)}}
@@ -884,7 +915,7 @@ def adapt_output(host: str, event: str, out: dict[str, Any], once: bool = False)
 def _save_request(tokens: int, threshold: int) -> str:
     return (f"ego: this conversation's context is {tokens} tokens, at or above this project's limit ({threshold}). "
             "Do no further task work in this turn. Save this conversation's state with one "
-            "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... "
+            "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... --decision ... --blocker ... "
             "--status <IN_PROGRESS|VERIFIED|BLOCKED> --root .` (facts only; include uncommitted changes and known "
             "failures; reuse the task ID if one was already checkpointed). Then stop: ego clears this session and "
             "resumes it from that checkpoint automatically.")
