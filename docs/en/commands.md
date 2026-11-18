@@ -25,7 +25,7 @@ Details: [Setup](setup.md).
 
 | Command | Purpose |
 |---|---|
-| `ego apply [flags]` | Configure a project and generate host files. Flags: `--hosts`, `--profile`, `--policy`, `--models`, `--graph`, `--knowledge` (`--memory` is an alias), `--runtime`, `--clear-suggest-tokens`, `--detect-tests`, `--install-alter-skills`, `--dry-run`, `--check`, `--interactive`, `--non-interactive` |
+| `ego apply [flags]` | Configure a project and generate host files. Flags: `--hosts`, `--profile`, `--policy`, `--models`, `--graph`, `--knowledge` (`--memory` is an alias), `--runtime`, `--clear-suggest-tokens`, `--detect-tests`, `--install-alter-skills`, `--roles`, `--plan-schema`, `--session-schema`, `--dry-run`, `--check`, `--interactive`, `--non-interactive` |
 | `ego status` | Drift status, installed vs. running version, last snapshot |
 | `ego sync [--apply] [--all]` | Re-render from `.ego/config.toml`; `--all` covers every registered project |
 | `ego rollback [snapshot]` | Restore the last (or a named) apply snapshot |
@@ -63,7 +63,7 @@ Details: [Sessions](sessions.md).
 | Command | Purpose |
 |---|---|
 | `ego run <claude\|codex\|opencode\|agy> [--clear-tokens N] [--yolo\|--no-yolo] [-- <cli args>]` | Start a CLI that ego checkpoints, clears and resumes at the context threshold |
-| `ego session checkpoint --task-id <id> --goal <text> [notes] [--status <s>] [--host <cli>]` | Save a checkpoint. Notes: `--completed`, `--next`, `--decision`, `--blocker`, `--evidence` |
+| `ego session checkpoint --task-id <id> --goal <text> [notes] [--status <s>] [--kind <k>] [--host <cli>]` | Save a checkpoint. Notes: `--completed`, `--next`, `--decision`, `--blocker`, `--evidence` |
 | `ego session list [--all]` / `status <task_id>` | List or show checkpoints |
 | `ego session resume [task_id] [--host <cli>] [--from <cli>]` | Clear instructions and resume prompt; `--from` continues another CLI's checkpoint without clearing |
 | `ego session handoff [task_id] --to <cli> [--from <cli>] [--launch]` | Start command for continuing in another CLI |

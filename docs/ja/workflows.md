@@ -52,11 +52,12 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 
 ### run の動作
 
-1. プロジェクトを `.ego/state/runs/<run_id>/` 配下のステージング用ディレクトリにコピーします（`--worktree` または `isolation = "worktree"` の場合は Git worktree）。
-2. 依存関係の順にノードを実行します。独立したノードは最大 `max_parallel` 件まで同時に実行します。
+1. プロジェクトを `.ego/state/runs/<run_id>/` 配下のステージング用ディレクトリにコピーします。`--worktree` または `isolation = "worktree"` の場合、ステージング用ディレクトリは Git worktree になり、agent ノードはそれぞれ run の HEAD から切った branch の worktree で作業します。
+2. 依存するノードがすべて成功した時点で、そのノードを開始します。同時実行は最大 `max_parallel` 件です。空いた枠は実行中のどれかが終わるとすぐ埋められるため、ノードが wave の残りを待つことはありません。
 3. agent ノードごとに、CLI をノードのプロンプトで実行し、変更された全ファイルが `write_allowlist` に一致するか確認し、ノードの `checks` を実行します。失敗したら、チェックの出力をフィードバックとして修正し、`max_attempts` まで繰り返します。ノードが失敗しても止まるのはその下流だけで、独立したノードは最後まで実行します。
-4. ノードが終わるたびに（並列 wave の中でも）、ステージング済みファイル、`record.json`、run ID の下のチェックポイントを保存します。失敗した兄弟ノードがあっても、または process が落ちても、成功したノードは保存されたまま残ります。
-5. `--apply --approve` を指定すると、run の開始後にプロジェクト側の対象ファイルが変更されていないことを確認したうえで、変更ファイルをプロジェクトにコピーします（変更されていれば `STALE_BASE`）。
+4. 成功したノードは、終わるたびにステージングへマージされます。worktree 隔離の場合はそのノードのコミットを 3-way マージします。隔離しない場合はノードのファイルを直接書き込み、このノードの開始後に別のノードが変更したファイルは競合になります。競合が起きると run は `MERGE_CONFLICT` で終了します。
+5. ノードが終わるたびに、ほかのノードが実行中でも、ステージング済みファイル、`record.json`、run ID の下のチェックポイントを保存します。失敗した兄弟ノードがあっても、または process が落ちても、成功したノードは保存されたまま残ります。
+6. `--apply --approve` を指定すると、run の開始後にプロジェクト側の対象ファイルが変更されていないことを確認したうえで、変更ファイルをプロジェクトにコピーします（変更されていれば `STALE_BASE`）。
 
 ### `ego work run` / `ego work resume` のフラグ
 
@@ -92,7 +93,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 
 ### チェックポイント・中断・ロック
 
-各ノードは終わった瞬間に保存されます（並列 wave では `as_completed` で処理）。wave の終わりまで待ちません。ステージング済みファイル、`record.json`、run ID の下のチェックポイント（`ego session list` に表示されます）がその時点で書かれるため、process が落ちた run でも、それまでに成功したノードは残ります。
+各ノードは終わった瞬間に保存されます。同じ batch の他のノードが終わるまで待つことはありません。ステージング済みファイル、`record.json`、run ID の下のチェックポイント（`ego session list` に表示されます）がその時点で書かれるため、process が落ちた run でも、それまでに成功したノードは残ります。
 
 - **中断された run。** まだ `RUNNING` と記録されているのに、ロックが解放されている run は、process が途中で失われたものです。`ego work status <run_id>` は `final_status: INTERRUPTED` と、`next_action` に `ego work resume` のコマンドを返します。`ego work watch` は `run_stopped` イベントで終了します。再開するには `ego work resume <run_id> --task <file> --host <host> --trust-cli` を実行します。PASSED のノードは再実行されず、実行中だったノードは再実行されます。
 - **run ロック。** 管理実行を動かしている process は、`.ego/locks/<run_id>.lock` に排他的な非ブロッキングロックを保持します。同じ run を二重に開始・再開すると `RUN_ACTIVE` で失敗し、run には触れません。`ego session resume --from`、`ego session handoff`、コンテキストのクリア案内は、ロックが保持されている管理実行のチェックポイントを拒否します。タスク ID を指定しない場合は、そのチェックポイントを読み飛ばします。
@@ -166,7 +167,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `role` | agent | `coder` / `tester` / `judge`（権限を強制）。`tester` は `tests/` 配下のみ書き込める（`write_allowlist` は `tests/` で始まる必要がある）。`judge` は読み取り専用で `write_allowlist` を持たない |
 | `inputs`、`outputs` | agent | I/O 契約。読むべき既存ファイル（最大 6 件）と、変更するファイルまたは `path::関数名`。各 output は `write_allowlist` に一致する必要がある。依存先ノードには前段の `outputs` が渡る |
 | `reviews`、`max_retries` | judge | `reviews`（必須）は却下時に差し戻す `coder` ノード。`max_retries` は 0〜2（既定 1） |
-| `intent`、`done_when`、`non_goals`、`assumptions`、`provides` | agent | そのステージの理由、受け入れ基準、やらないこと、依拠する事実、後続が必要とするもの。短い文字列（`intent`）か、各 400 文字以内の文字列を最大 6 件含むリスト |
+| `intent`、`done_when`、`non_goals`、`assumptions`、`provides` | agent | そのステージの理由、受け入れ基準、やらないこと、依拠する事実、後続が必要とするもの。短い文字列（`intent`）か、各 400 文字以内の文字列を最大 6 件含むリスト。上限は既定値で、[設定](configuration.md) の `plan_schema` で上書きできます |
 | `requirement`、`steps` | agent | 5W1H（`who` `what` `when` `where` `why` `how`、各 400 文字以内）と、ワーカーが書かれたとおりに実行する 1〜10 件の手順 |
 | `host` / `hosts`、`strategy`、`model` / `models`、`fallback_on` | agent | ルーティング。下記参照 |
 | `agent` | agent | 任意のカスタムエージェント名（`.claude/agents/*.md`、`.agents/agents/*.md`、`.opencode/agents/*.md`、`.codex/agents/*.toml` から検出）。定義内容がノードのプロンプトに埋め込まれる |

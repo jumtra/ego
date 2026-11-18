@@ -32,6 +32,7 @@ ego session checkpoint --task-id bug-142 \
 | `--task-id`、`--goal` | 必須 |
 | `--completed`、`--next`、`--decision`、`--blocker`、`--evidence` | 繰り返し指定可能なメモ |
 | `--status` | `IN_PROGRESS`（既定）、`VERIFIED`、`COMPLETED`、`BLOCKED` |
+| `--kind` | チェックポイントの種類: `ongoing`（作業中）、`plan_ready`（計画完了）、`plan_resume`（計画を一時停止）、`completed`（完了）。既定: `--status COMPLETED` なら `completed`、それ以外は直前の未完了チェックポイントの種類、なければ `ongoing` |
 | `--host` | 保存する CLI。既定では環境から検出 |
 
 - `.ego/memory/handoffs/<task-id>.json` に保存されます。タスクごとに最新のリビジョンだけを保持し、会話の全文や生のログは保存しません。長すぎる入力は切り詰められます。

@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import time
 from typing import Any
-from ..shared.util import EgoError, alter_project_root, ident, now, read_json, write_json, exclusive_lock, redact, sha256
+from ..shared.util import EgoError, RUN_SESSION_ENV, alter_project_root, ident, now, read_json, write_json, exclusive_lock, redact, sha256
 
 class FileMemory:
     def __init__(self, root: Path):
@@ -680,7 +680,6 @@ def submit_alter_session_review(
 
 def _checkpoint_session_id(root: Path, checkpoint: dict[str, Any], task_id: str) -> str:
     """The Alter session a checkpoint's digest belongs to, so one ego run's digests land in one session."""
-    from ..usecases.session import RUN_SESSION_ENV
     if str(checkpoint.get("session_id") or "").strip():
         return str(checkpoint["session_id"]).strip()
     run = str(checkpoint.get("run") or "").strip()

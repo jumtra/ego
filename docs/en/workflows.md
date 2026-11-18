@@ -52,11 +52,12 @@ Or run and apply in one step with `ego work run ... --apply --approve`.
 
 ### What a run does
 
-1. Copies the project to a staging directory under `.ego/state/runs/<run_id>/` (or a Git worktree with `--worktree` / `isolation = "worktree"`).
-2. Runs nodes in dependency order, up to `max_parallel` independent nodes at once.
+1. Copies the project to a staging directory under `.ego/state/runs/<run_id>/`. With `--worktree` / `isolation = "worktree"` the staging directory is a Git worktree, and each agent node works in its own worktree on a branch from the run's HEAD.
+2. Starts every node whose dependencies have passed, up to `max_parallel` at once. A free slot is refilled as soon as any node finishes, so a node does not wait for the rest of its wave.
 3. For each agent node: runs the CLI with the node prompt, checks every changed file against `write_allowlist`, runs the node's `checks`. On failure the node is repaired with the check output as feedback, up to `max_attempts`. A failed node stops only its dependents; independent nodes still finish.
-4. Saves the staging files, `record.json` and a checkpoint under the run ID as each node finishes, also inside a parallel wave. A node that passed stays saved even if a sibling fails or the process dies.
-5. With `--apply --approve`, copies the changed files to the project, after confirming none of them changed since the run started (`STALE_BASE` otherwise).
+4. Merges each passed node into the staging tree as it completes. With worktree isolation, the node's commit is 3-way merged; without it, the node's files are written directly, and a file that another node changed after this node started is a conflict. A conflict ends the run with `MERGE_CONFLICT`.
+5. Saves the staging files, `record.json` and a checkpoint under the run ID as each node finishes, even while other nodes are still running. A node that passed stays saved even if a sibling fails or the process dies.
+6. With `--apply --approve`, copies the changed files to the project, after confirming none of them changed since the run started (`STALE_BASE` otherwise).
 
 ### Flags of `ego work run` / `ego work resume`
 
@@ -92,7 +93,7 @@ Output is a compact JSON summary: `run_id`, `final_status`, `applied`, per-node 
 
 ### Checkpoints, interruption and locks
 
-Each node is persisted the moment it finishes (`as_completed` in a parallel wave), not at the end of its wave. Its staged files, `record.json` and the checkpoint under the run ID (`ego session list` shows it) are written then, so a run whose process dies keeps every node that had already passed.
+Each node is persisted the moment it finishes, not when the other nodes of its batch are done. Its staged files, `record.json` and the checkpoint under the run ID (`ego session list` shows it) are written then, so a run whose process dies keeps every node that had already passed.
 
 - **Interrupted runs.** A run still marked `RUNNING` whose lock is free has lost its process. `ego work status <run_id>` reports `final_status: INTERRUPTED` with the `ego work resume` command as `next_action`, and `ego work watch` ends with a `run_stopped` event. Resume it with `ego work resume <run_id> --task <file> --host <host> --trust-cli`: nodes that PASSED are not run again, and nodes that were running run again.
 - **Run lock.** A process running a managed run holds an exclusive, non-blocking lock on `.ego/locks/<run_id>.lock`. A second start or resume of the same run fails with `RUN_ACTIVE` and leaves the run untouched. `ego session resume --from`, `ego session handoff` and the context-clear instructions refuse a managed checkpoint whose lock is held, and without a task ID they skip it.
@@ -166,7 +167,7 @@ Node fields:
 | `role` | agent | `coder`, `tester` or `judge`, enforced. A `tester` may only write under `tests/` (its `write_allowlist` must start with `tests/`). A `judge` is read-only and has no `write_allowlist` |
 | `inputs`, `outputs` | agent | The I/O contract: existing files to read (up to 6) and the files or `path::function` to change. Each output must match `write_allowlist`. Dependent nodes see the prior node's `outputs` |
 | `reviews`, `max_retries` | judge | `reviews` (required) is the `coder` node to send back on a rejection; `max_retries` is 0-2 (default 1) |
-| `intent`, `done_when`, `non_goals`, `assumptions`, `provides` | agent | Why the stage exists, acceptance criteria, what not to do, facts relied on, what later stages depend on. Short strings (`intent`) or lists of up to 6 strings of up to 400 characters |
+| `intent`, `done_when`, `non_goals`, `assumptions`, `provides` | agent | Why the stage exists, acceptance criteria, what not to do, facts relied on, what later stages depend on. Short strings (`intent`) or lists of up to 6 strings of up to 400 characters. The limits are defaults; `plan_schema` in [Configuration](configuration.md) overrides them |
 | `requirement`, `steps` | agent | 5W1H (`who` `what` `when` `where` `why` `how`, strings up to 400 characters) and 1-10 ordered steps the worker follows exactly as written |
 | `host` / `hosts`, `strategy`, `model` / `models`, `fallback_on` | agent | Routing, see below |
 | `agent` | agent | Optional custom agent name (from `.claude/agents/*.md`, `.agents/agents/*.md`, `.opencode/agents/*.md`, or `.codex/agents/*.toml`); its definition is embedded into the node prompt |

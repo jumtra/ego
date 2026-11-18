@@ -32,6 +32,7 @@ ego session checkpoint --task-id bug-142 \
 | `--task-id`, `--goal` | Required |
 | `--completed`, `--next`, `--decision`, `--blocker`, `--evidence` | Repeatable notes |
 | `--status` | `IN_PROGRESS` (default), `VERIFIED`, `COMPLETED`, `BLOCKED` |
+| `--kind` | Checkpoint profile: `ongoing` (work in progress), `plan_ready` (plan finished), `plan_resume` (planning paused), `completed`. Default: `completed` for status `COMPLETED`, otherwise the kind of the previous open checkpoint, else `ongoing` |
 | `--host` | CLI that saves it. Detected from the environment by default |
 
 - Stored at `.ego/memory/handoffs/<task-id>.json`. Only the latest revision per task is kept; no transcript or raw log is stored. Over-long input is truncated.
