@@ -1477,3 +1477,119 @@ def test_parallel_conflict_is_not_applied(project):
                    {"id":"b","kind":"code","argv":["python3","write2.py"],"write_allowlist":["shared.txt"]}]}
     with pytest.raises(EgoError):execute(project,spec,host="mock",apply=True,approve=True)
     assert not (project/"shared.txt").exists()
+
+
+def test_build_task_prompt_inlines_rules_alter_rules_and_project_root(tmp_path: Path):
+    # Arrange
+    project_root = tmp_path / "repo"
+    worker_dir = tmp_path / "worker"
+    (worker_dir / ".agents/rules").mkdir(parents=True)
+    (worker_dir / ".claude/rules").mkdir(parents=True)
+    (worker_dir / ".agents/rules/shared.md").write_text("# Shared\nUse DRY.")
+    (worker_dir / ".claude/rules/shared.md").write_text("# Shared\nUse DRY.")
+    (worker_dir / ".claude/rules/claude_only.md").write_text("# Claude\nCheck diff.")
+    spec = {"goal": "Fix parser", "knowledge": "alter"}
+    node_spec = {"id": "n1", "prompt": "Update parse()"}
+
+    # Act
+    prompt = build_task_prompt(
+        spec,
+        node_spec,
+        worker_dir,
+        project_root=project_root,
+        alter_rules=["Always respond in Japanese"],
+        alter_context="alter: 過去ナレッジ:\n- Parser note: Keep backward compat [n:1]",
+    )
+
+    # Assert
+    assert "## Project rules" in prompt
+    assert prompt.count("Use DRY.") == 1
+    assert "### .claude/rules/claude_only.md\n# Claude\nCheck diff." in prompt
+    assert "## Project AI usage rules (alter)\n- Always respond in Japanese" in prompt
+    assert f'cwd="{project_root.resolve()}"' in prompt
+    assert "Parser note: Keep backward compat" in prompt
+
+
+def test_managed_execute_passes_alter_context_and_disables_duplicate_worker_hooks(tmp_path: Path, monkeypatch):
+    # Arrange
+    from ego.usecases import session
+    save_config(tmp_path, Config(knowledge="alter", clear_suggest_tokens=0))
+    (tmp_path / ".agents/rules").mkdir(parents=True)
+    (tmp_path / ".agents/rules/engineering.md").write_text("Prefer existing patterns.")
+    seen: list[dict] = []
+
+    monkeypatch.setattr(session, "alter_project_rules", lambda root: ["Respond in Japanese"])
+    monkeypatch.setattr(
+        session,
+        "alter_prompt_context",
+        lambda root, query: f"context for: {query}" if "Implement cache" in query else "",
+    )
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        seen.append({"host": host, "prompt": prompt, "env": kw.get("env") or {}})
+        return RunResult("PASS", "ok", "", 0, 0.0, host)
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    spec = {
+        "goal": "Add cache",
+        "nodes": [
+            {
+                "id": "impl",
+                "kind": "agent",
+                "host": "claude",
+                "intent": "Speed up lookups",
+                "prompt": "Implement cache",
+                "write_allowlist": ["src/**"],
+            }
+        ],
+    }
+
+    # Act
+    res = work.execute(tmp_path, spec, host="claude", trust_cli=True)
+
+    # Assert
+    assert res["final_status"] == "PASSED"
+    assert len(seen) == 1
+    prompt = seen[0]["prompt"]
+    assert "Prefer existing patterns." in prompt
+    assert "- Respond in Japanese" in prompt
+    assert "context for: Speed up lookups Implement cache" in prompt
+    assert f'cwd="{tmp_path.resolve()}"' in prompt
+    env = seen[0]["env"]
+    assert env["EGO_ALTER_PROJECT_ROOT"] == str(tmp_path.resolve())
+    assert env["EGO_ALTER_SESSION_RULES"] == "0"
+    assert env["EGO_ALTER_PROMPT_CONTEXT"] == "0"
+
+
+def test_select_mcp_servers_and_build_command_resolve_project_root_from_isolated_cwd(tmp_path: Path, monkeypatch):
+    # Arrange
+    _fake_claude(monkeypatch, tmp_path, "--output-format --max-turns --permission-mode --strict-mcp-config --mcp-config auto")
+    home = tmp_path / "home"
+    home.mkdir()
+    project_root = tmp_path / "main-repo"
+    project_root.mkdir()
+    isolated_cwd = tmp_path / "ego-node-tmp"
+    isolated_cwd.mkdir()
+    (home / ".claude.json").write_text(json.dumps({
+        "projects": {
+            str(project_root.resolve()): {
+                "mcpServers": {
+                    "alter": {"type": "stdio", "command": "node", "args": ["project-alter.js"]},
+                }
+            }
+        }
+    }))
+    monkeypatch.setenv("HOME", str(home))
+
+    # Act
+    selected = hosts.select_mcp_servers(isolated_cwd, ["alter"], host="claude", project_root=project_root)
+    argv = hosts.build_command(
+        "claude", "p", read_only=False, lean=True, mcp_servers=["alter"],
+        cwd=isolated_cwd, project_root=project_root, use_stdin=True,
+    )
+
+    # Assert
+    assert selected == {"alter": {"type": "stdio", "command": "node", "args": ["project-alter.js"]}}
+    assert "--mcp-config" in argv
+    loaded = json.loads(argv[argv.index("--mcp-config") + 1])
+    assert loaded["mcpServers"]["alter"]["args"] == ["project-alter.js"]

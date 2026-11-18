@@ -143,7 +143,8 @@ def _effective_status(root:Path, record:dict)->str:
 
 def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
               autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
-              budget_usd: float|None=None, progress:Progress|None=None, project_root:Path)->dict:
+              budget_usd: float|None=None, progress:Progress|None=None, project_root:Path,
+              alter_rules:list[str]|None=None)->dict:
     """A task node sees a private copy; fallback never reuses failed edits.
 
     Compare runs have their own isolated copies and never merge any candidate.
@@ -174,7 +175,13 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             else:
                 if chosen_host!="mock" and not trust_cli:
                     raise EgoError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
-                prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff)
+                alter_ctx = ""
+                if chosen_host != "mock" and cfg.knowledge == "alter":
+                    from .session import alter_prompt_context
+                    node_query = " ".join(x for x in (str(node.get("intent") or "").strip(), str(node.get("prompt") or "").strip()) if x)
+                    alter_ctx = alter_prompt_context(project_root, node_query)
+                prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff,
+                                         project_root=project_root,alter_rules=alter_rules,alter_context=alter_ctx)
                 mcp_servers=list(node.get("mcp") or [])
                 if cfg.knowledge=="alter" and "alter" not in mcp_servers:
                     mcp_servers.append("alter")
@@ -447,6 +454,15 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         start=time.monotonic()
         amap={n["id"]:n for n in nodes}
         feedbacks:dict[str,str]={}
+        alter_rules: list[str] = []
+        has_real_agent = any(
+            r.host != "mock"
+            for n in nodes if n.get("kind", "agent") not in ("gate", "code")
+            for r in resolve_routes(n, spec, host, default_models=cfg.models, default_roles=cfg.roles)[1]
+        )
+        if cfg.knowledge == "alter" and has_real_agent:
+            from .session import alter_project_rules
+            alter_rules = alter_project_rules(root)
         if resume:
             # A failed node reruns with the evidence of its last failure instead of repeating the same attempt blind.
             for nid,data in record["results"].items():
@@ -487,7 +503,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             # Prompt-only knowledge hint; record['spec'] stays the user's spec so resume comparisons are unchanged.
             prompt_spec=({**spec,'knowledge':cfg.knowledge} if 'knowledge' not in spec else spec)
             with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-                futures={pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress,project_root=root):n["id"] for n in wave}
+                futures={pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress,project_root=root,alter_rules=alter_rules):n["id"] for n in wave}
                 # Each node is persisted as soon as it finishes: a crash or cancel loses only the unfinished nodes.
                 for fut in as_completed(futures):
                     result=fut.result()
