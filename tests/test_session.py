@@ -51,7 +51,7 @@ def test_checkpoint_is_compact_redacted_atomic_and_revisioned(tmp_path: Path):
     y=save_checkpoint(root,'ticket-1',goal=f'Fix {tok_input}', completed=['tests passed'],
                       next_steps=['Report result'], status='VERIFIED')
     assert y['revision']==2
-    assert y['completed']==['tests passed']
+    assert y['completed']==['src/app.ts checked', 'tests passed']
     assert x['path']==y['path']
     assert len(list((root/'.ego/memory/handoffs').glob('*.json')))==1
     assert load_checkpoint(root,'ticket-1')['revision']==2
@@ -91,10 +91,36 @@ def test_path_guard_and_note_limits(tmp_path: Path):
     for tid in ('../oops','a/b','', 'a'*81):
         with pytest.raises(EgoError):
             save_checkpoint(tmp_path,tid,goal='X')
+    saved = save_checkpoint(tmp_path,'a',goal='X',evidence=[f'x{i}' for i in range(10)])
+    assert saved['evidence']==[f'x{i}' for i in range(2,10)]
     with pytest.raises(EgoError):
-        save_checkpoint(tmp_path,'a',goal='X',evidence=['x']*9)
+        save_checkpoint(tmp_path,'a',goal='X',evidence=[123])
     with pytest.raises(EgoError):
         save_checkpoint(tmp_path,'a',goal='X',status='PASSED')
+
+
+def test_resaving_an_open_task_merges_history_and_keeps_only_the_newest_eight(tmp_path: Path):
+    save_checkpoint(tmp_path,'feat',goal='g',completed=['a'],decisions=['use X'],evidence=['pytest A'])
+    y=save_checkpoint(tmp_path,'feat',goal='g',completed=['a','b'],decisions=['use Y'],evidence=['pytest B'])
+    assert y['completed']==['a','b'] and y['decisions']==['use X','use Y'] and y['evidence']==['pytest A','pytest B']
+    z=save_checkpoint(tmp_path,'feat',goal='g',completed=[f'c{i}' for i in range(10)])
+    assert z['completed']==[f'c{i}' for i in range(2,10)]
+
+
+def test_omitted_next_steps_and_blockers_are_inherited_only_for_their_statuses(tmp_path: Path):
+    save_checkpoint(tmp_path,'feat',goal='g',next_steps=['step 1'],blockers=['waiting on API'],status='BLOCKED')
+    kept=save_checkpoint(tmp_path,'feat',goal='g',status='BLOCKED')
+    assert kept['next_steps']==['step 1'] and kept['blockers']==['waiting on API']
+    resumed=save_checkpoint(tmp_path,'feat',goal='g',status='IN_PROGRESS')
+    assert resumed['next_steps']==['step 1'] and resumed['blockers']==[]
+
+
+def test_a_checkpoint_already_resumed_after_clear_is_not_offered_again(tmp_path: Path):
+    save_checkpoint(tmp_path,'bug',goal='g',next_steps=['review diff'],status='VERIFIED')
+    assert 'systemMessage' in clear_advice(tmp_path,_stop(tmp_path,150000),120000)  # marks it as awaiting /clear
+    clear_resume(tmp_path,{'source':'clear'})                                      # resumed: revision 1 is consumed
+    blocked=clear_advice(tmp_path,_stop(tmp_path,150000,session='s2'),120000)
+    assert blocked['decision']=='block'                                             # asks for a new checkpoint instead
 
 
 def test_handoff_is_bounded_and_data_not_authoritative(tmp_path: Path):
@@ -1334,6 +1360,52 @@ def test_a_run_waits_only_for_its_own_checkpoint(tmp_path: Path):
     save_checkpoint(tmp_path, "task-a", goal="a", run="mine")
     typed = b"".join(keys for _, keys in rot.step(Reading("s1", 120000, True), True, asked + 30))
     assert b"Resume task task-a" in typed and b"task-b" not in typed
+
+
+def test_the_resume_prompt_waits_for_a_quiet_new_session_or_the_clear_timeout(tmp_path: Path):
+    rot = Rotator(tmp_path, "claude", 100000)
+    rot.cleared = "s1"
+    assert not rot.ready_to_resume(Reading("s1", 3000, True), True, 1.0, 0.0, has_session_file=True)  # old session, too early
+    assert rot.ready_to_resume(Reading("s1", 3000, True), True, ptyrun.CLEAR_TIMEOUT, 0.0, has_session_file=True)
+    assert not rot.ready_to_resume(Reading("s2", 3000, False), True, 1.0, 0.0, has_session_file=True)  # new session still working
+    assert rot.ready_to_resume(Reading("s2", 3000, True), True, 1.0, 0.0, has_session_file=True)
+    assert not rot.ready_to_resume(Reading("s2", 3000, True), False, 1.0, 0.0, has_session_file=True)  # the user is typing
+
+
+def test_run_types_the_resume_prompt_after_the_clear_timeout_when_the_session_key_never_changes(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(ptyrun, "AFTER_CLEAR", 0.1)
+    monkeypatch.setattr(ptyrun, "CLEAR_TIMEOUT", 0.5)
+    log = tmp_path / "typed.log"
+    script = tmp_path / "host.py"
+    script.write_text(HOST)
+    read_end, write_end = os.pipe()
+    sink = os.open(os.devnull, os.O_WRONLY)
+    deadline = time.time() + 30
+    seen: dict[str, float] = {}
+
+    def probe(host, root, since, state, session=None):
+        typed = log.read_bytes() if log.exists() else b""
+        if b"/clear\r" in typed:
+            seen.setdefault("clear", time.time())
+        if b"Resume task feat" in typed:
+            seen.setdefault("resume", time.time())
+            if typed.endswith(b"\r") or time.time() > deadline:
+                os.write(write_end, b"Q")
+        elif time.time() > deadline:
+            os.write(write_end, b"Q")
+        if b"ego session checkpoint" in typed and not (tmp_path / ".ego/memory/handoffs/feat.json").exists():
+            save_checkpoint(tmp_path, "feat", goal="ship it", next_steps=["run tests"])
+        return Reading("s1", 50000, True)  # the cleared host never reports a new session
+
+    try:
+        code, rotations = run("claude", [sys.executable, str(script), str(log)], tmp_path, 40000, stdin_fd=read_end,
+                              stdout_fd=sink, probe=probe, poll=0.05, quiet_output=0.05, quiet_keys=0,
+                              session=tmp_path / "session.json")
+    finally:
+        for fd in (read_end, write_end, sink):
+            os.close(fd)
+    assert (code, rotations) == (0, 1)
+    assert seen["resume"] - seen["clear"] >= ptyrun.CLEAR_TIMEOUT - 0.2  # waited instead of typing right after /clear
 
 
 HOST = r"""

@@ -73,40 +73,44 @@ def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callab
     used = rotations = 0
     session: str | None = None
     text = prompt
+    consumed: dict[str, int] = {}
 
     def spent() -> float:
         return sum(r.cost_usd or 0.0 for r in results)
 
-    while True:
-        left = deadline - time.monotonic()
-        if left <= 0 and results:
-            return _merge(results, status="TIMEOUT", rotations=rotations)
-        remaining = None
-        if max_budget_usd is not None:
-            remaining = max_budget_usd - spent()
-            if remaining <= 0 and results:
-                return _merge(results, status="FAIL", reason="BUDGET_EXHAUSTED", rotations=rotations)
-        turns = max(1, min(segment_turns, max_turns - used))
-        r = agent(host, text, cwd, max(1, int(left)), max_turns=turns, read_only=False, resume_session=session,
-                  env=env, max_budget_usd=remaining, **kw)
-        results.append(r)
-        used += int((r.usage or {}).get("turns") or turns)
-        if r.status != "PASS" or r.stop_reason != "error_max_turns":
-            return _merge(results, rotations=rotations)
-        if used >= max_turns:
-            return _merge(results, status="FAIL", reason="MAX_TURNS", rotations=rotations)
-        tokens = worker_context_tokens(cwd, r.session_id)
-        if tokens is None or tokens < threshold:
-            emit(segment=len(results), tokens=tokens, action="continue")
-            session, text = r.session_id, CONTINUE_PROMPT
-            continue
-        saved = agent(host, _save_request(tokens, threshold), cwd, max(1, int(deadline - time.monotonic())), max_turns=3,
-                      read_only=False, resume_session=r.session_id, env=env, max_budget_usd=remaining, **kw)
-        results.append(saved)
-        checkpoint = latest_open_checkpoint(cwd, run=tag)
-        if checkpoint is None:
-            return _merge(results, status="FAIL", reason="NO_CHECKPOINT", rotations=rotations)
+    try:
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0 and results:
+                return _merge(results, status="TIMEOUT", rotations=rotations)
+            remaining = None
+            if max_budget_usd is not None:
+                remaining = max_budget_usd - spent()
+                if remaining <= 0 and results:
+                    return _merge(results, status="FAIL", reason="BUDGET_EXHAUSTED", rotations=rotations)
+            turns = max(1, min(segment_turns, max_turns - used))
+            r = agent(host, text, cwd, max(1, int(left)), max_turns=turns, read_only=False, resume_session=session,
+                      env=env, max_budget_usd=remaining, **kw)
+            results.append(r)
+            used += int((r.usage or {}).get("turns") or turns)
+            if r.status != "PASS" or r.stop_reason != "error_max_turns":
+                return _merge(results, rotations=rotations)
+            if used >= max_turns:
+                return _merge(results, status="FAIL", reason="MAX_TURNS", rotations=rotations)
+            tokens = worker_context_tokens(cwd, r.session_id)
+            if tokens is None or tokens < threshold:
+                emit(segment=len(results), tokens=tokens, action="continue")
+                session, text = r.session_id, CONTINUE_PROMPT
+                continue
+            saved = agent(host, _save_request(tokens, threshold), cwd, max(1, int(deadline - time.monotonic())), max_turns=3,
+                          read_only=False, resume_session=r.session_id, env=env, max_budget_usd=remaining, **kw)
+            results.append(saved)
+            checkpoint = latest_open_checkpoint(cwd, run=tag, consumed=consumed)
+            if checkpoint is None:
+                return _merge(results, status="FAIL", reason="NO_CHECKPOINT", rotations=rotations)
+            consumed[checkpoint["task_id"]] = int(checkpoint.get("revision", 1))
+            emit(segment=len(results), tokens=tokens, action="rotate")
+            session, text = None, prompt + "\n\n" + resume_prompt(checkpoint)
+            rotations += 1
+    finally:
         _drop_handoffs(cwd, tag)
-        emit(segment=len(results), tokens=tokens, action="rotate")
-        session, text = None, prompt + "\n\n" + resume_prompt(checkpoint)
-        rotations += 1

@@ -102,7 +102,7 @@ When `knowledge = "alter"`: do not ask for inline approval. Write the plan as th
 
 Do not edit project files yourself. The engine runs each node in an isolated copy and enforces roles, `write_allowlist` and the judge gate. Your job is to start the run, relay events and report.
 
-1. Write the approved plan as the task JSON in `.ego/state/tasks/<slug>.json`; do not plan it again with `ego work plan`. One node per graph node: `depends_on` from When, `write_allowlist` from Where, 5W1H into `requirement`, How into `steps`, Why into `intent`, Done when into `done_when` (commands as argv arrays in `checks`), Non-goals, Assumptions and Provides into `non_goals`, `assumptions` and `provides`. Intake answers go into task-level `instructions`. Then save an interactive checkpoint: `ego session checkpoint --task-id <slug> --goal "<goal>" --completed "plan approved" --next "run-<slug>" --status IN_PROGRESS --root .`.
+1. Write the approved plan as the task JSON in `.ego/state/tasks/<slug>.json`; do not plan it again with `ego work plan`. One node per graph node: `depends_on` from When, `write_allowlist` from Where, 5W1H into `requirement`, How into `steps`, Why into `intent`, Done when into `done_when` (commands as argv arrays in `checks`), Non-goals, Assumptions and Provides into `non_goals`, `assumptions` and `provides`. Intake answers go into task-level `instructions`. Then save an interactive checkpoint: `ego session checkpoint --task-id <slug> --goal "<goal>" --completed "plan approved" --next "run-<slug>" --decision "<decision or none>" --blocker "<blocker or none>" --status IN_PROGRESS --root .`.
 
    alter flow: Run `ego work alter-plan pull <plan_id> --root . --out .ego/state/tasks/<slug>.json --run-id run-<slug>` (add a numeric suffix to the run id on every repeat). It validates and claims the plan (ALTER_PLAN_NOT_READY means the button was not pressed). If it prints `from_run`, start step 2 with `--from <from_run>` so verified nodes are not run again. The run reports node results to alter by itself; after INTERRUPTED or when `alter_sync.json` shows pending, run `ego work alter-plan sync <run_id> --root . --task <file>`. After a FAILED run tell the user to fix the failed nodes in alter and press the re-run button, then wait and pull again; never edit the plan yourself in this flow.
 2. Start the run: `ego work run --root . --task <task-file> --host <host> --trust-cli --run-id run-<slug>`. In Claude Code use Bash `run_in_background`, elsewhere the foreground (`managed.md` has the flags). Each node is saved as it finishes, also inside a parallel wave, so a crash loses only the nodes still running.
@@ -167,7 +167,7 @@ Read `status` in the compact output:
 
 Write a compact factual handoff:
 
-`ego session checkpoint --task-id <id> --goal "..." --completed "verified result" --next "next action" --evidence "file/test reference" --status <status> --root .`
+`ego session checkpoint --task-id <id> --goal "..." --completed "verified result" --next "next action" --evidence "file/test reference" --decision "decision made" --blocker "blocker or none" --status <status> --root .`
 
 Status is IN_PROGRESS while work remains, BLOCKED on a blocker, VERIFIED for verified but unapplied work, COMPLETED only after successful validation and application. Include decisions, known failures and uncommitted changes, not raw transcripts or secrets. Confirm that the checkpoint succeeded.
 

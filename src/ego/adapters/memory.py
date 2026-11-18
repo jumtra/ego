@@ -678,6 +678,27 @@ def submit_alter_session_review(
         return {"status": "error", "reason": str(exc), "session_id": sid}
 
 
+def _checkpoint_session_id(root: Path, checkpoint: dict[str, Any], task_id: str) -> str:
+    """The Alter session a checkpoint's digest belongs to, so one ego run's digests land in one session."""
+    from ..usecases.session import RUN_SESSION_ENV
+    if str(checkpoint.get("session_id") or "").strip():
+        return str(checkpoint["session_id"]).strip()
+    run = str(checkpoint.get("run") or "").strip()
+    if run:
+        return alter_run_session_id(run)
+    bound = read_json(Path(os.environ[RUN_SESSION_ENV]), {}) if os.environ.get(RUN_SESSION_ENV) else {}
+    host_sid = bound.get("session_id") if isinstance(bound, dict) else None
+    for name in ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID"):
+        host_sid = host_sid or os.environ.get(name)
+    if host_sid:
+        return str(host_sid).strip()
+    state = read_json(_alter_session_state_path(root), {})
+    sessions = state.get("sessions") if isinstance(state, dict) and isinstance(state.get("sessions"), dict) else {}
+    latest = max((k for k, v in sessions.items() if isinstance(v, dict)),
+                 key=lambda k: str(sessions[k].get("updated_at", "")), default=None)
+    return latest or (f"checkpoint-{task_id}" if task_id else "")
+
+
 def submit_alter_checkpoint_review(
     root: Path,
     checkpoint: dict[str, Any],
@@ -691,7 +712,7 @@ def submit_alter_checkpoint_review(
         return {"status": "skipped", "reason": "invalid checkpoint"}
     try:
         task_id = str(checkpoint.get("task_id") or "").strip()
-        sid = str(checkpoint.get("session_id") or (f"checkpoint-{task_id}" if task_id else "")).strip()
+        sid = _checkpoint_session_id(root, checkpoint, task_id)
         if not sid:
             return {"status": "skipped", "reason": "missing session_id"}
 
@@ -704,19 +725,19 @@ def submit_alter_checkpoint_review(
             text = redact(str(item)).strip()
             if text:
                 add.append({"kind": "decision", "text": text})
-        for item in (checkpoint.get("blockers") or [])[:5]:
+        for item in (checkpoint.get("blockers") or [])[:8]:
             text = redact(str(item)).strip()
             if text:
                 add.append({"kind": "blocker", "text": text})
-        for item in (checkpoint.get("completed") or [])[:5]:
+        for item in (checkpoint.get("completed") or [])[:8]:
             text = redact(str(item)).strip()
             if text:
                 add.append({"kind": "fact", "text": f"Completed: {text}"})
-        for item in (checkpoint.get("evidence") or [])[:5]:
+        for item in (checkpoint.get("evidence") or [])[:8]:
             text = redact(str(item)).strip()
             if text:
                 add.append({"kind": "evidence", "text": text})
-        for item in (checkpoint.get("next_steps") or [])[:5]:
+        for item in (checkpoint.get("next_steps") or [])[:8]:
             text = redact(str(item)).strip()
             if text:
                 add.append({"kind": "next", "text": text})

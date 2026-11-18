@@ -797,6 +797,49 @@ def test_a_missing_checkpoint_fails_instead_of_losing_the_work(tmp_path, monkeyp
     assert r.status == "FAIL" and r.reason == "NO_CHECKPOINT" and len(calls) == 2
 
 
+def test_the_checkpoint_stays_on_disk_until_the_worker_finishes(tmp_path, monkeypatch):
+    handoff = tmp_path / ".ego/memory/handoffs/t1.json"
+
+    def save(cwd, k):
+        save_checkpoint(cwd, "t1", goal="g", next_steps=["finish B"], run=k["env"]["EGO_RUN_ID"])
+        return result(stop="success", sid="s1", turns=1)
+
+    def fresh_session(cwd, k):
+        assert handoff.exists()  # the resumed session is still running: the file is dropped only at the end
+        return result(stop="success", sid="s2")
+
+    r, _, _ = drive(tmp_path, monkeypatch, [result(), save, fresh_session], tokens=5000)
+    assert r.status == "PASS" and r.rotations == 1
+    assert not handoff.exists()
+
+
+def test_a_revision_already_resumed_is_not_offered_again_on_the_next_rotation(tmp_path, monkeypatch):
+    def save(cwd, k):
+        save_checkpoint(cwd, "t1", goal="g", next_steps=["finish B"], run=k["env"]["EGO_RUN_ID"])
+        return result(stop="success", sid="s1", turns=1)
+
+    def save_nothing(cwd, k):
+        return result(stop="success", sid="s2", turns=1)
+
+    r, calls, _ = drive(tmp_path, monkeypatch, [result(), save, result(sid="s2"), save_nothing], tokens=5000)
+    assert r.status == "FAIL" and r.reason == "NO_CHECKPOINT" and r.rotations == 1
+    assert len(calls) == 4
+    assert not list((tmp_path / ".ego/memory/handoffs").glob("*.json"))
+
+
+def test_handoffs_are_dropped_even_when_the_worker_crashes(tmp_path, monkeypatch):
+    def save(cwd, k):
+        save_checkpoint(cwd, "t1", goal="g", run=k["env"]["EGO_RUN_ID"])
+        return result(stop="success", sid="s1", turns=1)
+
+    def crash(cwd, k):
+        raise RuntimeError("host crashed")
+
+    with pytest.raises(RuntimeError):
+        drive(tmp_path, monkeypatch, [result(), save, crash], tokens=5000)
+    assert not list((tmp_path / ".ego/memory/handoffs").glob("*.json"))
+
+
 def test_other_hosts_and_read_only_nodes_run_once(tmp_path, monkeypatch):
     for host, ro in (("codex", False), ("claude", True)):
         r, calls, _ = drive(tmp_path, monkeypatch, [result(stop="error_max_turns")], tokens=5000, host=host, read_only=ro)

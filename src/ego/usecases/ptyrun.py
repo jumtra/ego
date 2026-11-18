@@ -46,6 +46,7 @@ QUIET_OUTPUT = 2.0               # the host has drawn nothing for this long
 QUIET_KEYS = 5.0                 # the user has typed nothing for this long
 SAVE_TIMEOUT = 300.0             # no checkpoint this long after asking: give up until the context grows again
 AFTER_CLEAR = 3.0                # let the host reset before the resume prompt is typed
+CLEAR_TIMEOUT = 10.0             # a host that never shows a new session record is given up on after this long
 BAR_QUIET = 0.5                  # the status row is redrawn only once the host has paused this long (no half-written escapes)
 TAIL_BYTES = 512 * 1024
 # Each CLI's own switch for "approve every tool call without asking"; all it means is that CLI's meaning.
@@ -317,6 +318,7 @@ class Rotator:
         self.cleared: str | None = None  # the session just rotated away from: its record still reads as full
         self.resumed = False             # a rotation was typed and the new session's size is not yet known
         self.rotations = 0
+        self.consumed: dict[str, int] = {}  # task_id -> revision already resumed; older revisions are never offered again
 
     def step(self, reading: Reading | None, calm: bool, at: float) -> Keys:
         if reading is None or reading.key == self.cleared:
@@ -339,7 +341,8 @@ class Rotator:
                 return []
             self.saving_since = at
             return [(0.0, _paste(_save_request(tokens, self.threshold))), (0.4, b"\r")]
-        checkpoint = latest_open_checkpoint(self.root, at - self.saving_since, run=self.run_id)  # saved after we asked
+        checkpoint = latest_open_checkpoint(self.root, at - self.saving_since, run=self.run_id,
+                                            consumed=self.consumed)  # saved after we asked
         if checkpoint is None:
             if at - self.saving_since > SAVE_TIMEOUT:
                 self.saving_since = None
@@ -347,11 +350,23 @@ class Rotator:
             return []
         if not (reading.idle and calm):
             return []
+        self.consumed[checkpoint["task_id"]] = int(checkpoint.get("revision", 1))
         self.saving_since, self.trigger, self.cleared = None, self.threshold, reading.key
         self.resumed = True
         self.rotations += 1
         return [(0.0, HOST_CLEAR[self.host].encode()), (0.5, b"\r"),
                 (AFTER_CLEAR, _paste(resume_prompt(checkpoint))), (0.4, b"\r")]
+
+    def ready_to_resume(self, reading: Reading | None, calm: bool, at: float, clear_sent_at: float,
+                        has_session_file: bool = False) -> bool:
+        """Whether the resume prompt may be typed: the host is quiet and the new session is bound or timed out."""
+        if not calm:
+            return False
+        if reading and reading.key != self.cleared:
+            return bool(reading.idle or reading.tokens is None)
+        if has_session_file:
+            return at - clear_sent_at >= CLEAR_TIMEOUT
+        return True
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -444,7 +459,7 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
             handlers[signum] = signal.signal(signum, _terminated)
         rotator, keys = Rotator(root, host, threshold, run_id), InputState()
         queue: deque[tuple[float, bytes]] = deque()
-        due = last_output = last_poll = 0.0
+        due = last_output = last_poll = clear_sent_at = 0.0
         watched = [master, stdin_fd]
         while True:
             try:
@@ -478,10 +493,7 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
                 else:
                     keys.feed(data, at)
                     _write_all(master, data)
-            if queue:
-                if at >= due:
-                    _write_all(master, queue.popleft()[1])
-                    due = at + queue[0][0] if queue else 0.0
+            if queue and at < due:
                 continue
             if at - last_poll < poll:
                 continue
@@ -494,6 +506,16 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
             if screen and at - last_output >= BAR_QUIET:
                 _write_all(stdout_fd, _bar_text(screen[0], screen[1], resized["label"]))
             calm = at - last_output >= quiet_output and at - keys.last_key >= quiet_keys and not keys.dirty
+            if queue:
+                # The resume prompt waits until the cleared host is quiet and its new session is bound (or timed out).
+                gated = len(queue) == 2 and queue[0][0] == AFTER_CLEAR
+                if gated and not rotator.ready_to_resume(reading, calm, at, clear_sent_at, session is not None):
+                    continue
+                _write_all(master, queue.popleft()[1])
+                if len(queue) == 2 and queue[0][0] == AFTER_CLEAR:
+                    clear_sent_at = at  # the host was just cleared: the resume prompt waits for its new session
+                due = at + queue[0][0] if queue else 0.0
+                continue
             if not calm:
                 continue
             try:
