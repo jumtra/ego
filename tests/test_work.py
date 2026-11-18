@@ -289,26 +289,64 @@ def test_worktree_isolation_and_cleanup(tmp_path):
 
     task = {"nodes": [{"id": "write", "kind": "code", "argv": ["python3", "write_script.py"], "write_allowlist": ["result.txt"]}]}
 
-    # 1. worktree with cleanup (default)
+    # 1. worktree with cleanup (default): unapplied PASS keeps staging until applied
     res_clean = execute(root, task, worktree=True, cleanup_worktree=True)
     assert res_clean["final_status"] == "PASSED"
     assert res_clean["worktree"] is True
-    assert res_clean["worktree_cleaned"] is True
+    assert res_clean.get("worktree_cleaned") is not True
     staging_path = root / ".ego" / "state" / "runs" / res_clean["run_id"] / "staging"
-    assert not staging_path.exists()
+    assert staging_path.exists()
+    assert (staging_path / "result.txt").read_text() == "done"
     assert not (root / "result.txt").exists()
-    assert res_clean["branch_deleted"] is True
+
+    # Applying via resume applies edits and cleans up worktree and branch
+    res_applied = execute(
+        root, task, run_id=res_clean["run_id"], resume=True,
+        worktree=True, cleanup_worktree=True, apply=True, approve=True,
+    )
+    assert res_applied["final_status"] == "PASSED"
+    assert res_applied["applied"] is True
+    assert res_applied["worktree_cleaned"] is True
+    assert not staging_path.exists()
+    assert (root / "result.txt").read_text() == "done"
+    assert res_applied["branch_deleted"] is True
     branches = subprocess.run(["git", "branch", "--list", "ego-task-*"], cwd=root, capture_output=True, text=True).stdout
     assert f"ego-task-{res_clean['run_id']}" not in branches
 
-    # 2. worktree without cleanup (keep_worktree)
-    res_keep = execute(root, task, worktree=True, cleanup_worktree=False)
+    # 2. worktree without cleanup (keep_worktree): keeps staging even after apply
+    (root / "result.txt").unlink()
+    res_keep = execute(root, task, worktree=True, cleanup_worktree=False, apply=True, approve=True)
     assert res_keep["final_status"] == "PASSED"
+    assert res_keep["applied"] is True
     assert res_keep["worktree"] is True
     assert res_keep.get("worktree_cleaned") is not True
     staging_keep = root / ".ego" / "state" / "runs" / res_keep["run_id"] / "staging"
     assert staging_keep.exists()
     assert (staging_keep / "result.txt").read_text() == "done"
+    assert (root / "result.txt").read_text() == "done"
+
+
+def test_resume_apply_with_missing_staging_raises_staging_missing(tmp_path):
+    import shutil
+    from ego.shared.util import read_json
+
+    root = _git_project(tmp_path / "repo")
+    task = {"nodes": [{"id": "write", "kind": "code", "argv": ["python3", "gen.py"], "write_allowlist": ["result.txt"]}]}
+
+    first = execute(root, task, worktree=True, cleanup_worktree=False, run_id="missing-staging")
+    assert first["final_status"] == "PASSED"
+    assert first["changed_files"] == ["result.txt"]
+
+    staging = root / ".ego" / "state" / "runs" / "missing-staging" / "staging"
+    shutil.rmtree(staging)
+
+    with pytest.raises(EgoError) as exc:
+        execute(root, task, run_id="missing-staging", resume=True, apply=True, approve=True)
+    assert exc.value.code == "STAGING_MISSING"
+
+    record = read_json(root / ".ego" / "state" / "runs" / "missing-staging" / "record.json")
+    assert record["changed_files"] == ["result.txt"]
+    assert (root / "src" / "a.py").read_text() == "x = 1\n"
     assert not (root / "result.txt").exists()
 
 

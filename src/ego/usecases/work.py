@@ -407,6 +407,9 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             if record.get("final_status")=="PASSED" and (not apply or record.get("applied")):
                 return {**{k:v for k,v in record.items() if k!="spec"}, "message":completion_message(record),
                         "checkpoint_path":handoff_relpath(run_id)}
+            # Applying or resuming an interrupted run requires the staged copy; missing staging would snapshot as all-deleted.
+            if not staging.is_dir():
+                raise EgoError("STAGING_MISSING", f"No staging directory for run {run_id}", 3)
             if task_file:record["task_file"]=str(task_file)
             # Nodes that were mid-flight when the process died are not done: they run again.
             for nid in [k for k,v in record["node_status"].items() if v=="RUNNING"]:record["node_status"].pop(nid)
@@ -578,8 +581,11 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                     else:atomic_bytes(dst,b)
                 raise
         write_json(record_path,record)
-        # An unfinished run keeps its worktree: resume and `--from` continue from that staging.
-        if record.get("worktree") and should_cleanup and record["final_status"] in ("PASSED","COMPARISON_READY"):
+        # An unfinished or unapplied run keeps its worktree: resume, `--apply` and `--from` need that staging.
+        if record.get("worktree") and should_cleanup and (
+            (record["final_status"] == "PASSED" and record.get("applied"))
+            or record["final_status"] == "COMPARISON_READY"
+        ):
             git_worktree_remove(root, staging, force=True)
             # The staging branch is only a vehicle; drop it unless it holds unmerged commits.
             record["branch_deleted"] = git_branch_delete(root, f"ego-task-{run_id}")
