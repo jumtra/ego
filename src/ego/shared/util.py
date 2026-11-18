@@ -106,6 +106,8 @@ def git_head(root: Path) -> str | None:
 
 
 ALTER_ROOT_ENV = "EGO_ALTER_PROJECT_ROOT"
+# Shared by ego run (writer) and the adapters that read it; lives below usecases to keep layers acyclic.
+RUN_SESSION_ENV = "EGO_RUN_SESSION"
 
 
 def alter_project_root(root: Path) -> Path:

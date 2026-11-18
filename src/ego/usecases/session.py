@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..shared.util import EgoError, alter_project_root, exclusive_lock, is_locked, now, read_json, redact, safe_path, write_json
-from ..shared.util import HOST_ENV, _id, detect_host, handoff_relpath
+from ..shared.util import HOST_ENV, RUN_SESSION_ENV, _id, detect_host, handoff_relpath
 from ..domain.config import load_config
 from ..domain.task_routing import resume_prompt
 from ..domain.session_schema import (
@@ -177,7 +177,6 @@ _PROMPT_TAIL = ("A record, not proof: check files/git diff first, run the narrow
 
 
 RUN_ID_ENV = "EGO_RUN_ID"  # set by ego run: which wrapper a checkpoint belongs to
-RUN_SESSION_ENV = "EGO_RUN_SESSION"  # set by ego run: where its hooks record the host session
 ADVICE_STATE = ".ego/state/session_advice.json"
 # Revisions already resumed after /clear, per task: stored beside the per-session entries in ADVICE_STATE.
 CONSUMED_KEY = "_consumed"
