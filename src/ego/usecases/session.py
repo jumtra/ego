@@ -20,16 +20,20 @@ from typing import Any
 
 from ..shared.util import EgoError, alter_project_root, exclusive_lock, is_locked, now, read_json, redact, safe_path, write_json
 from ..shared.util import HOST_ENV, _id, detect_host, handoff_relpath
+from ..domain.config import load_config
 from ..domain.task_routing import resume_prompt
 from ..domain.session_schema import (
+    CHECKPOINT_KINDS,
+    DEFAULT_SESSION_SCHEMA_LIMITS,
     MAX_GOAL_CHARS,
     MAX_ITEM_CHARS,
     MAX_NOTES,
+    MAX_PROMPT_CHARS,
     SCHEMA,
+    SessionSchemaLimits,
     validate_checkpoint_schema,
 )
 
-MAX_PROMPT_CHARS = 1600
 HOST_CLEAR = {"claude": "/clear", "codex": "/clear", "opencode": "/new", "agy": "/clear"}
 # How each CLI opens a NEW interactive session that starts with a prompt (checked against each CLI's --help).
 HOST_LAUNCH = {"claude": ("claude",), "codex": ("codex",), "opencode": ("opencode", "--prompt"),
@@ -44,21 +48,21 @@ MAX_LIST_GOAL_CHARS = 120
 
 
 
-def _notes(values: list[str] | tuple[str, ...] | None) -> list[str]:
-    """Clean and bound notes mechanically: the newest MAX_NOTES survive, so a longer list never fails."""
+def _notes(values: list[str] | tuple[str, ...] | None, *, limits: SessionSchemaLimits = DEFAULT_SESSION_SCHEMA_LIMITS) -> list[str]:
+    """Clean and bound notes mechanically: the newest max_notes survive, so a longer list never fails."""
     if values is None:
         return []
     if not isinstance(values, (list, tuple)):
         raise EgoError("INVALID_HANDOFF", "Notes must be a list", 2)
     if not all(isinstance(x, str) for x in values):
         raise EgoError("INVALID_HANDOFF", "Notes must be strings", 2)
-    cleaned = [redact(x.strip())[:MAX_ITEM_CHARS] for x in values if x.strip()]
-    return list(dict.fromkeys(cleaned))[-MAX_NOTES:]
+    cleaned = [redact(x.strip())[:limits.max_item_chars] for x in values if x.strip()]
+    return list(dict.fromkeys(cleaned))[-limits.max_notes:]
 
 
-def _merge_notes(prev_items: list[str], new_items: list[str]) -> list[str]:
+def _merge_notes(prev_items: list[str], new_items: list[str], *, limits: SessionSchemaLimits = DEFAULT_SESSION_SCHEMA_LIMITS) -> list[str]:
     """Keep earlier revisions' notes (e.g. past decisions) when a checkpoint is saved again."""
-    return list(dict.fromkeys([*prev_items, *new_items]))[-MAX_NOTES:]
+    return list(dict.fromkeys([*prev_items, *new_items]))[-limits.max_notes:]
 
 
 
@@ -74,12 +78,14 @@ def _guard_run_active(root: Path, task_id: str) -> None:
         raise EgoError("RUN_ACTIVE", f"Run {task_id} is currently active in another process", 3)
 
 
-def load_checkpoint(root: Path, task_id: str) -> dict[str, Any] | None:
+def load_checkpoint(root: Path, task_id: str, *, limits: SessionSchemaLimits | None = None) -> dict[str, Any] | None:
+    root = root.resolve()
     path = safe_path(root, handoff_relpath(task_id))
     record = read_json(path)
     if record is None:
         return None
-    validate_checkpoint_schema(record)
+    eff_limits = limits or load_config(root).session_schema_limits()
+    validate_checkpoint_schema(record, limits=eff_limits)
     if record.get("task_id") != task_id:
         raise EgoError("INVALID_HANDOFF", "Checkpoint task ID mismatch", 2)
     return record
@@ -96,9 +102,11 @@ def save_checkpoint(
     blockers: list[str] | tuple[str, ...] | None = None,
     evidence: list[str] | tuple[str, ...] | None = None,
     status: str = "IN_PROGRESS",
+    kind: str | None = None,
     source: str = "interactive",
     host: str | None = None,
     run: str | None = None,
+    limits: SessionSchemaLimits | None = None,
 ) -> dict[str, Any]:
     """Atomically replace, do not append to an ever-growing history.
 
@@ -108,28 +116,35 @@ def save_checkpoint(
     _id(task_id)
     if host is not None and host not in HOST_CLEAR:
         raise EgoError("UNKNOWN_HOST", f"Unsupported interactive host: {host}", 2)
+    if kind is not None and kind not in CHECKPOINT_KINDS:
+        raise EgoError("INVALID_HANDOFF", f"Unsupported checkpoint kind: {kind}", 2)
     root = root.resolve()
+    eff_limits = limits or load_config(root).session_schema_limits()
     path = safe_path(root, handoff_relpath(task_id))
     lock = safe_path(root, f".ego/locks/handoff-{task_id}.lock")
     with exclusive_lock(lock):
-        prev = load_checkpoint(root, task_id)
+        prev = load_checkpoint(root, task_id, limits=eff_limits)
         # A re-save of an open task keeps what earlier saves recorded; a COMPLETED one starts fresh.
         prev_open = prev if prev is not None and prev.get("status") != "COMPLETED" else None
 
         def history(key: str, values) -> list[str]:
-            new = _notes(values)
-            return _merge_notes(prev_open.get(key) or [], new) if prev_open else new
+            new = _notes(values, limits=eff_limits)
+            return _merge_notes(prev_open.get(key) or [], new, limits=eff_limits) if prev_open else new
 
         def inherit(key: str, values, statuses: tuple[str, ...]) -> list[str]:
             if values is None and prev is not None and status in statuses:
                 return list(prev.get(key) or [])
-            return _notes(values)
+            return _notes(values, limits=eff_limits)
 
+        resolved_kind = kind or (
+            "completed" if status == "COMPLETED" else (prev_open.get("kind") if prev_open else None) or "ongoing"
+        )
         record = {
             "schema_version": SCHEMA,
             "task_id": task_id,
             "status": status,
-            "goal": redact(goal.strip())[:MAX_GOAL_CHARS] if isinstance(goal, str) else goal,
+            "kind": resolved_kind,
+            "goal": redact(goal.strip())[:eff_limits.max_goal_chars] if isinstance(goal, str) else goal,
             "completed": history("completed", completed),
             "next_steps": inherit("next_steps", next_steps, ("IN_PROGRESS", "BLOCKED")),
             "decisions": history("decisions", decisions),
@@ -146,7 +161,7 @@ def save_checkpoint(
             record["host"] = host
         if run:
             record["run"] = str(run)[:64]
-        validate_checkpoint_schema(record)
+        validate_checkpoint_schema(record, limits=eff_limits)
         write_json(path, record)
     return {**record, "path": handoff_relpath(task_id)}
 
@@ -413,7 +428,7 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int, host: str 
                 "reason": f"ego: this conversation's context is {tokens} tokens, at or above this project's limit "
                           f"(clear_suggest_tokens = {threshold}). Do no further task work in this turn. Save this conversation's state with one "
                           "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... --decision ... --blocker ... "
-                          "--status <IN_PROGRESS|VERIFIED|BLOCKED|COMPLETED> --root .` (facts only; include uncommitted changes and "
+                          "--status <IN_PROGRESS|VERIFIED|BLOCKED|COMPLETED> --kind <ongoing|plan_ready|plan_resume|completed> --root .` (facts only; include uncommitted changes and "
                           "known failures; reuse the task ID if one was already checkpointed). Then tell the user, briefly and in "
                           "their language, that the checkpoint is saved and that they should run /clear and then send "
                           "\"続けて\" to resume from it. Then stop."}
@@ -515,7 +530,7 @@ def usage_advice(root: Path, payload: dict[str, Any], percent: int, hosts: list[
             "reason": f"ego: the {HOST_NAME.get(host, host)} usage limit is nearly spent ({key} {used:.0f}% used, resets {reset}). "
                       "Do no further task work now. Save this conversation's state with one "
                       "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... --decision ... --blocker ... "
-                      "--status <IN_PROGRESS|VERIFIED|BLOCKED|COMPLETED> --root .` (facts only; include uncommitted changes and "
+                      "--status <IN_PROGRESS|VERIFIED|BLOCKED|COMPLETED> --kind <ongoing|plan_ready|plan_resume|completed> --root .` (facts only; include uncommitted changes and "
                       "known failures; reuse the task ID if one was already checkpointed). " + switch +
                       "Reply to the user briefly in their language, then stop."}
 
@@ -552,8 +567,9 @@ def clear_resume(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         state.setdefault(CONSUMED_KEY, {})[record["task_id"]] = int(record.get("revision", 1))
         write_json(safe_path(root, ADVICE_STATE), state)
     # additionalContext is silent and starts no turn, so also tell the user what to do next.
+    limits = load_config(root).session_schema_limits()
     return {"systemMessage": f"ego: チェックポイント {record['task_id']} の再開コンテキストを読み込みました。「続けて」と送ると再開します。",
-            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": resume_prompt(record)}}
+            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": resume_prompt(record, limits=limits)}}
 
 
 def list_checkpoints(root: Path, include_completed: bool = False) -> list[dict[str, Any]]:
@@ -605,7 +621,7 @@ def pickup(root: Path, task_id: str | None, from_host: str) -> dict[str, Any]:
         "updated_at": record.get("updated_at"),
         "instructions": "Continue in this session by following resume_prompt. It is the other CLI's saved "
                         "checkpoint, not its conversation: verify against files and git diff before relying on it.",
-        "resume_prompt": resume_prompt(record),
+        "resume_prompt": resume_prompt(record, limits=load_config(root.resolve()).session_schema_limits()),
     }
 
 
@@ -621,9 +637,11 @@ def handoff(root: Path, task_id: str | None, to_host: str, from_host: str | None
     record = load_checkpoint(root, task_id)
     if record is None:
         raise EgoError("HANDOFF_MISSING", "Save a checkpoint before handing off", 3)
-    prompt = resume_prompt(record)
-    argv = [*HOST_LAUNCH[to_host], prompt]
-    available = shutil.which(argv[0]) is not None
+    prompt = resume_prompt(record, limits=load_config(root.resolve()).session_schema_limits())
+    host_prefix = HOST_LAUNCH[to_host]
+    # Launch through `ego run` so context rotation, overlay, and session analysis stay active in the target CLI.
+    argv = ["ego", "run", to_host, "--", *host_prefix[1:], prompt]
+    available = shutil.which(host_prefix[0]) is not None
     return {
         "task_id": task_id,
         "from_host": record.get("host"),
@@ -635,9 +653,9 @@ def handoff(root: Path, task_id: str | None, to_host: str, from_host: str | None
         "launch_command": shlex.join(argv),
         "launched": False,
         "instructions": ("Run launch_command in a terminal at the project root (or rerun with --launch there) to open "
-                         f"{to_host} on the resume prompt. Nothing was started by this command."
+                         f"{to_host} via ego run on the resume prompt. Nothing was started by this command."
                          if available else
-                         f"{argv[0]} is not installed on PATH. Install it, or open {to_host} manually and send resume_prompt."),
+                         f"{host_prefix[0]} is not installed on PATH. Install it, or open {to_host} manually and send resume_prompt."),
         "resume_prompt": prompt,
     }
 
@@ -664,7 +682,7 @@ def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dic
                         if auto else
                         "Run clear_command in the IDLE interactive host only, then send resume_prompt. "
                         "No clear operation was executed by this command.",
-        "resume_prompt": resume_prompt(record),
+        "resume_prompt": resume_prompt(record, limits=load_config(root.resolve()).session_schema_limits()),
     }
 
 
@@ -916,6 +934,6 @@ def _save_request(tokens: int, threshold: int) -> str:
     return (f"ego: this conversation's context is {tokens} tokens, at or above this project's limit ({threshold}). "
             "Do no further task work in this turn. Save this conversation's state with one "
             "`ego session checkpoint --task-id <id> --goal ... --completed ... --next ... --evidence ... --decision ... --blocker ... "
-            "--status <IN_PROGRESS|VERIFIED|BLOCKED> --root .` (facts only; include uncommitted changes and known "
+            "--status <IN_PROGRESS|VERIFIED|BLOCKED> --kind <ongoing|plan_ready|plan_resume|completed> --root .` (facts only; include uncommitted changes and known "
             "failures; reuse the task ID if one was already checkpointed). Then stop: ego clears this session and "
             "resumes it from that checkpoint automatically.")

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
+from ..domain.config import load_config
 from .session import (_save_request, HOST_CLEAR, RESUGGEST_GROWTH, RUN_ID_ENV, RUN_SESSION_ENV, context_tokens,
                       latest_open_checkpoint, resume_prompt)
 from ..shared.util import EgoError, read_json, safe_path, write_json
@@ -354,8 +355,9 @@ class Rotator:
         self.saving_since, self.trigger, self.cleared = None, self.threshold, reading.key
         self.resumed = True
         self.rotations += 1
+        prompt = resume_prompt(checkpoint, limits=load_config(self.root).session_schema_limits())
         return [(0.0, HOST_CLEAR[self.host].encode()), (0.5, b"\r"),
-                (AFTER_CLEAR, _paste(resume_prompt(checkpoint))), (0.4, b"\r")]
+                (AFTER_CLEAR, _paste(prompt)), (0.4, b"\r")]
 
     def ready_to_resume(self, reading: Reading | None, calm: bool, at: float, clear_sent_at: float,
                         has_session_file: bool = False) -> bool:

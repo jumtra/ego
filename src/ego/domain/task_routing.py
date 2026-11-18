@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from .config import HOSTS, VALID_EFFORTS, parse_role_spec
+from .session_schema import (
+    DEFAULT_SESSION_SCHEMA_LIMITS,
+    MAX_NOTES as SESSION_MAX_NOTES,
+    MAX_PROMPT_CHARS as SESSION_MAX_PROMPT_CHARS,
+    SessionSchemaLimits,
+)
 from ..shared.util import EgoError, alter_project_root, clip_output, handoff_relpath, _id, safe_path
 from .policy import ROLES
 from .task_schema import (
@@ -313,28 +319,61 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
     return prompt
 
 
-MAX_NOTES = 8
-MAX_PROMPT_CHARS = 1600
+MAX_NOTES = SESSION_MAX_NOTES
+MAX_PROMPT_CHARS = SESSION_MAX_PROMPT_CHARS
 
 _PROMPT_FIELDS = (("Next", "next_steps"), ("Blockers", "blockers"), ("Decisions", "decisions"),
                   ("Done", "completed"), ("Evidence", "evidence"))
 _PROMPT_TAIL = ("A record, not proof: check files/git diff first, run the narrowest checks, "
                 "then state COMPLETED, BLOCKED or IN_PROGRESS.")
 
+# Per-kind field priority and resume framing: when budget is tight, highest-value fields survive first.
+CHECKPOINT_PROFILES: dict[str, tuple[tuple[tuple[str, str], ...], str]] = {
+    "ongoing": (_PROMPT_FIELDS, _PROMPT_TAIL),
+    "plan_ready": (
+        (("Next", "next_steps"), ("Decisions", "decisions"), ("Done", "completed"),
+         ("Blockers", "blockers"), ("Evidence", "evidence")),
+        "Plan is ready: inspect the referenced plan/task file and execute the next step.",
+    ),
+    "plan_resume": (
+        (("Blockers", "blockers"), ("Next", "next_steps"), ("Decisions", "decisions"),
+         ("Done", "completed"), ("Evidence", "evidence")),
+        "Planning is in progress: resolve open questions/blockers and continue planning before editing.",
+    ),
+    "completed": (
+        (("Done", "completed"), ("Evidence", "evidence"), ("Decisions", "decisions"),
+         ("Next", "next_steps"), ("Blockers", "blockers")),
+        "Work is marked completed: verify the cited evidence before closing out.",
+    ),
+}
 
-def resume_prompt(checkpoint: dict[str, Any], *, limit: int = MAX_PROMPT_CHARS, brief: bool = False) -> str:
+
+def resume_prompt(
+    checkpoint: dict[str, Any],
+    *,
+    limit: int | None = None,
+    brief: bool = False,
+    limits: SessionSchemaLimits | None = None,
+) -> str:
     """The handoff as it enters the next context: every character here is paid for again.
 
     Self-contained, so the reader does not also load the checkpoint file; the
     file is named only when something had to be left out. `brief` drops the
     framing sentences for callers that already supply their own.
     """
+    eff_limits = limits or DEFAULT_SESSION_SCHEMA_LIMITS
+    eff_limit = eff_limits.max_prompt_chars if limit is None else limit
+    eff_notes = eff_limits.max_notes
     task_id = _id(checkpoint["task_id"])
+    kind = str(checkpoint.get("kind") or "ongoing")
+    fields, default_tail = CHECKPOINT_PROFILES.get(kind, CHECKPOINT_PROFILES["ongoing"])
     head = (f"Task {task_id} [{checkpoint['status']}]" if brief else
+            f"Resume task {task_id} [{checkpoint['status']}] ({kind}) from this checkpoint, not the previous chat."
+            if kind != "ongoing" else
             f"Resume task {task_id} [{checkpoint['status']}] from this checkpoint, not the previous chat.")
     pointer = f"More in {handoff_relpath(task_id)}."
-    tail = "" if brief else _PROMPT_TAIL
-    budget = limit - len(head) - len(pointer) - len(tail) - 2
+    tail = "" if brief else default_tail
+    budget = eff_limit - len(head) - len(pointer) - len(tail) - 2
     goal = "Goal: " + " ".join(str(checkpoint["goal"]).split())
     if len(goal) > budget // 2:
         goal = goal[:max(0, budget // 2)]
@@ -342,9 +381,9 @@ def resume_prompt(checkpoint: dict[str, Any], *, limit: int = MAX_PROMPT_CHARS, 
     budget -= len(goal) + 1
     seen: set[str] = set()
     omitted = False
-    for title, key in _PROMPT_FIELDS:
+    for title, key in fields:
         items: list[str] = []
-        for value in (checkpoint.get(key) or [])[:MAX_NOTES]:
+        for value in (checkpoint.get(key) or [])[:eff_notes]:
             value = " ".join(str(value).split())
             if not value or value in seen:
                 continue
@@ -361,6 +400,6 @@ def resume_prompt(checkpoint: dict[str, Any], *, limit: int = MAX_PROMPT_CHARS, 
         lines.append(pointer)
     if tail:
         lines.append(tail)
-    return "\n".join(lines)[:limit]
+    return "\n".join(lines)[:eff_limit]
 
 

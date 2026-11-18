@@ -246,6 +246,9 @@ def test_config_pydantic_schema_rejects_out_of_range_and_wrong_types():
         Config(plan_schema={"unknown_limit": 10}),
         Config(plan_schema={"max_note_chars": 0}),
         Config(plan_schema={"max_note_chars": True}),
+        Config(session_schema={"unknown_limit": 10}),
+        Config(session_schema={"max_item_chars": 0}),
+        Config(session_schema={"max_prompt_chars": True}),
     ):
         with pytest.raises(EgoError) as exc_info:
             bad_cfg.validate()
