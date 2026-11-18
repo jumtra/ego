@@ -31,6 +31,7 @@ scratch/
 # Ego runtime state and handoffs
 .ego/state/
 .ego/artifacts/
+.ego/authoring/
 .ego/backups/
 .ego/locks/
 .ego/memory/
