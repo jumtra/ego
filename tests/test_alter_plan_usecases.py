@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from ego.usecases import alter_plan
-from ego.shared.util import EgoError
+from ego.shared.util import EgoError, write_json
 
 
 class FakeAlterPlanClient:
@@ -83,3 +83,55 @@ def test_report_payload_maps_failed_run_to_failed_state():
     state, nodes = alter_plan.report_payload(record)
     assert state == 'failed'
     assert nodes == {'impl': {'status': 'FAILED', 'attempts': 1, 'failure': 'boom'}}
+
+
+def _node(**overrides) -> dict:
+    node = {'id': 'impl', 'kind': 'agent', 'prompt': 'do it', 'depends_on': [], 'steps': ['edit a.py'],
+            'write_allowlist': ['src/a.py'], 'checks': [['pytest', '-q']]}
+    return {**node, **overrides}
+
+
+def _without(node: dict, *keys: str) -> dict:
+    return {k: v for k, v in node.items() if k not in keys}
+
+
+def test_push_refuses_agent_node_without_steps_before_alter_sees_it(tmp_path, monkeypatch):
+    created = []
+
+    class Recording(FakeAlterPlanClient):
+        def scope(self):
+            return 'personal'
+
+        def create(self, spec, scope):
+            created.append(spec)
+            return {'plan_id': 'p1', 'node_tasks': {}}
+
+    monkeypatch.setattr(alter_plan, 'AlterPlanClient', Recording)
+    task_file = tmp_path / 'demo.json'
+    write_json(task_file, {'goal': 'g', 'done': 'd', 'nodes': [_without(_node(), 'steps')]})
+
+    with pytest.raises(EgoError) as exc:
+        alter_plan.push(tmp_path, str(task_file))
+    assert exc.value.code == 'INVALID_TASK'
+    assert 'impl: steps are empty' in str(exc.value)
+    assert created == []
+
+
+def test_push_accepts_code_and_gate_nodes_without_their_exempt_fields(tmp_path, monkeypatch):
+    created = []
+
+    class Recording(FakeAlterPlanClient):
+        def scope(self):
+            return 'personal'
+
+        def create(self, spec, scope):
+            created.append(spec)
+            return {'plan_id': 'p1', 'node_tasks': {}}
+
+    monkeypatch.setattr(alter_plan, 'AlterPlanClient', Recording)
+    task_file = tmp_path / 'demo.json'
+    nodes = [_without(_node(id='code', kind='code'), 'steps'), _without(_node(id='gate', kind='gate', depends_on=['code']), 'steps', 'write_allowlist')]
+    write_json(task_file, {'goal': 'g', 'done': 'd', 'nodes': nodes})
+
+    alter_plan.push(tmp_path, str(task_file))
+    assert len(created) == 1

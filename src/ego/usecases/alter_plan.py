@@ -12,11 +12,25 @@ MAX_CONSECUTIVE_ERRORS = 3
 FAILURE_MAX = 300
 
 
+def plan_field_errors(task: dict) -> list[str]:
+    # Same required fields as alter's ego plan validation, so an incomplete plan fails here instead of in alter.
+    errors = []
+    for node in task['nodes']:
+        node_id, kind = node['id'], node.get('kind', 'agent')
+        is_judge = node.get('role') == 'judge'
+        if not str(node.get('prompt') or '').strip(): errors.append(f'{node_id}: prompt (title) is empty')
+        if kind not in ('code', 'gate') and not node.get('steps'): errors.append(f'{node_id}: steps are empty')
+        if kind != 'gate' and not is_judge and not node.get('write_allowlist'): errors.append(f'{node_id}: write_allowlist (where) is empty')
+    return errors
+
+
 def push(root: Path, task_file: str, slug: str | None = None) -> dict:
     path = Path(task_file)
     task = read_json(path)
     if task is None: raise EgoError('TASK_MISSING', task_file, 3)
     validate_task(task)
+    errors = plan_field_errors(task)
+    if errors: raise EgoError('INVALID_TASK', '; '.join(errors), 2)
     slug = slug or path.stem
     client = AlterPlanClient(root)
     result = client.create(task_to_spec(task, slug), client.scope())
