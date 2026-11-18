@@ -26,13 +26,13 @@ DEFAULT_MODELS: dict[str, Any] = {
 DEFAULT_ALTER_ANALYZER: dict[str, Any] = {"opencode": {"model": "opencode/glm-5.3-flash-free"}}
 DEFAULT_ROLES: dict[str, Any] = {
     "coder": {
-        "claude": {"model": "haiku", "effort": ["low", "medium"]},
+        "claude": {"model": "haiku", "effort": ["medium", "high"]},
         "codex": {"model": "auto", "effort": "medium"},
         "agy": {"model": "gemini-4-hydrogen-medium", "effort": "medium"},
         "opencode": {"model": "auto", "effort": "medium"},
     },
     "tester": {
-        "claude": {"model": "haiku", "effort": "low"},
+        "claude": {"model": "haiku", "effort": ["medium", "high"]},
         "codex": {"model": "auto", "effort": "low"},
         "agy": {"model": "gemini-4-hydrogen-low", "effort": "low"},
         "opencode": {"model": "auto", "effort": "low"},
