@@ -21,7 +21,7 @@ from ..shared.util import (EgoError, ident, now, read_json, write_json, snapshot
                    filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove, git_branch_delete,
                    copy_ignored_files, sha256, json_text, is_locked, atomic_bytes)
 from ..domain.task_routing import validate_task_context, resolve_routes, build_task_prompt
-from ..domain.task_schema import validate_task_schema
+from ..domain.task_schema import PlanSchemaLimits, validate_task_schema
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 from ..shared.util import clip_output
 from ..domain.judge import parse_verdict, format_findings
@@ -60,8 +60,8 @@ def _brief_findings(findings)->list[str]:
     return [clip_output(json.dumps(f,ensure_ascii=False) if not isinstance(f,str) else f,300) for f in (findings or [])[:5]]
 
 
-def validate_task(spec: dict) -> list[dict]:
-    validate_task_schema(spec)
+def validate_task(spec: dict, *, limits: PlanSchemaLimits | None = None) -> list[dict]:
+    validate_task_schema(spec, limits=limits)
     nodes=spec["nodes"]
     amap={n["id"]:n for n in nodes}
     for n in nodes:
@@ -75,7 +75,7 @@ def validate_task(spec: dict) -> list[dict]:
         for d in (amap[nid].get("depends_on") or []):visit(d)
         temp.remove(nid);done.add(nid)
     for nid in amap:visit(nid)
-    validate_task_context(spec, nodes, validated=True)
+    validate_task_context(spec, nodes, validated=True, limits=limits)
     for n in nodes:
         if n.get("role")!="judge":continue
         target=n.get("reviews")
@@ -366,7 +366,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         if not seed_dir.is_dir() or not seed_record:raise EgoError("SEED_MISSING",f"No staging for run {seed_from}",3)
         use_worktree=False
     should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
-    nodes=validate_task(spec)
+    nodes=validate_task(spec, limits=cfg.plan_schema_limits())
     if apply and not approve:raise EgoError("APPROVAL_REQUIRED", "--apply requires --approve")
     if autonomy=="bypass" and not isolated:
         raise EgoError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)

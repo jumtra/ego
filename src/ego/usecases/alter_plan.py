@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from pydantic import ValidationError
 from ..adapters.alter_plan import AlterPlanClient, task_to_spec, spec_to_task
+from ..domain.config import load_config
 from ..domain.task_schema import AlterPushNodeSpec
 from .work import validate_task, status
 from ..shared.util import EgoError, read_json, write_json, now
@@ -31,12 +32,13 @@ def push(root: Path, task_file: str, slug: str | None = None) -> dict:
     path = Path(task_file)
     task = read_json(path)
     if task is None: raise EgoError('TASK_MISSING', task_file, 3)
-    validate_task(task)
+    limits = load_config(root).plan_schema_limits()
+    validate_task(task, limits=limits)
     errors = plan_field_errors(task)
     if errors: raise EgoError('INVALID_TASK', '; '.join(errors), 2)
     slug = slug or path.stem
     client = AlterPlanClient(root)
-    result = client.create(task_to_spec(task, slug), client.scope())
+    result = client.create(task_to_spec(task, slug, limits=limits), client.scope())
     write_json(root / '.ego' / 'state' / 'alter_plans' / f'{slug}.json',
                {'plan_id': result['plan_id'], 'node_tasks': result['node_tasks'], 'slug': slug,
                 'task_file': task_file, 'pushed_at': now()})
@@ -71,8 +73,9 @@ def pull(root: Path, plan_id: str, out: str, run_id: str) -> dict:
     if plan.get('state') != 'ready':
         raise EgoError('ALTER_PLAN_NOT_READY', f"state is {plan.get('state')}; press the run button in alter first", 3)
     if plan.get('errors'): raise EgoError('ALTER_PLAN_INVALID', '; '.join(plan['errors']), 2)
-    task = spec_to_task(plan['spec'], plan_id, plan['spec_hash'])
-    validate_task(task)
+    limits = load_config(root).plan_schema_limits()
+    task = spec_to_task(plan['spec'], plan_id, plan['spec_hash'], limits=limits)
+    validate_task(task, limits=limits)
     client.claim(plan_id, run_id, plan['spec_hash'])
     write_json(Path(out), task)
     runs = plan.get('runs') or []

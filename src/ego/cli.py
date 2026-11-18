@@ -45,6 +45,13 @@ def _cmd_apply(args):
             cfg.roles = parsed
         except Exception as exc:
             raise EgoError("INVALID_CONFIG", f"roles must be a valid JSON object: {exc}", 2)
+    if getattr(args, "plan_schema", None) is not None:
+        try:
+            parsed = json.loads(args.plan_schema)
+            if not isinstance(parsed, dict): raise ValueError("must be JSON object")
+            cfg.plan_schema = parsed
+        except Exception as exc:
+            raise EgoError("INVALID_CONFIG", f"plan_schema must be a valid JSON object: {exc}", 2)
     # No extra import or stdin inspection on scripted apply/check/dry-run.
     from .usecases.apply_wizard import should_prompt, select_options, confirm_apply, WizardCancelled
     interactive = should_prompt(args)
@@ -633,6 +640,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--policy",choices=["strict","relaxed"],help="Policy mode (strict: safe; relaxed: default, loose mode allowing git push and edits)")
     sp.add_argument("--models",help="Default models JSON mapping, e.g. '{\"claude\":\"sonnet\"}'")
     sp.add_argument("--roles",help="Per-role host/model/effort JSON, e.g. '{\"judge\":{\"host\":\"agy\",\"effort\":\"high\"}}'")
+    sp.add_argument("--plan-schema",help="Task/plan schema limit overrides JSON, e.g. '{\"max_note_chars\":800,\"max_step_items\":15}'")
     sp.add_argument("--clear-suggest-tokens",type=int,metavar="N",help="At N context tokens the Stop hook (Claude Code, Codex, AGY, OpenCode plugin) has the session checkpoint and suggests /clear (0 = off)")
     mode = sp.add_mutually_exclusive_group()
     mode.add_argument("--interactive",action="store_true",help="Always ask for choices, even when stdin is redirected")

@@ -8,6 +8,21 @@ import tomllib
 from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from ..shared.util import EgoError, atomic_text
+from .task_schema import (
+    MAX_AGENT_CHARS,
+    MAX_CONTEXT_FILES,
+    MAX_GOAL_CHARS,
+    MAX_INSTRUCTIONS_CHARS,
+    MAX_INSTRUCTIONS_FILE_CHARS,
+    MAX_MCP_CHARS,
+    MAX_MCP_ITEMS,
+    MAX_NODE_ID_CHARS,
+    MAX_NOTE_CHARS,
+    MAX_NOTE_ITEMS,
+    MAX_PROMPT_CHARS,
+    MAX_STEP_ITEMS,
+    PlanSchemaLimits,
+)
 
 HOSTS = ("claude", "codex", "opencode", "agy")
 PROVIDERS = ("codegraph", "graphify", "none")
@@ -112,6 +127,25 @@ class RoleConfigSpec(BaseModel):
     agy: Any = None
 
 
+PositiveInt = Annotated[int, Field(ge=1)]
+
+
+class PlanSchemaConfigSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    max_goal_chars: PositiveInt = MAX_GOAL_CHARS
+    max_instructions_chars: PositiveInt = MAX_INSTRUCTIONS_CHARS
+    max_instructions_file_chars: PositiveInt = MAX_INSTRUCTIONS_FILE_CHARS
+    max_note_chars: PositiveInt = MAX_NOTE_CHARS
+    max_note_items: PositiveInt = MAX_NOTE_ITEMS
+    max_step_items: PositiveInt = MAX_STEP_ITEMS
+    max_agent_chars: PositiveInt = MAX_AGENT_CHARS
+    max_mcp_items: PositiveInt = MAX_MCP_ITEMS
+    max_mcp_chars: PositiveInt = MAX_MCP_CHARS
+    max_context_files: PositiveInt = MAX_CONTEXT_FILES
+    max_node_id_chars: PositiveInt = MAX_NODE_ID_CHARS
+    max_prompt_chars: PositiveInt = MAX_PROMPT_CHARS
+
+
 class ConfigSpec(BaseModel):
     """Pydantic schema for validating Config attributes mechanically."""
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -142,6 +176,7 @@ class ConfigSpec(BaseModel):
     cleanup_worktree: bool
     tests: list[Annotated[list[str], Field(min_length=1)]]
     allow_commands: list[str]
+    plan_schema: PlanSchemaConfigSpec = Field(default_factory=PlanSchemaConfigSpec)
 
     @field_validator("hosts")
     @classmethod
@@ -228,6 +263,10 @@ class Config:
     cleanup_worktree: bool = True  # whether to remove the worktree after run
     tests: list[list[str]] = field(default_factory=list)
     allow_commands: list[str] = field(default_factory=lambda: ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"])
+    plan_schema: dict[str, int] = field(default_factory=dict)  # overrides for PlanSchemaLimits (max_goal_chars, max_note_chars, max_step_items, etc.)
+
+    def plan_schema_limits(self) -> PlanSchemaLimits:
+        return PlanSchemaLimits(**self.plan_schema)
 
     def validate(self) -> None:
         try:
@@ -292,6 +331,9 @@ def dump_config(cfg: Config) -> str:
         "#   alter_analysis = false\n"
         "#   alter_analyzer = {opencode = {model = \"opencode/glm-5.3-flash-free\"}}  # ホスト別の分析モデル。未指定はセッションのホストを使用\n"
         "#   alter_analysis_timeout_seconds = 600  # 1回あたりの制限時間 (秒, > 0)\n"
+        "#\n"
+        "# 計画・タスクスキーマの文字数・項目数上限 (plan_schema, 未指定の項目は既定値を使用):\n"
+        "#   plan_schema = {max_goal_chars = 6000, max_instructions_chars = 65536, max_instructions_file_chars = 512, max_note_chars = 400, max_note_items = 6, max_step_items = 10, max_agent_chars = 128, max_mcp_items = 8, max_mcp_chars = 64, max_context_files = 24, max_node_id_chars = 64, max_prompt_chars = 200}\n"
     )
     return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in vars(cfg).items()) + "\n"
 
