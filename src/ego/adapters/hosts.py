@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import shutil
 from typing import Any
-from ..shared.util import EgoError
+from ..shared.util import EgoError, alter_project_root
 
 @dataclass(frozen=True)
 class HostCapability:
@@ -67,18 +67,27 @@ def _normalize_opencode_mcp(entry: Any) -> dict[str, Any] | None:
     return out
 
 
-def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...], *, host: str | None = None) -> dict[str, Any]:
+def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...], *, host: str | None = None, project_root: Path | None = None) -> dict[str, Any]:
     wanted = [n for n in names if isinstance(n, str) and n]
     if not wanted:
         return {}
+    roots: list[Path] = []
+    seen_roots: set[Path] = set()
+    for candidate in (project_root or (alter_project_root(cwd) if cwd is not None else None), cwd):
+        if candidate is None:
+            continue
+        resolved = candidate.resolve()
+        if resolved not in seen_roots:
+            seen_roots.add(resolved)
+            roots.append(resolved)
     servers: dict[str, Any] = {}
     claude_cfg = _read_json_dict(Path.home() / ".claude.json")
     if isinstance(claude_cfg.get("mcpServers"), dict):
         servers.update(claude_cfg["mcpServers"])
-    if cwd is not None:
-        projects = claude_cfg.get("projects")
-        if isinstance(projects, dict):
-            proj_cfg = projects.get(str(cwd.resolve()))
+    projects = claude_cfg.get("projects")
+    if isinstance(projects, dict):
+        for r in roots:
+            proj_cfg = projects.get(str(r))
             if isinstance(proj_cfg, dict) and isinstance(proj_cfg.get("mcpServers"), dict):
                 servers.update(proj_cfg["mcpServers"])
     if host == "agy":
@@ -90,9 +99,7 @@ def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...], *, 
             if isinstance(agy_cfg.get("mcpServers"), dict):
                 servers.update(agy_cfg["mcpServers"])
     elif host == "codex":
-        codex_paths = [Path.home() / ".codex" / "config.toml"]
-        if cwd is not None:
-            codex_paths.append(cwd / ".codex" / "config.toml")
+        codex_paths = [Path.home() / ".codex" / "config.toml", *(r / ".codex" / "config.toml" for r in roots)]
         for cfg_path in codex_paths:
             codex_cfg = _read_toml_dict(cfg_path)
             mcp_servers = codex_cfg.get("mcp_servers")
@@ -104,9 +111,8 @@ def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...], *, 
         oc_paths = [
             Path.home() / ".config" / "opencode" / "config.json",
             Path.home() / ".config" / "opencode" / "opencode.json",
+            *(r / "opencode.json" for r in roots),
         ]
-        if cwd is not None:
-            oc_paths.append(cwd / "opencode.json")
         for cfg_path in oc_paths:
             oc_cfg = _read_json_dict(cfg_path)
             mcp_map = oc_cfg.get("mcp")
@@ -115,8 +121,8 @@ def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...], *, 
                     norm = _normalize_opencode_mcp(entry)
                     if norm is not None:
                         servers[name] = norm
-    if cwd is not None:
-        mcp_json = _read_json_dict(cwd / ".mcp.json")
+    for r in roots:
+        mcp_json = _read_json_dict(r / ".mcp.json")
         if isinstance(mcp_json.get("mcpServers"), dict):
             servers.update(mcp_json["mcpServers"])
     return {name: servers[name] for name in wanted if name in servers and isinstance(servers[name], dict)}
@@ -127,7 +133,8 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
                   autonomy: str = "auto", isolated: bool = False, lean: bool = False,
                   mcp_servers: list[str] | tuple[str, ...] | None = None, cwd: Path | None = None,
                   max_budget_usd: float | None = None, resume_session: str | None = None,
-                  allowed_tools: list[str] | tuple[str, ...] | None = None) -> list[str]:
+                  allowed_tools: list[str] | tuple[str, ...] | None = None,
+                  project_root: Path | None = None) -> list[str]:
     cap=capability(host)
     if not cap.supported:raise EgoError("HOST_UNAVAILABLE",cap.reason,3)
     if host=="mock":return []
@@ -145,7 +152,7 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         if lean and "--strict-mcp-config" in info["flags"]:
             argv.append("--strict-mcp-config")
             if mcp_servers and "--mcp-config" in info["flags"]:
-                selected = select_mcp_servers(cwd, mcp_servers, host="claude")
+                selected = select_mcp_servers(cwd, mcp_servers, host="claude", project_root=project_root)
                 if selected:
                     argv += ["--mcp-config", json.dumps({"mcpServers": selected}, ensure_ascii=False)]
         if max_budget_usd is not None and max_budget_usd > 0 and "--max-budget-usd" in info["flags"]:

@@ -10,7 +10,7 @@ import subprocess
 import time
 from typing import Any
 from .hosts import build_command, capability
-from ..shared.util import EgoError, elapsed, redact
+from ..shared.util import ALTER_ROOT_ENV, EgoError, elapsed, redact
 from ..domain.policy import check_command
 
 @dataclass
@@ -149,9 +149,10 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
         output = matched.group(1) if matched else prompt
         return RunResult("PASS", output, "", 0, elapsed(start), "mock", 0, 0.0, model="mock", effort=effort)
     stdin_supported = host in ("claude", "codex")
+    project_root = Path(env[ALTER_ROOT_ENV]) if env and env.get(ALTER_ROOT_ENV) else None
     command = build_command(host, prompt, model=model, effort=effort, read_only=read_only, max_turns=max_turns, use_stdin=stdin_supported, autonomy=autonomy, isolated=isolated,
                             lean=lean, mcp_servers=mcp_servers, cwd=cwd, max_budget_usd=max_budget_usd, resume_session=resume_session,
-                            allowed_tools=allowed_tools)
+                            allowed_tools=allowed_tools, project_root=project_root)
     try:
         code,stdout,stderr,seconds = run_process(command, cwd, timeout, input_text=prompt if stdin_supported else None, env=env)
     except OSError as exc:

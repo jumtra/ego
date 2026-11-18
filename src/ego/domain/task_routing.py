@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from .config import HOSTS, VALID_EFFORTS, parse_role_spec
-from ..shared.util import EgoError, clip_output, handoff_relpath, _id, safe_path
+from ..shared.util import EgoError, alter_project_root, clip_output, handoff_relpath, _id, safe_path
 from .policy import ROLES
 from .task_schema import (
     MAX_INSTRUCTIONS_CHARS as MAX_INSTRUCTION_BYTES,
@@ -174,7 +174,33 @@ def validate_task_context(spec: dict, nodes: list[dict], *, default_host: str = 
             raise EgoError("INVALID_TASK", "Compare nodes are terminal; select/review before using output", 2)
 
 
-def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", handoff: dict | None = None) -> str:
+def _project_rule_files(cwd: Path) -> list[tuple[str, str]]:
+    """Project rule files under .agents/rules and .claude/rules, deduplicated when identical."""
+    seen: set[tuple[str, str]] = set()
+    rules: list[tuple[str, str]] = []
+    total = 0
+    for rel_dir in (".agents/rules", ".claude/rules"):
+        d = cwd / rel_dir
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("*.md")):
+            if not p.is_file() or p.is_symlink():
+                continue
+            size = p.stat().st_size
+            if size > MAX_INSTRUCTION_BYTES or total + size > MAX_INSTRUCTION_BYTES:
+                continue
+            text = p.read_text(encoding="utf-8", errors="replace").strip()
+            if not text or (p.name, text) in seen:
+                continue
+            seen.add((p.name, text))
+            total += size
+            rules.append((p.relative_to(cwd).as_posix(), text))
+    return rules
+
+
+def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", handoff: dict | None = None,
+                      project_root: Path | None = None, alter_rules: list[str] | None = None,
+                      alter_context: str = "") -> str:
     """Pass trusted user instructions explicitly, file references as references.
 
     Dependency output is intentionally not appended verbatim: it can contain
@@ -189,6 +215,13 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
         src=safe_path(cwd,rel,allow_missing=False)
         if not src.is_file() or src.stat().st_size>MAX_INSTRUCTION_BYTES:raise EgoError("INSTRUCTIONS_TOO_LARGE",rel,2)
         parts.append(f"## Shared instructions from {rel}\n" + src.read_text(encoding="utf8"))
+    rule_files = _project_rule_files(cwd)
+    if rule_files:
+        parts.append("## Project rules\n" + "\n\n".join(f"### {rel}\n{text}" for rel, text in rule_files))
+    rules_list = alter_rules if alter_rules is not None else spec.get("alter_rules")
+    clean_rules = [str(r) for r in rules_list if str(r).strip()] if isinstance(rules_list, list) else []
+    if clean_rules:
+        parts.append("## Project AI usage rules (alter)\n" + _bullets(clean_rules))
     if node.get("role"): parts.append("## Assigned role\n" + str(node["role"]))
     if node.get("intent"): parts.append("## Why this stage exists\n" + node["intent"].strip())
     if node.get("agent"):
@@ -207,16 +240,19 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
     if node.get("mcp") or knowledge == "alter" or (knowledge == "file" and index_here):
         servers = [str(s).strip() for s in node.get("mcp", [])]
         if knowledge == "alter" and "alter" not in servers: servers.insert(0, "alter")
-        alter_lookup = "use alter skills or call alter_task_context (or alter_search / alter_get_note) with this stage's goal"
+        eff_root = (project_root or alter_project_root(cwd)).resolve()
+        alter_lookup = f'use alter skills or call alter_task_context (or alter_search / alter_get_note) with this stage\'s goal and cwd="{eff_root}"'
         if knowledge == "alter":  # the domain knowledge and glossary come only from alter
             how = f"Before editing, retrieve the project's domain knowledge and glossary from alter: {alter_lookup}."
         else:  # file knowledge: the index says which topic files matter; open only those
             how = ("Before editing, retrieve the project's domain knowledge and glossary: read .ego/knowledge/index.md if it exists "
                    "and open only the topic files this stage needs (`ego knowledge search <words>` finds them)"
                    + (f"; also {alter_lookup}" if servers else "") + ".")
+        ctx_text = (alter_context or str(node.get("alter_context") or "")).strip()
         parts.append("## Required MCP / Knowledge context\n"
                      + (("Required MCP servers: " + ", ".join(servers) + "\n") if servers else "")
-                     + how + " Use retrieved terms exactly as defined there; if they conflict with the requirement, stop and report.")
+                     + how + " Use retrieved terms exactly as defined there; if they conflict with the requirement, stop and report."
+                     + ("\n" + ctx_text if ctx_text else ""))
     if node.get("steps"):
         parts.append("## Implementation steps (follow in order, exactly as written; if a step cannot be done as written, "
                      "stop and report instead of improvising)\n" + "\n".join(f"{i}. {s.strip()}" for i, s in enumerate(node["steps"], 1)))

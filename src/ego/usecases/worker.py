@@ -62,7 +62,12 @@ def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callab
                project_root: Path, on_event: Callable[..., None] | None = None,
                max_budget_usd: float | None = None, **kw: Any) -> RunResult:
     emit = on_event or (lambda **_: None)
-    env = {**os.environ, ALTER_ROOT_ENV: str(project_root.resolve())}
+    env = {
+        **os.environ,
+        ALTER_ROOT_ENV: str(project_root.resolve()),
+        "EGO_ALTER_SESSION_RULES": "0",
+        "EGO_ALTER_PROMPT_CONTEXT": "0",
+    }
     if host != "claude" or read_only or threshold <= 0:
         return agent(host, prompt, cwd, timeout, max_turns=max_turns, read_only=read_only,
                      max_budget_usd=max_budget_usd, env=env, **kw)
