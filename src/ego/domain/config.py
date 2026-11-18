@@ -5,7 +5,8 @@ import copy
 import json
 from pathlib import Path
 import tomllib
-from typing import Any
+from typing import Annotated, Any, Literal
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from ..shared.util import EgoError, atomic_text
 
 HOSTS = ("claude", "codex", "opencode", "agy")
@@ -83,6 +84,122 @@ def parse_role_spec(value: Any, where: str = "role spec") -> list[tuple[str | No
         raise bad(f"at most {MAX_ROLE_CANDIDATES} candidates")
     return out
 
+NonEmptyModelStr = Annotated[str, Field(min_length=1, max_length=128, pattern=r"\S")]
+HostLiteral = Literal["claude", "codex", "opencode", "agy"]
+RoleLiteral = Literal["coder", "tester", "judge"]
+EffortLiteral = Literal["auto", "low", "medium", "high", "xhigh", "max"]
+
+
+class AlterAnalyzerEntrySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    model: NonEmptyModelStr
+
+
+class ModelTableSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    model: NonEmptyModelStr
+    effort: EffortLiteral | None = None
+
+
+class RoleConfigSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    host: HostLiteral | None = None
+    model: NonEmptyModelStr | None = None
+    effort: EffortLiteral | None = None
+    claude: Any = None
+    codex: Any = None
+    opencode: Any = None
+    agy: Any = None
+
+
+class ConfigSpec(BaseModel):
+    """Pydantic schema for validating Config attributes mechanically."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal[1]
+    profile: Literal["minimal", "balanced", "full"]
+    policy_mode: Literal["strict", "relaxed"]
+    hosts: Annotated[list[HostLiteral], Field(min_length=1)]
+    code_intelligence: Literal["codegraph", "graphify", "none"]
+    knowledge: Literal["file", "alter"]
+    runtime_mode: Literal["native", "managed"]
+    max_parallel: Annotated[int, Field(ge=1, le=8)]
+    max_attempts: Annotated[int, Field(ge=1, le=5)]
+    timeout_seconds: Annotated[int, Field(ge=5, le=7200)]
+    max_turns: Annotated[int, Field(ge=1, le=200)]
+    worker_context: Literal["lean", "inherit"]
+    worker_segment_turns: Annotated[int, Field(ge=1, le=200)]
+    clear_suggest_tokens: int
+    auto_resume: bool
+    usage_switch_percent: int
+    run_yolo: bool
+    alter_analysis: bool
+    alter_analyzer: dict[HostLiteral, AlterAnalyzerEntrySpec]
+    alter_analysis_timeout_seconds: Annotated[int, Field(gt=0)]
+    models: dict[HostLiteral, NonEmptyModelStr | ModelTableSpec]
+    roles: dict[RoleLiteral, RoleConfigSpec]
+    isolation: Literal["copy", "worktree"]
+    cleanup_worktree: bool
+    tests: list[Annotated[list[str], Field(min_length=1)]]
+    allow_commands: list[str]
+
+    @field_validator("hosts")
+    @classmethod
+    def _validate_unique_hosts(cls, v: list[HostLiteral]) -> list[HostLiteral]:
+        if len(set(v)) != len(v):
+            raise ValueError("Invalid/duplicate hosts")
+        return v
+
+    @field_validator("clear_suggest_tokens")
+    @classmethod
+    def _validate_clear_suggest_tokens(cls, v: int) -> int:
+        if not (v == 0 or 20000 <= v <= 2000000):
+            raise ValueError("clear_suggest_tokens must be 0 (off) or between 20000 and 2000000")
+        return v
+
+    @field_validator("usage_switch_percent")
+    @classmethod
+    def _validate_usage_switch_percent(cls, v: int) -> int:
+        if not (v == 0 or 50 <= v <= 99):
+            raise ValueError("usage_switch_percent must be 0 (off) or between 50 and 99")
+        return v
+
+    @field_validator("roles")
+    @classmethod
+    def _validate_roles(cls, v: dict[RoleLiteral, RoleConfigSpec]) -> dict[RoleLiteral, RoleConfigSpec]:
+        for r, c in v.items():
+            for h in HOSTS:
+                if h in c.model_fields_set:
+                    parse_role_spec(getattr(c, h), f"roles.{r}.{h}")
+        return v
+
+
+def _format_config_error(err: ValidationError) -> str:
+    first = err.errors()[0]
+    loc = first.get("loc", ())
+    err_type = first.get("type", "")
+    msg = first.get("msg", "Invalid configuration")
+    if loc == ("alter_analysis",):
+        return "alter_analysis must be a boolean"
+    if loc == ("alter_analysis_timeout_seconds",):
+        return "alter_analysis_timeout_seconds must be an integer > 0"
+    if loc == ("alter_analyzer",):
+        return "alter_analyzer must be a dictionary"
+    if len(loc) >= 2 and loc[0] == "alter_analyzer":
+        host = loc[1]
+        if len(loc) == 3 and loc[2] == "[key]":
+            return f"Unsupported host '{host}' in alter_analyzer"
+        if len(loc) == 3 and loc[2] == "model" and err_type != "missing":
+            return f"alter_analyzer.{host}.model must be a non-empty string"
+        return f"alter_analyzer.{host} must be a table with only 'model'"
+    if len(loc) >= 2 and loc[0] == "models" and len(loc) == 3 and loc[2] == "[key]":
+        return f"Unsupported host '{loc[1]}' in models"
+    if len(loc) >= 2 and loc[0] == "roles" and len(loc) == 3 and loc[2] == "[key]":
+        return f"Unsupported role '{loc[1]}' in roles"
+    path = ".".join(str(p) for p in loc)
+    return f"{path}: {msg}" if path else msg
+
+
 @dataclass
 class Config:
     schema_version: int = 1
@@ -113,86 +230,10 @@ class Config:
     allow_commands: list[str] = field(default_factory=lambda: ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"])
 
     def validate(self) -> None:
-        if self.schema_version != 1 or self.profile not in {"minimal", "balanced", "full"}:
-            raise EgoError("INVALID_CONFIG", "Unknown schema/profile", 2)
-        if self.policy_mode not in POLICIES:
-            raise EgoError("INVALID_CONFIG", f"policy_mode must be one of {POLICIES}", 2)
-        if not self.hosts or any(h not in HOSTS for h in self.hosts) or len(set(self.hosts)) != len(self.hosts):
-            raise EgoError("INVALID_CONFIG", "Invalid/duplicate hosts", 2)
-        if self.code_intelligence not in PROVIDERS or self.knowledge not in KNOWLEDGE or self.runtime_mode not in ("native", "managed"):
-            raise EgoError("INVALID_CONFIG", "Invalid provider/runtime", 2)
-        if self.isolation not in ("copy", "worktree"):
-            raise EgoError("INVALID_CONFIG", "isolation must be 'copy' or 'worktree'", 2)
-        if not isinstance(self.cleanup_worktree, bool):
-            raise EgoError("INVALID_CONFIG", "cleanup_worktree must be a boolean", 2)
-        if not 1 <= self.max_parallel <= 8 or not 1 <= self.max_attempts <= 5 or not 5 <= self.timeout_seconds <= 7200:
-            raise EgoError("INVALID_CONFIG", "Invalid runtime limits", 2)
-        if not isinstance(self.max_turns, int) or not 1 <= self.max_turns <= 200:
-            raise EgoError("INVALID_CONFIG", "max_turns must be between 1 and 200", 2)
-        if not isinstance(self.worker_segment_turns, int) or isinstance(self.worker_segment_turns, bool) or not 1 <= self.worker_segment_turns <= 200:
-            raise EgoError("INVALID_CONFIG", "worker_segment_turns must be between 1 and 200", 2)
-        if not isinstance(self.clear_suggest_tokens, int) or not (self.clear_suggest_tokens == 0 or 20000 <= self.clear_suggest_tokens <= 2000000):
-            raise EgoError("INVALID_CONFIG", "clear_suggest_tokens must be 0 (off) or between 20000 and 2000000", 2)
-        if not isinstance(self.auto_resume, bool):
-            raise EgoError("INVALID_CONFIG", "auto_resume must be a boolean", 2)
-        if not isinstance(self.usage_switch_percent, int) or not (self.usage_switch_percent == 0 or 50 <= self.usage_switch_percent <= 99):
-            raise EgoError("INVALID_CONFIG", "usage_switch_percent must be 0 (off) or between 50 and 99", 2)
-        if not isinstance(self.run_yolo, bool):
-            raise EgoError("INVALID_CONFIG", "run_yolo must be a boolean", 2)
-        if self.worker_context not in ("lean", "inherit"):
-            raise EgoError("INVALID_CONFIG", "worker_context must be 'lean' or 'inherit'", 2)
-        if not isinstance(self.alter_analysis, bool):
-            raise EgoError("INVALID_CONFIG", "alter_analysis must be a boolean", 2)
-        if not isinstance(self.alter_analyzer, dict):
-            raise EgoError("INVALID_CONFIG", "alter_analyzer must be a dictionary", 2)
-        for h, a in self.alter_analyzer.items():
-            if h not in HOSTS:
-                raise EgoError("INVALID_CONFIG", f"Unsupported host '{h}' in alter_analyzer", 2)
-            if not isinstance(a, dict) or set(a) != {"model"}:
-                raise EgoError("INVALID_CONFIG", f"alter_analyzer.{h} must be a table with only 'model'", 2)
-            model_name = a["model"]
-            if not isinstance(model_name, str) or not model_name.strip() or len(model_name) > 128:
-                raise EgoError("INVALID_CONFIG", f"alter_analyzer.{h}.model must be a non-empty string", 2)
-        if isinstance(self.alter_analysis_timeout_seconds, bool) or not isinstance(self.alter_analysis_timeout_seconds, int) or self.alter_analysis_timeout_seconds <= 0:
-            raise EgoError("INVALID_CONFIG", "alter_analysis_timeout_seconds must be an integer > 0", 2)
-        if not isinstance(self.models, dict):
-            raise EgoError("INVALID_CONFIG", "models must be a dictionary", 2)
-        for h, m in self.models.items():
-            if h not in HOSTS:
-                raise EgoError("INVALID_CONFIG", f"Unsupported host '{h}' in models", 2)
-            if isinstance(m, str):
-                if not m.strip() or len(m) > 128:
-                    raise EgoError("INVALID_CONFIG", f"Invalid model ID for host '{h}'", 2)
-            elif isinstance(m, dict):
-                model_name = m.get("model")
-                if not isinstance(model_name, str) or not model_name.strip() or len(model_name) > 128:
-                    raise EgoError("INVALID_CONFIG", f"Host '{h}' table config requires a valid 'model' string", 2)
-                effort = m.get("effort")
-                if effort is not None and (not isinstance(effort, str) or effort not in VALID_EFFORTS):
-                    raise EgoError("INVALID_CONFIG", f"Host '{h}' effort must be one of {sorted(VALID_EFFORTS)}", 2)
-                extra_keys = set(m.keys()) - {"model", "effort"}
-                if extra_keys:
-                    raise EgoError("INVALID_CONFIG", f"Unknown keys in models.{h}: {sorted(extra_keys)}", 2)
-            else:
-                raise EgoError("INVALID_CONFIG", f"Model config for host '{h}' must be a string or table", 2)
-        if not isinstance(self.roles, dict):
-            raise EgoError("INVALID_CONFIG", "roles must be a dictionary", 2)
-        for r, c in self.roles.items():
-            if r not in ROLE_NAMES:
-                raise EgoError("INVALID_CONFIG", f"Unsupported role '{r}' in roles (use {ROLE_NAMES})", 2)
-            if not isinstance(c, dict) or set(c) - {"host", "model", "effort", *HOSTS}:
-                raise EgoError("INVALID_CONFIG", f"roles.{r} must be a table with only host/model/effort or per-host specs ({', '.join(HOSTS)})", 2)
-            for h in HOSTS:
-                if h in c:
-                    parse_role_spec(c[h], f"roles.{r}.{h}")
-            if "host" in c and c["host"] not in HOSTS:
-                raise EgoError("INVALID_CONFIG", f"roles.{r}.host must be one of {HOSTS}", 2)
-            if "model" in c and (not isinstance(c["model"], str) or not c["model"].strip() or len(c["model"]) > 128):
-                raise EgoError("INVALID_CONFIG", f"roles.{r}.model must be a non-empty string", 2)
-            if "effort" in c and c["effort"] not in VALID_EFFORTS:
-                raise EgoError("INVALID_CONFIG", f"roles.{r}.effort must be one of {sorted(VALID_EFFORTS)}", 2)
-        if any(not isinstance(cmd, list) or not cmd or any(not isinstance(x, str) for x in cmd) for cmd in self.tests):
-            raise EgoError("INVALID_CONFIG", "Tests must be argv arrays", 2)
+        try:
+            ConfigSpec.model_validate(vars(self))
+        except ValidationError as err:
+            raise EgoError("INVALID_CONFIG", _format_config_error(err), 2) from err
 
 def _tomlval(value: Any) -> str:
     if isinstance(value, bool): return "true" if value else "false"

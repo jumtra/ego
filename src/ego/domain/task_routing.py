@@ -10,22 +10,16 @@ from typing import Any
 from .config import HOSTS, VALID_EFFORTS, parse_role_spec
 from ..shared.util import EgoError, clip_output, handoff_relpath, _id, safe_path
 from .policy import ROLES
+from .task_schema import (
+    MAX_INSTRUCTIONS_CHARS as MAX_INSTRUCTION_BYTES,
+    REQUIREMENT_KEYS,
+    validate_node_schema,
+    validate_task_schema,
+)
 
 ROUTABLE = set(HOSTS) | {"mock"}
 STRATEGIES = {"single", "fallback", "compare"}
 FALLBACK_CAUSES = {"UNAVAILABLE", "TIMEOUT", "RATE_LIMIT"}
-MAX_INSTRUCTION_BYTES = 64 * 1024
-MAX_CONTEXT_FILES = 24
-# Optional per-node notes: short, structured answers to "why" and "when is it done".
-# They reach the worker (and successors) verbatim, so they are bounded like any prompt input.
-NOTE_LISTS = ("done_when", "non_goals", "assumptions", "provides", "inputs", "outputs")
-MAX_NOTE_CHARS = 400
-MAX_NOTE_ITEMS = 6
-REQUIREMENT_KEYS = ("who", "what", "when", "where", "why", "how")
-MAX_STEP_ITEMS = 10
-MAX_AGENT_CHARS = 128
-MAX_MCP_ITEMS = 8
-MAX_MCP_CHARS = 64
 
 @dataclass(frozen=True)
 class Route:
@@ -141,50 +135,9 @@ def resolve_routes(node: dict, spec: dict, default_host: str = "mock", default_m
     return strategy, routes, frozenset(on)
 
 
-def _note(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip()) and len(value) <= MAX_NOTE_CHARS
-
-
 def validate_node_notes(node: dict) -> None:
-    """intent is one short string; the other notes are short lists of short strings."""
-    if "role" in node:
-        if node["role"] not in ROLES:
-            raise EgoError("INVALID_TASK", f"role of {node['id']} must be one of {', '.join(ROLES)}", 2)
-        if node.get("kind", "agent") in ("code", "gate"):
-            raise EgoError("INVALID_TASK", f"Deterministic node {node['id']} cannot have a role", 2)
-    if "intent" in node and not _note(node["intent"]):
-        raise EgoError("INVALID_TASK", f"intent of {node['id']} must be a nonempty string <= {MAX_NOTE_CHARS} chars", 2)
-    for key in NOTE_LISTS:
-        if key not in node: continue
-        items = node[key]
-        if not isinstance(items, list) or len(items) > MAX_NOTE_ITEMS or not all(_note(i) for i in items):
-            raise EgoError("INVALID_TASK", f"{key} of {node['id']} must be a list of at most {MAX_NOTE_ITEMS} "
-                           f"nonempty strings <= {MAX_NOTE_CHARS} chars", 2)
-    if "requirement" in node:
-        req = node["requirement"]
-        if not isinstance(req, dict) or not req or set(req) - set(REQUIREMENT_KEYS) or not all(_note(v) for v in req.values()):
-            raise EgoError("INVALID_TASK", f"requirement of {node['id']} must be an object mapping some of {', '.join(REQUIREMENT_KEYS)} "
-                           f"to nonempty strings <= {MAX_NOTE_CHARS} chars", 2)
-    if "steps" in node:
-        steps = node["steps"]
-        if not isinstance(steps, list) or not steps or len(steps) > MAX_STEP_ITEMS or not all(_note(s) for s in steps):
-            raise EgoError("INVALID_TASK", f"steps of {node['id']} must be a list of 1-{MAX_STEP_ITEMS} "
-                           f"nonempty strings <= {MAX_NOTE_CHARS} chars", 2)
-    if "agent" in node or "mcp" in node:
-        if node.get("kind", "agent") in ("code", "gate"):
-            raise EgoError("INVALID_TASK", f"Deterministic node {node['id']} cannot have agent or mcp", 2)
-    if "agent" in node:
-        agent = node["agent"]
-        if (not isinstance(agent, str) or not agent.strip() or len(agent) > MAX_AGENT_CHARS
-                or any(bad in agent for bad in ("..", "/", "\\"))):
-            raise EgoError("INVALID_TASK", f"agent of {node['id']} must be a nonempty name <= {MAX_AGENT_CHARS} chars "
-                           "without '..', '/' or '\\'", 2)
-    if "mcp" in node:
-        servers = node["mcp"]
-        if (not isinstance(servers, list) or not 1 <= len(servers) <= MAX_MCP_ITEMS
-                or not all(isinstance(s, str) and s.strip() and len(s) <= MAX_MCP_CHARS for s in servers)):
-            raise EgoError("INVALID_TASK", f"mcp of {node['id']} must be a list of 1-{MAX_MCP_ITEMS} "
-                           f"nonempty strings <= {MAX_MCP_CHARS} chars", 2)
+    """Validate node notes, requirement, steps, and options mechanically via schema."""
+    validate_node_schema(node)
 
 
 def _agent_file(cwd: Path, name: str) -> Path | None:
@@ -202,37 +155,21 @@ def _bullets(items: list[str]) -> str:
     return "\n".join("- " + i.strip() for i in items)
 
 
-def validate_task_context(spec: dict, nodes: list[dict], *, default_host: str="mock") -> None:
-    if not isinstance(spec.get("goal", ""), str) or not isinstance(spec.get("instructions", ""), str):
-        raise EgoError("INVALID_TASK", "goal/instructions must be strings", 2)
-    if "instructions_file" in spec and not isinstance(spec["instructions_file"], str):
-        raise EgoError("INVALID_TASK", "instructions_file must be a relative path",2)
+def validate_task_context(spec: dict, nodes: list[dict], *, default_host: str = "mock", validated: bool = False) -> None:
+    if not validated:
+        candidate = spec if (isinstance(spec, dict) and "nodes" in spec) else ({**spec, "nodes": nodes} if isinstance(spec, dict) else spec)
+        validate_task_schema(candidate)
     if len(spec.get("goal", "")) + len(spec.get("instructions", "")) > MAX_INSTRUCTION_BYTES:
         raise EgoError("INSTRUCTIONS_TOO_LARGE", "Task-wide instructions too long", 2)
-    by_id = {n["id"]:n for n in nodes}
     for node in nodes:
-        validate_node_notes(node)
         kind = node.get("kind", "agent")
-        if kind not in ("code", "gate"):
-            import fnmatch
-            for item in node.get("outputs", []):
-                path = item.split("::")[0].strip()
-                if not any(fnmatch.fnmatch(path, pat) for pat in node.get("write_allowlist", [])):
-                    raise EgoError("INVALID_TASK", f"output {item} of {node['id']} is outside write_allowlist", 2)
         if kind in ("code", "gate"):
             if any(k in node for k in ("host", "hosts", "models", "model", "strategy", "fallback_on")):
                 raise EgoError("INVALID_ROUTE", f"Deterministic node {node['id']} cannot select an AI model", 2)
             continue
-        strategy,routes,_ = resolve_routes(node, spec, default_host)
-        if strategy == "compare" and any(node["id"] in other.get("depends_on",[]) for other in nodes):
+        strategy, routes, _ = resolve_routes(node, spec, default_host)
+        if strategy == "compare" and any(node["id"] in (other.get("depends_on") or []) for other in nodes):
             raise EgoError("INVALID_TASK", "Compare nodes are terminal; select/review before using output", 2)
-        for key in ("instructions_file", "context_files"):
-            if key == "instructions_file" and key in node and not isinstance(node[key], str):
-                raise EgoError("INVALID_TASK", f"{key} must be a path", 2)
-            if key == "context_files":
-                files=node.get(key, [])
-                if not isinstance(files,list) or len(files)>MAX_CONTEXT_FILES or any(not isinstance(s,str) for s in files):
-                    raise EgoError("INVALID_TASK", "context_files must be a short list of paths", 2)
 
 
 def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", handoff: dict | None = None) -> str:
