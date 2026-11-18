@@ -42,6 +42,7 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
                 "- Commands must be argv arrays, never shell strings (no bash/sh), and no inline python -c.\n"
                 f"- Commands may only start with one of: {json.dumps(cfg.allow_commands)}.\n"
                 "- Use focused checks for independent implementation nodes; put integration checks in a final gate.\n"
+                "- For parallel implementation nodes, put shared contracts/types in an upstream node first and keep parallel nodes' write_allowlist disjoint when possible.\n"
                 f"- Allowed write scope: {json.dumps(scope)}.\n"
                 f"- Goal: {goal}.\n"
                 f"- Available custom agents: {json.dumps([a['name'] for a in discover_agents(workdir)])}.\n"

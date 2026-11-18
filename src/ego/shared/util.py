@@ -149,15 +149,76 @@ def git_worktree_remove(root: Path, path: Path, *, force: bool = True) -> bool:
     return res.returncode == 0
 
 
-def git_branch_delete(root: Path, branch: str) -> bool:
-    """Safe delete (-d): refuses a branch holding unmerged commits."""
-    res = subprocess.run(["git", "branch", "-d", branch], cwd=root, capture_output=True, text=True, timeout=30)
+def git_branch_delete(root: Path, branch: str, *, force: bool = False) -> bool:
+    """Delete a git branch (-D if force else -d)."""
+    flag = "-D" if force else "-d"
+    res = subprocess.run(["git", "branch", flag, branch], cwd=root, capture_output=True, text=True, timeout=30)
     return res.returncode == 0
 
 
 def git_dirty(root: Path) -> bool:
     r = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, timeout=5)
     return r.returncode == 0 and bool(r.stdout.strip())
+
+
+def git_commit_paths(work: Path, paths: list[str], message: str) -> bool:
+    """Stage the given paths (adding existing, removing missing) and commit if anything changed."""
+    if not paths:
+        return False
+    existing = [p for p in paths if (work / p).exists() or (work / p).is_symlink()]
+    missing = [p for p in paths if not (work / p).exists() and not (work / p).is_symlink()]
+    if existing:
+        res = subprocess.run(["git", "add", "-f", "--", *existing], cwd=work, capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            return False
+    if missing:
+        res = subprocess.run(["git", "rm", "-f", "--ignore-unmatch", "--", *missing], cwd=work, capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            return False
+    diff = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=work, capture_output=True, text=True, timeout=30)
+    if diff.returncode == 0:
+        return False
+    if diff.returncode != 1:
+        return False
+    commit = subprocess.run(
+        ["git", "-c", "user.name=ego", "-c", "user.email=ego@local", "-c", "commit.gpgsign=false",
+         "commit", "-q", "--no-verify", "-m", message],
+        cwd=work, capture_output=True, text=True, timeout=30,
+    )
+    return commit.returncode == 0
+
+
+def git_merge_branch(
+    worktree: Path,
+    branch: str,
+    *,
+    changed_paths: list[str] | None = None,
+    message: str = "ego merge",
+) -> tuple[bool, str]:
+    """3-way merge branch into worktree; backs up untracked files at changed_paths so merge won't refuse them."""
+    backups: list[tuple[Path, bytes]] = []
+    if changed_paths:
+        ls = subprocess.run(["git", "ls-files", "-z", "--", *changed_paths], cwd=worktree, capture_output=True, text=True, timeout=30)
+        tracked = set(filter(None, ls.stdout.split("\0"))) if ls.returncode == 0 else set()
+        for rel in changed_paths:
+            if rel in tracked:
+                continue
+            target = worktree / rel
+            if target.is_file():
+                backups.append((target, target.read_bytes()))
+                target.unlink()
+    res = subprocess.run(
+        ["git", "merge", "--no-edit", "--no-verify", "-m", message, branch],
+        cwd=worktree, capture_output=True, text=True, timeout=60,
+    )
+    if res.returncode == 0:
+        return True, ""
+    subprocess.run(["git", "merge", "--abort"], cwd=worktree, capture_output=True, text=True, timeout=30)
+    for target, data in backups:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    output = "\n".join(part for part in (res.stdout.strip(), res.stderr.strip()) if part)
+    return False, output
 
 
 @contextlib.contextmanager
@@ -234,11 +295,20 @@ IGNORED_COPY_EXCLUDES = (".ego/state/", ".ego/locks/", ".ego/backups/")
 IGNORED_COPY_SKIP_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "build", "dist"}
 
 
-def copy_ignored_files(root: Path, dst: Path) -> None:
-    res = subprocess.run(["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
-                         cwd=root, capture_output=True, text=True, timeout=30)
+def _copy_git_listed(root: Path, dst: Path, argv: list[str]) -> None:
+    res = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=30)
     if res.returncode != 0:
         return
+
+    def _ignore(d: str, names: list[str]) -> list[str]:
+        base = Path(d).relative_to(root).as_posix()
+        skipped = []
+        for n in names:
+            rel_n = (n if base == "." else f"{base}/{n}") + "/"
+            if n in IGNORED_COPY_SKIP_PARTS or n.endswith(".egg-info") or rel_n in IGNORED_COPY_EXCLUDES:
+                skipped.append(n)
+        return skipped
+
     for rel in filter(None, res.stdout.split("\0")):
         if rel.startswith(IGNORED_COPY_EXCLUDES) or any(rel == x.rstrip("/") for x in IGNORED_COPY_EXCLUDES):
             continue
@@ -249,20 +319,21 @@ def copy_ignored_files(root: Path, dst: Path) -> None:
         if src.is_symlink():
             continue
         target = dst / rel.rstrip("/")
-        def _ignore(d: str, names: list[str]) -> list[str]:
-            base = Path(d).relative_to(root).as_posix()
-            skipped = []
-            for n in names:
-                rel_n = (n if base == "." else f"{base}/{n}") + "/"
-                if n in IGNORED_COPY_SKIP_PARTS or n.endswith(".egg-info") or rel_n in IGNORED_COPY_EXCLUDES:
-                    skipped.append(n)
-            return skipped
-
         if src.is_dir():
             shutil.copytree(src, target, dirs_exist_ok=True, symlinks=False, ignore=_ignore)
         elif src.is_file():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, target)
+
+
+def copy_ignored_files(root: Path, dst: Path) -> None:
+    _copy_git_listed(root, dst, ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"])
+
+
+def copy_worktree_extras(src: Path, dst: Path) -> None:
+    """Copy ignored and untracked files from src to dst so node worktrees see the same workspace state."""
+    copy_ignored_files(src, dst)
+    _copy_git_listed(src, dst, ["git", "ls-files", "--others", "--exclude-standard", "--directory", "-z"])
 
 
 def elapsed(start: float) -> float: return round(time.monotonic() - start, 4)

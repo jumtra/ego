@@ -1,6 +1,6 @@
 """Bounded DAG execution: file-level isolation, verified repairs, checkpoint/resume and opt-in apply."""
 from __future__ import annotations
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 import copy
 import json
@@ -18,8 +18,8 @@ from ..adapters.runner import run_agent, run_checked_command
 from .worker import run_worker
 from .overlay import overlaid
 from ..shared.util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
-                   filehash, safe_path, exclusive_lock, git_is_repo, git_worktree_add, git_worktree_remove, git_branch_delete,
-                   copy_ignored_files, sha256, json_text, is_locked, atomic_bytes)
+                   filehash, safe_path, exclusive_lock, git_is_repo, git_head, git_worktree_add, git_worktree_remove, git_branch_delete,
+                   copy_worktree_extras, git_commit_paths, git_merge_branch, sha256, json_text, is_locked, atomic_bytes)
 from ..domain.task_routing import validate_task_context, resolve_routes, build_task_prompt
 from ..domain.task_schema import PlanSchemaLimits, validate_task_schema
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
@@ -144,7 +144,7 @@ def _effective_status(root:Path, record:dict)->str:
 def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
               autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
               budget_usd: float|None=None, progress:Progress|None=None, project_root:Path,
-              alter_rules:list[str]|None=None)->dict:
+              alter_rules:list[str]|None=None, use_worktree: bool = False, run_id: str = "run")->dict:
     """A task node sees a private copy; fallback never reuses failed edits.
 
     Compare runs have their own isolated copies and never merge any candidate.
@@ -165,77 +165,101 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
         nonlocal feedback
         with tempfile.TemporaryDirectory(prefix="ego-node-") as tmp:
             work=Path(tmp)/"src"
-            with _STAGING_LOCK:
-                simple_copy_tree(staging,work)
-            before=snapshot(work)
-            if kind in ("code","gate"):
-                r=run_checked_command(node.get("argv") or node["checks"][0],work,timeout=timeout,allow=cfg.allow_commands)
-                # A failing command's own output is the evidence; without it a retry or replan is blind.
-                if r.status!="PASS":feedback=clip_output((r.output+"\n"+r.stderr).strip() or f"exit {r.exit_code}",4000)
-            else:
-                if chosen_host!="mock" and not trust_cli:
-                    raise EgoError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
-                alter_ctx = ""
-                if chosen_host != "mock" and cfg.knowledge == "alter":
-                    from .session import alter_prompt_context
-                    node_query = " ".join(x for x in (str(node.get("intent") or "").strip(), str(node.get("prompt") or "").strip()) if x)
-                    alter_ctx = alter_prompt_context(project_root, node_query)
-                prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff,
-                                         project_root=project_root,alter_rules=alter_rules,alter_context=alter_ctx)
-                mcp_servers=list(node.get("mcp") or [])
-                if cfg.knowledge=="alter" and "alter" not in mcp_servers:
-                    mcp_servers.append("alter")
-                # `ego apply` no longer writes the managed block, so the worker's private copy gets it for its session.
-                with overlaid(work,chosen_host,cfg):
-                    try:
-                        r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,project_root=project_root,threshold=cfg.clear_suggest_tokens,
-                                     segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
-                                     on_event=lambda **f:progress.emit("worker_segment",node=node["id"],attempt=iteration,**f),
-                                     model=chosen_model,effort=chosen_effort,
-                                     read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
-                                     max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
-                                     lean=cfg.worker_context=="lean",mcp_servers=mcp_servers or None,max_budget_usd=budget_usd)
-                    except EgoError as exc:
-                        if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
-                            raise
-                        from ..adapters.runner import RunResult
-                        r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model,effort=chosen_effort)
-            checks=[]
-            if r.status=="PASS":
-                for argv in node.get("checks",[]):
-                    cr=run_checked_command(argv,work,timeout=min(timeout,120),allow=cfg.allow_commands)
-                    checks.append({**cr.as_dict(),"argv":argv})
-                    if cr.status!="PASS":feedback=clip_output(cr.output+"\n"+cr.stderr,4000);break
-            ok=(r.status=="PASS" and all(c["status"]=="PASS" for c in checks))
-            if ok and node.get("role")=="judge":
-                verdict_info.update(parse_verdict(r.output))
-                if verdict_info["verdict"]=="INVALID":ok=False;feedback="Judge output has no VERDICT line"
-                elif verdict_info["verdict"]=="REJECT":ok=False;feedback=format_findings(verdict_info["findings"])
-            changed=_changed(before,snapshot(work))
+            node_wt=False
+            node_branch=""
+            keep_branch=False
             try:
-                for rel in changed:
-                    check_role_write(node.get("role"),rel)
-                    check_write(work,rel,node.get("write_allowlist",[]))
-                if kind=="gate" and changed:raise EgoError("GATE_WRITE","A gate may not modify source")
-            except EgoError as exc:
-                ok=False;feedback=str(exc)
-            record={"attempt":iteration,"host":chosen_host,"model":chosen_model or "native-default",
-                    "effort":chosen_effort or "auto",
-                    "status":"PASS" if ok else "FAIL",
-                    # The record keeps bounded evidence, not up to 1 MB of raw output per attempt.
-                    "execution":{**r.as_dict(),"output":clip_output(r.output,20000),"stderr":clip_output(r.stderr,8000)},
-                    "checks":[{**c,"output":clip_output(c.get("output",""),8000),"stderr":clip_output(c.get("stderr",""),8000)} for c in checks],
-                    "changed":changed,"feedback":feedback}
-            edits={}
-            if ok:
-                for rel in changed:
-                    path=safe_path(work,rel)
-                    edits[rel]=path.read_bytes() if path.exists() else None
-            progress.emit("attempt_finished",node=node["id"],attempt=iteration,host=chosen_host,model=record["model"],
-                          status=record["status"],checks=[{"argv":c["argv"],"status":c["status"]} for c in checks],
-                          feedback=clip_output(feedback or "",800),changed=changed[:20],
-                          tokens=tokens_of(r.usage or {}),segments=getattr(r,"segments",1),rotations=getattr(r,"rotations",0))
-            return {"ok":ok,"record":record,"edits":edits,"output":r.output,"execution_status":r.status}
+                with _STAGING_LOCK:
+                    if use_worktree:
+                        base_commit=git_head(staging)
+                        cand_branch=f"ego-node-{run_id}-{node['id']}-{iteration}-{uuid.uuid4().hex[:6]}"
+                        if base_commit and git_worktree_add(staging,work,commit_or_branch=base_commit,new_branch=cand_branch):
+                            copy_worktree_extras(staging,work)
+                            node_wt=True
+                            node_branch=cand_branch
+                        else:
+                            simple_copy_tree(staging,work)
+                    else:
+                        simple_copy_tree(staging,work)
+                before=snapshot(work)
+                if kind in ("code","gate"):
+                    r=run_checked_command(node.get("argv") or node["checks"][0],work,timeout=timeout,allow=cfg.allow_commands)
+                    # A failing command's own output is the evidence; without it a retry or replan is blind.
+                    if r.status!="PASS":feedback=clip_output((r.output+"\n"+r.stderr).strip() or f"exit {r.exit_code}",4000)
+                else:
+                    if chosen_host!="mock" and not trust_cli:
+                        raise EgoError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
+                    alter_ctx = ""
+                    if chosen_host != "mock" and cfg.knowledge == "alter":
+                        from .session import alter_prompt_context
+                        node_query = " ".join(x for x in (str(node.get("intent") or "").strip(), str(node.get("prompt") or "").strip()) if x)
+                        alter_ctx = alter_prompt_context(project_root, node_query)
+                    prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff,
+                                             project_root=project_root,alter_rules=alter_rules,alter_context=alter_ctx)
+                    mcp_servers=list(node.get("mcp") or [])
+                    if cfg.knowledge=="alter" and "alter" not in mcp_servers:
+                        mcp_servers.append("alter")
+                    # `ego apply` no longer writes the managed block, so the worker's private copy gets it for its session.
+                    with overlaid(work,chosen_host,cfg):
+                        try:
+                            r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,project_root=project_root,threshold=cfg.clear_suggest_tokens,
+                                         segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
+                                         on_event=lambda **f:progress.emit("worker_segment",node=node["id"],attempt=iteration,**f),
+                                         model=chosen_model,effort=chosen_effort,
+                                         read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
+                                         max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
+                                         lean=cfg.worker_context=="lean",mcp_servers=mcp_servers or None,max_budget_usd=budget_usd)
+                        except EgoError as exc:
+                            if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
+                                raise
+                            from ..adapters.runner import RunResult
+                            r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model,effort=chosen_effort)
+                checks=[]
+                if r.status=="PASS":
+                    for argv in node.get("checks",[]):
+                        cr=run_checked_command(argv,work,timeout=min(timeout,120),allow=cfg.allow_commands)
+                        checks.append({**cr.as_dict(),"argv":argv})
+                        if cr.status!="PASS":feedback=clip_output(cr.output+"\n"+cr.stderr,4000);break
+                ok=(r.status=="PASS" and all(c["status"]=="PASS" for c in checks))
+                if ok and node.get("role")=="judge":
+                    verdict_info.update(parse_verdict(r.output))
+                    if verdict_info["verdict"]=="INVALID":ok=False;feedback="Judge output has no VERDICT line"
+                    elif verdict_info["verdict"]=="REJECT":ok=False;feedback=format_findings(verdict_info["findings"])
+                changed=_changed(before,snapshot(work))
+                try:
+                    for rel in changed:
+                        check_role_write(node.get("role"),rel)
+                        check_write(work,rel,node.get("write_allowlist",[]))
+                    if kind=="gate" and changed:raise EgoError("GATE_WRITE","A gate may not modify source")
+                except EgoError as exc:
+                    ok=False;feedback=str(exc)
+                record={"attempt":iteration,"host":chosen_host,"model":chosen_model or "native-default",
+                        "effort":chosen_effort or "auto",
+                        "status":"PASS" if ok else "FAIL",
+                        # The record keeps bounded evidence, not up to 1 MB of raw output per attempt.
+                        "execution":{**r.as_dict(),"output":clip_output(r.output,20000),"stderr":clip_output(r.stderr,8000)},
+                        "checks":[{**c,"output":clip_output(c.get("output",""),8000),"stderr":clip_output(c.get("stderr",""),8000)} for c in checks],
+                        "changed":changed,"feedback":feedback}
+                edits={}
+                if ok:
+                    for rel in changed:
+                        path=safe_path(work,rel)
+                        edits[rel]=path.read_bytes() if path.exists() else None
+                if ok and node_wt and changed and strategy!="compare":
+                    with _STAGING_LOCK:
+                        keep_branch=git_commit_paths(work,changed,f"ego node {node['id']} attempt {iteration}")
+                progress.emit("attempt_finished",node=node["id"],attempt=iteration,host=chosen_host,model=record["model"],
+                              status=record["status"],checks=[{"argv":c["argv"],"status":c["status"]} for c in checks],
+                              feedback=clip_output(feedback or "",800),changed=changed[:20],
+                              tokens=tokens_of(r.usage or {}),segments=getattr(r,"segments",1),rotations=getattr(r,"rotations",0))
+                return {"ok":ok,"record":record,"edits":edits,"output":r.output,"execution_status":r.status,
+                        "branch":node_branch if keep_branch else None}
+            finally:
+                if node_wt:
+                    with _STAGING_LOCK:
+                        git_worktree_remove(staging,work,force=True)
+                        if not keep_branch and node_branch:
+                            git_branch_delete(staging,node_branch,force=True)
 
     if strategy=="compare":
         results=[]
@@ -250,14 +274,14 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 "review_required":True,"output":"Compare finished; no candidate automatically selected"}
 
     route_pos=0
-    success=False;edits={};last_output=""
+    success=False;edits={};last_output="";winning_branch=None
     for iteration in range(1,max_attempts+len(routes)+1):
         chosen=routes[route_pos] if routes else None
         r=attempt_one(chosen.host if chosen else "local",chosen.model if chosen else None,chosen.effort if chosen else None,iteration)
         attempts.append(r["record"])
         last_output=r["output"]
         if r["ok"]:
-            success=True;edits=r["edits"];break
+            success=True;edits=r["edits"];winning_branch=r.get("branch");break
         if strategy=="fallback" and r["execution_status"] in fallback_on and route_pos<len(routes)-1:
             route_pos+=1
             feedback="Previous host was unavailable; start from the original task state."
@@ -269,7 +293,8 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             break
         feedback=r["record"].get("feedback") or r["record"]["execution"].get("stderr") or "Verification failed"
     out={"id":node["id"],"status":"PASSED" if success else "FAILED", "attempts":attempts,
-         "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":clip_output(last_output,20000)}
+         "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":clip_output(last_output,20000),
+         "branch":winning_branch}
     if verdict_info:out["verdict"]=verdict_info["verdict"];out["findings"]=verdict_info["findings"]
     return out
 
@@ -371,7 +396,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         seed_dir=root/".ego"/"state"/"runs"/seed_from/"staging"
         seed_record=read_json(seed_dir.parent/"record.json")
         if not seed_dir.is_dir() or not seed_record:raise EgoError("SEED_MISSING",f"No staging for run {seed_from}",3)
-        use_worktree=False
+        use_worktree = use_worktree and bool(seed_record.get("worktree")) and git_is_repo(seed_dir)
     should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
     nodes=validate_task(spec, limits=cfg.plan_schema_limits())
     if apply and not approve:raise EgoError("APPROVAL_REQUIRED", "--apply requires --approve")
@@ -411,17 +436,18 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             worktree_created = False
             if use_worktree and is_git:
                 branch_name = f"ego-task-{run_id}"
+                commit_ref = (git_head(seed_dir) if seed_dir else None) or "HEAD"
                 staging.parent.mkdir(parents=True, exist_ok=True)
-                if git_worktree_add(root, staging, commit_or_branch="HEAD", new_branch=branch_name):
+                if git_worktree_add(root, staging, commit_or_branch=commit_ref, new_branch=branch_name):
                     worktree_created = True
-                    copy_ignored_files(root, staging)
+                    copy_worktree_extras(seed_dir if seed_dir else root, staging)
                     # File knowledge may be untracked/uncommitted, so a checkout alone can miss it.
                     kdir = root / ".ego" / "knowledge"
                     if kdir.is_dir():
                         shutil.copytree(kdir, staging / ".ego" / "knowledge", dirs_exist_ok=True, symlinks=False)
                 else:
                     staging.mkdir(parents=True, exist_ok=True)
-                    simple_copy_tree(root, staging)
+                    simple_copy_tree(seed_dir or root, staging)
             else:
                 staging.mkdir(parents=True)
                 simple_copy_tree(seed_dir or root,staging)
@@ -481,51 +507,90 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         pending={n["id"]:n for n in nodes if record["node_status"].get(n["id"])!="PASSED"}
         failed=[]
         retries=record.setdefault("judge_retries",{})
-        while pending:
-            if (runroot/"cancel.flag").exists():
-                record["final_status"]="CANCELLED";break
-            if time.monotonic()-start>cfg.timeout_seconds*len(nodes):
-                record["final_status"]="TIMEOUT";break
-            remaining_budget=None
-            if budget_usd is not None:
-                remaining_budget=budget_usd-usage_summary(record)["cost_usd"]
-                if remaining_budget<=0:
-                    record["final_status"]="BUDGET_EXHAUSTED";break
-            ready=[n for n in pending.values() if all(record["node_status"].get(dep)=="PASSED" for dep in n.get("depends_on",[]))]
-            if not ready:
-                record["final_status"]="FAILED" if failed else "BLOCKED_DEPENDENCY";break
-            wave=ready[:cfg.max_parallel]
-            for n in wave:
-                record["node_status"][n["id"]]="RUNNING"
-                progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
-            write_json(record_path,record)
-            edit_owners={}
-            # Prompt-only knowledge hint; record['spec'] stays the user's spec so resume comparisons are unchanged.
-            prompt_spec=({**spec,'knowledge':cfg.knowledge} if 'knowledge' not in spec else spec)
-            with ThreadPoolExecutor(max_workers=len(wave)) as pool:
-                futures={pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),feedback=feedbacks.pop(n['id'],''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,handoff=handoff,budget_usd=remaining_budget,progress=progress,project_root=root,alter_rules=alter_rules):n["id"] for n in wave}
+        # Prompt-only knowledge hint; record['spec'] stays the user's spec so resume comparisons are unchanged.
+        prompt_spec=({**spec,'knowledge':cfg.knowledge} if 'knowledge' not in spec else spec)
+        max_workers=max(1,cfg.max_parallel)
+        in_flight:dict={}
+        running_ids:set[str]=set()
+        staging_seq=0
+        version_by_path:dict[str,tuple[int,str]]={}
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            while pending or in_flight:
+                if (runroot/"cancel.flag").exists():
+                    record["final_status"]="CANCELLED";break
+                if time.monotonic()-start>cfg.timeout_seconds*len(nodes):
+                    record["final_status"]="TIMEOUT";break
+                remaining_budget=None
+                if budget_usd is not None:
+                    remaining_budget=budget_usd-usage_summary(record)["cost_usd"]
+                    if remaining_budget<=0:
+                        record["final_status"]="BUDGET_EXHAUSTED";break
+                ready=[n for n in pending.values() if n["id"] not in running_ids and all(record["node_status"].get(dep)=="PASSED" for dep in n.get("depends_on",[]))]
+                if not ready and not in_flight:
+                    record["final_status"]="FAILED" if failed else "BLOCKED_DEPENDENCY";break
+                slots=max_workers-len(in_flight)
+                to_start=ready[:slots] if slots>0 else []
+                if to_start:
+                    for n in to_start:
+                        record["node_status"][n["id"]]="RUNNING"
+                        running_ids.add(n["id"])
+                        progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
+                    write_json(record_path,record)
+                    for n in to_start:
+                        nid=n["id"]
+                        fut=pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),
+                                        feedback=feedbacks.pop(nid,''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,
+                                        handoff=handoff,budget_usd=remaining_budget,progress=progress,project_root=root,
+                                        alter_rules=alter_rules,use_worktree=bool(record.get("worktree")),run_id=run_id)
+                        in_flight[fut]=(nid,staging_seq)
+                done,_=wait(in_flight.keys(),return_when=FIRST_COMPLETED)
                 # Each node is persisted as soon as it finishes: a crash or cancel loses only the unfinished nodes.
-                for fut in as_completed(futures):
+                for fut in done:
+                    nid,start_seq=in_flight.pop(fut)
+                    running_ids.discard(nid)
                     result=fut.result()
                     identifier=result["id"]
-                    # Two nodes may not write the same relative path.
-                    for rel in result["edits"]:
-                        if rel in edit_owners:
-                            record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
-                            managed_checkpoint(root,record,state="BLOCKED",task_file=record.get("task_file"))
-                            raise EgoError("MERGE_CONFLICT",f"{rel} edited by {identifier} and {edit_owners[rel]}")
-                        edit_owners[rel]=identifier
+                    if record.get("worktree"):
+                        branch=result.get("branch")
+                        if result["status"]=="PASSED" and branch:
+                            with _STAGING_LOCK:
+                                merged,merge_out=git_merge_branch(staging,branch,changed_paths=list(result["edits"].keys()),message=f"ego merge {identifier}")
+                                git_branch_delete(staging,branch,force=True)
+                            if not merged:
+                                for rem_fut in list(in_flight.keys()):
+                                    in_flight.pop(rem_fut)
+                                    try:
+                                        rem_res=rem_fut.result()
+                                        if rem_res.get("branch"):
+                                            with _STAGING_LOCK:
+                                                git_branch_delete(staging,rem_res["branch"],force=True)
+                                    except Exception:
+                                        pass
+                                record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
+                                managed_checkpoint(root,record,state="BLOCKED",task_file=record.get("task_file"))
+                                raise EgoError("MERGE_CONFLICT",f"Git merge conflict for {identifier}: {clip_output(merge_out,800)}")
+                            staging_seq+=1
+                    else:
+                        if result["status"]=="PASSED":
+                            for rel in result["edits"]:
+                                prev_seq,prev_owner=version_by_path.get(rel,(0,""))
+                                if prev_seq>start_seq:
+                                    record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
+                                    managed_checkpoint(root,record,state="BLOCKED",task_file=record.get("task_file"))
+                                    raise EgoError("MERGE_CONFLICT",f"{rel} edited by {identifier} and {prev_owner}")
+                            if result["edits"]:
+                                staging_seq+=1
+                                with _STAGING_LOCK:
+                                    for rel,data in result["edits"].items():
+                                        path=safe_path(staging,rel)
+                                        if data is None:
+                                            if path.exists():path.unlink()
+                                        else:atomic_bytes(path,data)
+                                        version_by_path[rel]=(staging_seq,identifier)
                     record["node_status"][identifier]=result["status"]
                     # No bytes in persisted JSON, only references to changed paths
                     record["results"][identifier]={k:v for k,v in result.items() if k!="edits"}
                     if result["status"]!="PASSED":failed.append(identifier)
-                    else:
-                        with _STAGING_LOCK:
-                            for rel,data in result["edits"].items():
-                                path=safe_path(staging,rel)
-                                if data is None:
-                                    if path.exists():path.unlink()
-                                else:atomic_bytes(path,data)
                     pending.pop(identifier)
                     # A rejection with evidence sends only the reviewed coder (and what the judge waits on) back.
                     if result.get("verdict")=="REJECT" and identifier in failed and retries.get(identifier,0)<amap[identifier].get("max_retries",1):
@@ -546,8 +611,8 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                     extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"))} if result.get("verdict") else {}
                     progress.emit("node_finished",node=identifier,status=result["status"],attempts=len(result["attempts"]),
                                   changed=sorted(result["edits"])[:20],checkpoint_revision=cp["revision"],**extra)
-            # A failure stops only its dependents: independent nodes still finish, so a
-            # corrected rerun (`--from`) carries them instead of running them for the first time.
+                # A failure stops only its dependents: independent nodes still finish, so a
+                # corrected rerun (`--from`) carries them instead of running them for the first time.
         if not pending and not failed:
             record["final_status"]="COMPARISON_READY" if any(v.get("review_required") for v in record["results"].values()) else "PASSED"
         elif failed and record["final_status"]=="RUNNING":
@@ -586,7 +651,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         ):
             git_worktree_remove(root, staging, force=True)
             # The staging branch is only a vehicle; drop it unless it holds unmerged commits.
-            record["branch_deleted"] = git_branch_delete(root, f"ego-task-{run_id}")
+            record["branch_deleted"] = git_branch_delete(root, f"ego-task-{run_id}", force=bool(record.get("applied")))
             record["worktree_cleaned"] = True
             write_json(record_path, record)
         milestone=("COMPLETED" if record["final_status"]=="PASSED" and record["applied"]
