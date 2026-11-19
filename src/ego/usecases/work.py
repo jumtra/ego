@@ -142,7 +142,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
               autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
               budget_usd: float|None=None, progress:Progress|None=None, project_root:Path,
               alter_rules:list[str]|None=None, use_worktree: bool = False, run_id: str = "run")->dict:
-    """A task node sees a private copy; fallback never reuses failed edits.
+    """A task node sees a private copy; a same-host retry continues from the previous attempt's allowed edits, fallback never reuses failed edits.
 
     Compare runs have their own isolated copies and never merge any candidate.
     """
@@ -158,7 +158,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     if node.get("role")=="judge":max_attempts=1  # one audit per run; the DAG decides about retries
     verdict_info={}
     outputs=[]
-    def attempt_one(chosen_host:str, chosen_model:str|None, chosen_effort:str|None, iteration:int) -> dict:
+    def attempt_one(chosen_host:str, chosen_model:str|None, chosen_effort:str|None, iteration:int, carry:dict|None=None) -> dict:
         nonlocal feedback
         with tempfile.TemporaryDirectory(prefix="ego-node-") as tmp:
             work=Path(tmp)/"src"
@@ -179,6 +179,12 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     else:
                         simple_copy_tree(staging,work)
                 before=snapshot(work)
+                # A retry continues from the previous attempt's edits; a fresh copy lets a partial fix pass without them.
+                for rel,data in (carry or {}).items():
+                    path=safe_path(work,rel)
+                    if data is None:
+                        if path.exists():path.unlink()
+                    else:atomic_bytes(path,data)
                 if kind in ("code","gate"):
                     r=run_checked_command(node.get("argv") or node["checks"][0],work,timeout=timeout,allow=cfg.allow_commands)
                     # A failing command's own output is the evidence; without it a retry or replan is blind.
@@ -223,13 +229,14 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     if verdict_info["verdict"]=="INVALID":ok=False;feedback="Judge output has no VERDICT line"
                     elif verdict_info["verdict"]=="REJECT":ok=False;feedback=format_findings(verdict_info["findings"])
                 changed=_changed(before,snapshot(work))
+                writes_ok=True
                 try:
                     for rel in changed:
                         check_role_write(node.get("role"),rel)
                         check_write(work,rel,node.get("write_allowlist",[]))
                     if kind=="gate" and changed:raise EgoError("GATE_WRITE","A gate may not modify source")
                 except EgoError as exc:
-                    ok=False;feedback=str(exc)
+                    ok=False;writes_ok=False;feedback=str(exc)
                 record={"attempt":iteration,"host":chosen_host,"model":chosen_model or "native-default",
                         "effort":chosen_effort or "auto",
                         "status":"PASS" if ok else "FAIL",
@@ -238,7 +245,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                         "checks":[{**c,"output":clip_output(c.get("output",""),8000),"stderr":clip_output(c.get("stderr",""),8000)} for c in checks],
                         "changed":changed,"feedback":feedback}
                 edits={}
-                if ok:
+                if writes_ok:
                     for rel in changed:
                         path=safe_path(work,rel)
                         edits[rel]=path.read_bytes() if path.exists() else None
@@ -270,16 +277,17 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 "review_required":True,"output":"Compare finished; no candidate automatically selected"}
 
     route_pos=0
-    success=False;edits={};last_output="";winning_branch=None
+    success=False;edits={};last_output="";winning_branch=None;carry={}
     for iteration in range(1,max_attempts+len(routes)+1):
         chosen=routes[route_pos] if routes else None
-        r=attempt_one(chosen.host if chosen else "local",chosen.model if chosen else None,chosen.effort if chosen else None,iteration)
+        r=attempt_one(chosen.host if chosen else "local",chosen.model if chosen else None,chosen.effort if chosen else None,iteration,carry)
         attempts.append(r["record"])
         last_output=r["output"]
         if r["ok"]:
             success=True;edits=r["edits"];winning_branch=r.get("branch");break
         if strategy=="fallback" and r["execution_status"] in fallback_on and route_pos<len(routes)-1:
             route_pos+=1
+            carry={}
             feedback="Previous host was unavailable; start from the original task state."
             continue
         # A task evaluation failure must not silently switch vendors.
@@ -287,6 +295,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             break
         if r["execution_status"] in ("UNAVAILABLE","TIMEOUT","RATE_LIMIT"):
             break
+        carry=r["edits"] if kind not in ("code","gate") else {}
         feedback=r["record"].get("feedback") or r["record"]["execution"].get("stderr") or "Verification failed"
     out={"id":node["id"],"status":"PASSED" if success else "FAILED", "attempts":attempts,
          "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":clip_output(last_output,20000),

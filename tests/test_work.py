@@ -889,6 +889,28 @@ def test_failing_check_feedback_reaches_the_retry_with_its_tail(tmp_path: Path, 
     assert len(prompts[1]) < 6000
 
 
+def test_retry_keeps_the_previous_attempts_edits(tmp_path: Path, monkeypatch):
+    # Arrange: the first attempt writes only the feature; the retry writes only what the check still misses.
+    writes = iter(["src/feature.py", "src/fix.py"])
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        rel = next(writes)
+        (cwd / rel).parent.mkdir(parents=True, exist_ok=True)
+        (cwd / rel).write_text("x")
+        return RunResult("PASS", "ok", "", 0, 0.0, host, cost_usd=0.01)
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    (tmp_path / "both_files_exist.py").write_text("import pathlib,sys\nsys.exit(0 if all(pathlib.Path(p).exists() for p in ('src/feature.py','src/fix.py')) else 1)\n")
+    both_files_exist = ["python3", "both_files_exist.py"]
+
+    # Act
+    result = execute(tmp_path, {"goal": "g", "nodes": [{"id": "impl", "kind": "agent", "prompt": "do it", "host": "claude", "write_allowlist": ["src/**"], "checks": [both_files_exist], "max_attempts": 2}]}, host="claude", trust_cli=True, apply=True, approve=True)
+
+    # Assert
+    assert result["final_status"] == "PASSED"
+    assert sorted(result["changed_files"]) == ["src/feature.py", "src/fix.py"]
+
+
 def test_usage_includes_prompt_cache_traffic():
     raw = json.dumps({"type": "result", "result": "ok", "total_cost_usd": 0.12, "num_turns": 7, "usage": {
         "input_tokens": 40, "output_tokens": 300, "cache_read_input_tokens": 52000, "cache_creation_input_tokens": 9000}})
