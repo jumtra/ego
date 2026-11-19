@@ -59,6 +59,8 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 5. ノードが終わるたびに、ほかのノードが実行中でも、ステージング済みファイル、`record.json`、run ID の下のチェックポイントを保存します。失敗した兄弟ノードがあっても、または process が落ちても、成功したノードは保存されたまま残ります。
 6. `--apply --approve` を指定すると、run の開始後にプロジェクト側の対象ファイルが変更されていないことを確認したうえで、変更ファイルをプロジェクトにコピーします（変更されていれば `STALE_BASE`）。
 
+**ステージングの保持。** ignored ファイルは、ファイルシステムが対応していれば copy-on-write の clone でコピーされ、実容量をほとんど使いません。最終更新から 3 日を過ぎたステージングと、合計 3GB を超えた分の古いステージングは自動で削除されます（実行中の run と最新のステージングは容量上限では削除しません）。`record.json` と progress は残ります。`--from` で引き継いだ元 run のステージングは、新しい run の作成直後に削除されます。ステージングが削除された run は resume・`--apply`・`--from` できません（`STAGING_MISSING` / `SEED_MISSING`）。
+
 ### `ego work run` / `ego work resume` のフラグ
 
 | フラグ | 意味 |

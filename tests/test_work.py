@@ -1609,6 +1609,25 @@ def _init_git_repo(repo: Path, files: dict[str, str]) -> None:
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
 
 
+def test_copy_worktree_extras_copies_ignored_files_independently(tmp_path: Path):
+    from ego.shared.util import copy_worktree_extras
+    src = tmp_path / "src"
+    src.mkdir()
+    _init_git_repo(src, {".gitignore": "node_modules/\n"})
+    (src / "node_modules" / "pkg").mkdir(parents=True)
+    (src / "node_modules" / "pkg" / "index.js").write_text("original")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+
+    copy_worktree_extras(src, dst)
+    copied = dst / "node_modules" / "pkg" / "index.js"
+    assert copied.read_text() == "original"
+
+    copied.write_text("changed")
+
+    assert (src / "node_modules" / "pkg" / "index.js").read_text() == "original"
+
+
 def test_node_runs_in_git_worktree_and_merges_non_overlapping_same_file_edits(tmp_path: Path):
     import subprocess
     from unittest.mock import patch
@@ -1721,6 +1740,9 @@ def test_seeded_run_preserves_git_worktree_across_from_rerun(tmp_path: Path, mon
     staging = tmp_path / ".ego" / "state" / "runs" / res2["run_id"] / "staging"
     assert (staging / "a.txt").read_text() == "from a\n"
     assert (staging / "b.txt").read_text() == "from b\n"
+    seed = tmp_path / ".ego" / "state" / "runs" / res1["run_id"]
+    assert not (seed / "staging").exists()
+    assert (seed / "record.json").exists()
 
 
 def test_dynamic_dag_scheduler_starts_dependent_node_before_slow_sibling_finishes(tmp_path: Path, monkeypatch):

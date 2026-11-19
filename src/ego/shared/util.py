@@ -1,8 +1,10 @@
 """Small trusted primitives shared by all subsystems."""
 from __future__ import annotations
 import contextlib
+import ctypes
 import datetime as dt
 import fnmatch
+import functools
 import hashlib
 import json
 import os
@@ -10,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -283,10 +286,32 @@ def snapshot(root: Path, excludes: tuple[str, ...] = (".git", ".ego/state", ".eg
     return result
 
 
+@functools.cache
+def _libsystem() -> ctypes.CDLL:
+    return ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+
+
+def _clone_file(src: str, dst: str) -> str:
+    """Clone copy-on-write where the filesystem allows, so staging copies share disk blocks with the project."""
+    try:
+        if sys.platform == "darwin":
+            if _libsystem().clonefile(os.fsencode(src), os.fsencode(dst), 0) == 0:
+                return dst
+        elif sys.platform.startswith("linux"):
+            import fcntl
+            with open(src, "rb") as s, open(dst, "wb") as d:
+                fcntl.ioctl(d.fileno(), 0x40049409, s.fileno())  # FICLONE
+            shutil.copystat(src, dst)
+            return dst
+    except OSError:
+        pass
+    return shutil.copy2(src, dst)
+
+
 def simple_copy_tree(src: Path, dst: Path) -> None:
     def ignore(path: str, names: list[str]) -> list[str]:
         return [x for x in names if x in {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache"} or (x == "state" and Path(path).name == ".ego") or (x == "artifacts" and Path(path).name == ".ego")]
-    shutil.copytree(src, dst, ignore=ignore, dirs_exist_ok=True, symlinks=False)
+    shutil.copytree(src, dst, ignore=ignore, dirs_exist_ok=True, symlinks=False, copy_function=_clone_file)
 
 
 # `git worktree add` checks out only tracked files, so gitignored project state (ego memory, host
@@ -322,10 +347,10 @@ def _copy_git_listed(root: Path, dst: Path, argv: list[str]) -> None:
             continue
         target = dst / rel.rstrip("/")
         if src.is_dir():
-            shutil.copytree(src, target, dirs_exist_ok=True, symlinks=False, ignore=_ignore)
+            shutil.copytree(src, target, dirs_exist_ok=True, symlinks=False, ignore=_ignore, copy_function=_clone_file)
         elif src.is_file():
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, target)
+            _clone_file(str(src), str(target))
 
 
 def copy_ignored_files(root: Path, dst: Path) -> None:
