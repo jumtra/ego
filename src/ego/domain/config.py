@@ -34,8 +34,6 @@ from .session_schema import (
 HOSTS = ("claude", "codex", "opencode", "agy")
 PROVIDERS = ("codegraph", "graphify", "none")
 KNOWLEDGE = ("file", "alter")  # where project knowledge (terms, glossary, decisions) lives
-POLICIES = ("strict", "relaxed")
-ROLE_NAMES = ("coder", "tester", "judge")
 VALID_EFFORTS = {"auto", "low", "medium", "high", "xhigh", "max"}
 EFFORT_ALIASES = {"middle": "medium"}
 MAX_ROLE_CANDIDATES = 8
@@ -117,10 +115,19 @@ class AlterAnalyzerEntrySpec(BaseModel):
     model: NonEmptyModelStr
 
 
+def _normalize_effort(v: Any) -> Any:
+    return EFFORT_ALIASES.get(v, v) if isinstance(v, str) else v
+
+
 class ModelTableSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     model: NonEmptyModelStr
     effort: EffortLiteral | None = None
+
+    @field_validator("effort", mode="before")
+    @classmethod
+    def _normalize_effort_field(cls, v: Any) -> Any:
+        return _normalize_effort(v)
 
 
 class RoleConfigSpec(BaseModel):
@@ -132,6 +139,11 @@ class RoleConfigSpec(BaseModel):
     codex: Any = None
     opencode: Any = None
     agy: Any = None
+
+    @field_validator("effort", mode="before")
+    @classmethod
+    def _normalize_effort_field(cls, v: Any) -> Any:
+        return _normalize_effort(v)
 
 
 PositiveInt = Annotated[int, Field(ge=1)]

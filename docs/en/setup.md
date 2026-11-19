@@ -119,11 +119,11 @@ ego apply --interactive --dry-run  # try different choices without writing
 |---|---|---|
 | `.ego/config.toml` | Project settings | always |
 | `.ego/ownership.json` | Hashes of the files ego owns, installed version | always |
-| `.ego/spec/skills/{work,harness-init}/` | Canonical skills (source for the host copies) | always |
+| `.ego/spec/skills/{work,work-plan,harness-init}/` | Canonical skills (source for the host copies) | always |
 | `.ego/spec/prompts/tool-guide.md` | Tool guidance | always |
 | `.ego/knowledge/index.md`, `.ego/knowledge/topics/*.md` | Project knowledge: an index and one file per topic. Created by `ego knowledge add`, not by `ego apply` | `knowledge = "file"`, on first write |
 | `CLAUDE.md` (existing content kept) | Managed block placed on top only while `ego run` is open (never persisted) | host `claude` |
-| `.claude/skills/`, `.claude/agents/`, `.claude/rules/` | `/work` and `/harness-init` skills, 4 agents, 2 rules | host `claude` |
+| `.claude/skills/`, `.claude/agents/`, `.claude/rules/` | `/work`, `/work-plan`, `/harness-init` skills, 4 agents, 2 rules | host `claude` |
 | `.claude/settings.json` | Hooks / status line | host `claude`, and any of: profile `full`, `auto_resume` (default on), `clear_suggest_tokens > 0`, `usage_switch_percent > 0` |
 | `.codex/hooks.json` | Hooks | host `codex`, and any of: `auto_resume` (default on), `clear_suggest_tokens > 0`, `usage_switch_percent > 0` |
 | `.agents/hooks.json` | Hooks | host `agy`, and `auto_resume` (default on), `clear_suggest_tokens > 0` or `knowledge = "alter"` |

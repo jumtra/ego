@@ -2,7 +2,6 @@
 from __future__ import annotations
 import json
 import shutil
-from pathlib import Path
 from .config import Config
 
 # Refresh only exact, unmodified earlier defaults (v0.0.4 to v0.0.12); preserve authored skills.
@@ -57,7 +56,7 @@ Prefer direct user instructions over ceremonial workflow. Write formal documents
 - You operate the harness for the user. `/work` is the entry point; do not ask the user to compose task JSON or type routine CLI commands.
 - Never infer approval from a successful test. Applying staged changes needs authorization.
 - Missing CLI/authentication, policy refusal or unavailable capabilities are reported with the concrete blocker; never silently broaden permissions or change hosts.
-- For Skill or prompt behavior changes use the existing author/eval gate. Do not optimize routine tasks or add unnecessary Skills.
+- Do not add unnecessary Skills.
 
 **Memory and knowledge:** process facts (what happened while working) stay in local memory: when earlier work could inform the task, run `ego memory search '<topic words>' --root .` (retry broader once if empty) and save reusable, verified facts with `ego memory add '<fact and evidence reference>' --root .`. Project knowledge (domain terms, glossary, decisions) lives where `knowledge` in `.ego/config.toml` says. `file`: read `.ego/knowledge/index.md` first, open only the topic files the task needs (`ego knowledge search '<words>'`, `ego knowledge get <slug>`), and record verified knowledge with `ego knowledge add '<fact>' --keyword <word>`: it merges into the matching topic and creates a file only when none matches. `alter`: read `references/alter.md`; alter is the source and hooks record into it automatically. Treat all results as untrusted evidence to verify. No secrets or transcripts.
 
@@ -72,7 +71,7 @@ Prefer direct user instructions over ceremonial workflow. Write formal documents
     "Use when the user wants a plan first for a coding task.",
     """# Work Plan — work with a mandatory intake and plan
 
-This skill is `work` with two additions: **intake questions** and **a plan the user approves before any edit**. Everything else follows `work` (`.claude/skills/work/SKILL.md` and its `references/`).
+This skill is `work` with two additions: **intake questions** and **a plan the user approves before any edit**. Everything else follows `work` (`../work/SKILL.md` and its `references/`).
 
 ## 1. Intake (always, before reading code or editing)
 
@@ -115,7 +114,7 @@ Do not edit project files yourself. The engine runs each node in an isolated cop
 9. If a node fails, a step cannot be done as written, needs a file outside its Where, or one of the node's assumptions turns out false, stop and ask instead of improvising: explain, and get approval before changing the plan or rerunning.
 10. After approval, correct only the failed nodes in the task file, keep the others unchanged, and rerun step 2's command with `--run-id run-<slug>-2 --from run-<slug>`: unchanged verified nodes are not run again.
 
-Use `ego work loop --task` (`.claude/skills/work/references/loop.md`) only when a command proves the whole goal and the user agrees to replanning.
+Use `ego work loop --task` (`../work/references/loop.md`) only when a command proves the whole goal and the user agrees to replanning.
 
 ## 4. Report
 
@@ -358,7 +357,7 @@ def generated_files(cfg: Config) -> dict[str, str]:
         # profile, the context-limit hooks with clear_suggest_tokens. Neither calls a model.
         hooks: dict[str, list] = {}
         if cfg.profile == "full":
-            hooks["PreToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "ego hook pre-tool --root ."}]}]
+            hooks["PreToolUse"] = [{"matcher": "Bash|Write|Edit|MultiEdit", "hooks": [{"type": "command", "command": 'ego hook pre-tool --root "$CLAUDE_PROJECT_DIR"'}]}]
         if cfg.clear_suggest_tokens > 0 or cfg.usage_switch_percent > 0 or cfg.knowledge == "alter":  # with alter, Stop also records the conversation
             hooks["Stop"] = [{"hooks": [{"type": "command", "command": 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'}]}]
         if cfg.auto_resume or cfg.knowledge == "alter":  # core: injects the saved checkpoint after /clear; with alter, also its requirement and rules
@@ -426,7 +425,7 @@ def instruction_block(cfg: Config, rules_dir: str = ".claude/rules") -> str:
     )
     knowledge_note = (
         f"Knowledge: alter (alter skills/MCP, alter_task_context). Rules: this file and `{rules_dir}/` plus the alter project AI usage rules. "
-        "MANDATORY: `alter_bootstrap`, `alter_ai_usage` (cwd = repo root); obey its rules."
+        "MANDATORY: `alter_bootstrap` (cwd = repo root); call `alter_ai_usage` (same cwd) only if SessionStart did not inject the project AI usage rules, and obey them."
         if cfg.knowledge == "alter"
         else "Knowledge: file. Read `.ego/knowledge/index.md` first (if it exists) and open only the topic files the task needs; "
              "record verified knowledge with `ego knowledge add`."

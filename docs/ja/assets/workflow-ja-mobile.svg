@@ -49,12 +49,12 @@
 <rect x="42" y="963" width="4" height="30" rx="2" fill="url(#accent)" stroke="none"/>
 <text x="60" y="988" font-size="24" fill="#f8fafc" font-weight="700">普段の作業は、もっと軽く。</text>
 <text x="44" y="1026" font-size="18" fill="#cbd5e1" font-weight="400">AI CLIで /work → 実装・テスト</text>
-<text x="44" y="1072" font-size="13" fill="#7dd3fc" font-weight="400">追加の最適化呼び出しなし</text>
+<text x="44" y="1072" font-size="13" fill="#7dd3fc" font-weight="400">追加のモデル呼び出しなし</text>
 <rect x="24" y="1110" width="512" height="146" rx="14" fill="#1c3047" stroke="#37516e"/>
 <rect x="42" y="1129" width="4" height="30" rx="2" fill="url(#accent)" stroke="none"/>
-<text x="60" y="1154" font-size="24" fill="#f8fafc" font-weight="700">開発手順も、育てられる。</text>
-<text x="44" y="1188" font-size="15" fill="#cbd5e1" font-weight="400">Skill・プロンプトの変更候補 → 評価・比較</text>
-<text x="44" y="1210" font-size="15" fill="#cbd5e1" font-weight="400">→ 承認して採用</text>
-<text x="44" y="1238" font-size="13" fill="#7dd3fc" font-weight="400">最適化は初期OFF · 自動で採用しない</text>
+<text x="60" y="1154" font-size="24" fill="#f8fafc" font-weight="700">計画してから、安全に進める。</text>
+<text x="44" y="1188" font-size="15" fill="#cbd5e1" font-weight="400">AI CLIで /work-plan → ノード計画</text>
+<text x="44" y="1210" font-size="15" fill="#cbd5e1" font-weight="400">→ 承認して管理実行</text>
+<text x="44" y="1238" font-size="13" fill="#7dd3fc" font-weight="400">または ego work loop · 回数制限・取り消し可</text>
 <text x="24" y="1298" font-size="12" fill="#9cb1ca" font-weight="400">Python以外のプロジェクトも対応 · ローカルメモリ · コード検索</text>
 </g></svg>

@@ -107,3 +107,13 @@ def test_missing_alter_config_is_unavailable(tmp_path, monkeypatch):
         AlterPlanClient(tmp_path)
 
     assert exc.value.code == "ALTER_UNAVAILABLE"
+
+
+def test_alter_plan_prefers_is_error_and_maps_409():
+    # Arrange
+    from ego.adapters import alter_plan
+
+    # Act / Assert: isError takes precedence over structuredContent
+    with pytest.raises(EgoError) as exc_err:
+        alter_plan._payload({"isError": True, "structuredContent": {"ok": True}, "content": [{"text": "409 conflict"}]})
+    assert exc_err.value.code == "ALTER_ERROR"

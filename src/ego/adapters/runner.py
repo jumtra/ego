@@ -8,8 +8,7 @@ import re
 import signal
 import subprocess
 import time
-from typing import Any
-from .hosts import build_command, capability
+from .hosts import build_command
 from ..shared.util import ALTER_ROOT_ENV, EgoError, elapsed, redact
 from ..domain.policy import check_command
 
@@ -55,6 +54,16 @@ def run_process(argv: list[str], cwd: Path, timeout: int, *, env: dict[str,str] 
         return 124, stdout[-1024*1024:], stderr[-256*1024:], elapsed(start)
 
 
+def _sum_tokens(usage: object) -> int | None:
+    if not isinstance(usage, dict):
+        return None
+    inp = usage.get("input_tokens")
+    out = usage.get("output_tokens")
+    if inp is None and out is None:
+        return None
+    return int((inp if isinstance(inp, (int, float)) else 0) + (out if isinstance(out, (int, float)) else 0))
+
+
 def parse_host_response(host: str, raw: str) -> tuple[str,int|None,float|None]:
     messages: list[str] = []
     tokens: int|None = None
@@ -68,14 +77,15 @@ def parse_host_response(host: str, raw: str) -> tuple[str,int|None,float|None]:
             val = obj.get("result", "")
             if isinstance(val, str): messages.append(val)
             if isinstance(obj.get("total_cost_usd"), (int,float)): cost = float(obj["total_cost_usd"])
-            usage = obj.get("usage")
-            if isinstance(usage, dict): tokens = int(usage.get("input_tokens",0) + usage.get("output_tokens",0))
+            tok = _sum_tokens(obj.get("usage"))
+            if tok is not None: tokens = tok
         if host == "codex" and obj.get("type") in ("item.completed", "turn.completed"):
             item = obj.get("item", {})
             if isinstance(item, dict) and item.get("type") == "agent_message": messages.append(str(item.get("text", "")))
             usage = obj.get("usage", {})
             if isinstance(usage, dict) and "input_tokens" in usage:
-                tokens = int(usage.get("input_tokens",0) + usage.get("output_tokens",0))
+                tok = _sum_tokens(usage)
+                if tok is not None: tokens = tok
         if host == "opencode" and obj.get("type") == "text":
             part = obj.get("part", {})
             if isinstance(part, dict): messages.append(str(part.get("text", "")))
@@ -83,14 +93,37 @@ def parse_host_response(host: str, raw: str) -> tuple[str,int|None,float|None]:
         if host == "agy" and isinstance(obj.get("response"), str):
             # One JSON object per print run: {"status","response","usage",...}.
             messages.append(obj["response"])
-            usage = obj.get("usage")
-            if isinstance(usage, dict): tokens = int(usage.get("input_tokens",0) + usage.get("output_tokens",0))
+            tok = _sum_tokens(obj.get("usage"))
+            if tok is not None: tokens = tok
     if not messages:
         try:
             obj = json.loads(raw)
-            if isinstance(obj,dict) and isinstance(obj.get("result"),str): messages = [obj["result"]]
+            if isinstance(obj,dict):
+                text = obj.get("result") if isinstance(obj.get("result"),str) else obj.get("response")
+                if isinstance(text,str): messages = [text]
+                if tokens is None: tokens = _sum_tokens(obj.get("usage"))
+                if cost is None and isinstance(obj.get("total_cost_usd"), (int,float)): cost = float(obj["total_cost_usd"])
         except ValueError: pass
     return ("\n".join(messages).strip() if messages else raw.strip()), tokens, cost
+
+
+def _extract_usage(obj: object, host: str) -> dict | None:
+    if not isinstance(obj, dict) or not isinstance(obj.get("usage"), dict): return None
+    if host == "claude" and obj.get("type") not in (None, "result"): return None
+    u = obj["usage"]
+    def num(*keys):
+        for k in keys:
+            if isinstance(u.get(k), (int, float)): return int(u[k])
+        return 0
+    found = {"input_tokens": num("input_tokens"), "output_tokens": num("output_tokens"),
+             "cache_read_tokens": num("cache_read_input_tokens", "cached_input_tokens", "cache_read_tokens"),
+             "cache_creation_tokens": num("cache_creation_input_tokens")}
+    if "cached_input_tokens" in u and "cache_read_input_tokens" not in u:
+        # OpenAI-style usage counts cached tokens inside input_tokens; keep the two
+        # disjoint (as Claude reports them) so a token total does not count them twice.
+        found["input_tokens"] = max(0, found["input_tokens"] - found["cache_read_tokens"])
+    if isinstance(obj.get("num_turns"), int): found["turns"] = obj["num_turns"]
+    return found
 
 
 def parse_host_usage(host: str, raw: str) -> dict | None:
@@ -99,21 +132,12 @@ def parse_host_usage(host: str, raw: str) -> dict | None:
     for line in raw.splitlines() or [raw]:
         try: obj = json.loads(line)
         except ValueError: continue
-        if not isinstance(obj, dict) or not isinstance(obj.get("usage"), dict): continue
-        if host == "claude" and obj.get("type") not in (None, "result"): continue
-        u = obj["usage"]
-        def num(*keys):
-            for k in keys:
-                if isinstance(u.get(k), (int, float)): return int(u[k])
-            return 0
-        found = {"input_tokens": num("input_tokens"), "output_tokens": num("output_tokens"),
-                 "cache_read_tokens": num("cache_read_input_tokens", "cached_input_tokens", "cache_read_tokens"),
-                 "cache_creation_tokens": num("cache_creation_input_tokens")}
-        if "cached_input_tokens" in u and "cache_read_input_tokens" not in u:
-            # OpenAI-style usage counts cached tokens inside input_tokens; keep the two
-            # disjoint (as Claude reports them) so a token total does not count them twice.
-            found["input_tokens"] = max(0, found["input_tokens"] - found["cache_read_tokens"])
-        if isinstance(obj.get("num_turns"), int): found["turns"] = obj["num_turns"]
+        extracted = _extract_usage(obj, host)
+        if extracted is not None:
+            found = extracted
+    if found is None:
+        try: found = _extract_usage(json.loads(raw), host)
+        except ValueError: pass
     return found
 
 
@@ -160,7 +184,7 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
     output,tokens,cost = parse_host_response(host,stdout)
     error_text = stderr.lower() + " " + output.lower()
     if host == "agy" and code == 0 and _agy_failed(stdout): code = 1
-    status = "PASS" if code == 0 else "TIMEOUT" if code == 124 else "RATE_LIMIT" if ("rate limit" in error_text or "429" in error_text) else "FAIL"
+    status = "PASS" if code == 0 else "TIMEOUT" if code == 124 else "RATE_LIMIT" if ("rate limit" in error_text or re.search(r"\b429\b", error_text)) else "FAIL"
     return RunResult(status, redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error", model=model or "native-default", effort=effort,
                      usage=parse_host_usage(host,stdout),
                      **dict(zip(("session_id","stop_reason"), parse_claude_session(stdout) if host == "claude" else (None, None))))

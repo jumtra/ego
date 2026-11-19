@@ -274,7 +274,7 @@ def test_status_shows_version_difference_and_apply_sets_the_clear_limit(tmp_path
     capsys.readouterr()
     assert load_config(root).clear_suggest_tokens == 90000
     hooks = json.loads((root / ".claude/settings.json").read_text())["hooks"]
-    assert set(hooks) == {"Stop", "SessionStart", "UserPromptSubmit"}  # memory = alter adds the prompt lookup
+    assert set(hooks) == {"Stop", "SessionStart", "UserPromptSubmit"}  # knowledge = alter adds the prompt lookup
     _age(root, "0.0.2")
     assert main(["status", "--root", str(root)]) == 0
     status = json.loads(capsys.readouterr().out)
@@ -499,7 +499,8 @@ def test_should_prompt_auto_conditions(monkeypatch):
         profile = None
         hosts = None
         graph = None
-        memory = None
+        knowledge = None
+        policy = None
         runtime = None
         detect_tests = False
     a = Args()
@@ -509,6 +510,9 @@ def test_should_prompt_auto_conditions(monkeypatch):
     a.hosts = "claude"
     assert should_prompt(a) is False
     a.hosts = None
+    a.policy = "strict"
+    assert should_prompt(a) is False
+    a.policy = None
     a.check = True
     assert should_prompt(a) is False
     a.check = False
@@ -1019,11 +1023,11 @@ def test_cli_root_after_action(project):
     assert json.loads(res.stdout)["text"]=="some note"
 
 
-def test_cli_fast_does_not_import_optimizer():
-    script="import sys; import ego.cli; print('ego.optimize' in sys.modules)"
-    env={**os.environ,"PYTHONPATH":str(Path(__file__).resolve().parents[1]/"src")}
-    r=subprocess.run([sys.executable,"-c",script],capture_output=True,text=True,env=env)
-    assert r.stdout.strip()=="False"
+def test_cli_fast_does_not_import_heavy_usecases():
+    script = "import sys; import ego.cli; print('ego.usecases.work' in sys.modules)"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    r = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env)
+    assert r.stdout.strip() == "False"
 
 
 def test_mock_and_claude_parsing():

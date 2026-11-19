@@ -4,7 +4,6 @@ import json
 import re
 import tomllib
 from pathlib import Path
-from ..shared.util import safe_path
 
 AGENT_DIRS = (
     (".claude/agents", "*.md"),
@@ -47,7 +46,7 @@ def discover_agents(root: Path) -> list[dict[str, str]]:
         base = root / rel_dir
         if base.is_dir():
             candidates.extend(sorted(p for p in base.glob(pattern) if p.is_file()))
-    for path in sorted(candidates, key=lambda p: (p.stem, str(p))):
+    for path in candidates:
         name = path.stem
         if name in found:
             continue
@@ -90,7 +89,7 @@ def detect(root:Path)->dict:
     if "swift" in languages:tests.append(["swift","test"])
     if "java" in languages:
         if (root/"pom.xml").exists():tests.append(["mvn","test"])
-        elif (root/"gradlew").exists():tests.append(["gradlew","test"])
+        elif (root/"gradlew").exists():tests.append(["./gradlew","test"])
         else:tests.append(["gradle","test"])
     if "ruby" in languages and (root/"Rakefile").exists():tests.append(["bundle","exec","rake","test"])
     if "php" in languages and (root/"vendor"/"bin"/"phpunit").exists():tests.append(["php","vendor/bin/phpunit"])

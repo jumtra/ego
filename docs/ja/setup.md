@@ -121,11 +121,11 @@ ego apply --interactive --dry-run  # 書き込まずに選択を試す
 |---|---|---|
 | `.ego/config.toml` | プロジェクト設定 | 常に |
 | `.ego/ownership.json` | ego が管理するファイルのハッシュ、導入済みバージョン | 常に |
-| `.ego/spec/skills/{work,harness-init}/` | 正本の skill（ホスト向けコピーの元） | 常に |
+| `.ego/spec/skills/{work,work-plan,harness-init}/` | 正本の skill（ホスト向けコピーの元） | 常に |
 | `.ego/spec/prompts/tool-guide.md` | ツールガイド | 常に |
 | `.ego/knowledge/index.md`、`.ego/knowledge/topics/*.md` | プロジェクトのナレッジ（index とトピックごとのファイル）。`ego apply` ではなく `ego knowledge add` が作成 | `knowledge = "file"` で、最初の書き込み時 |
 | `CLAUDE.md`（既存の内容は残す） | `ego run` の間だけ先頭に重ねる管理ブロック（永続化しない） | ホスト `claude` |
-| `.claude/skills/`、`.claude/agents/`、`.claude/rules/` | `/work` と `/harness-init` の skill、agent 4 種、rule 2 種 | ホスト `claude` |
+| `.claude/skills/`、`.claude/agents/`、`.claude/rules/` | `/work`・`/work-plan`・`/harness-init` の skill、agent 4 種、rule 2 種 | ホスト `claude` |
 | `.claude/settings.json` | フック / ステータスライン | ホスト `claude` かつ、Profile `full`、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
 | `.codex/hooks.json` | フック | ホスト `codex` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0`、`usage_switch_percent > 0` のいずれか |
 | `.agents/hooks.json` | フック | ホスト `agy` かつ、`auto_resume`（既定で有効）、`clear_suggest_tokens > 0` または `knowledge = "alter"` |

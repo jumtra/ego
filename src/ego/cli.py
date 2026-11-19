@@ -1,4 +1,4 @@
-"""CLI-first entrypoint. Optimization modules are never imported on the normal path."""
+"""CLI-first entrypoint."""
 from __future__ import annotations
 import argparse
 import difflib
@@ -8,7 +8,7 @@ from pathlib import Path
 import shutil
 import sys
 from . import __version__
-from .shared.util import EgoError, read_json, write_json, now
+from .shared.util import EgoError, read_json, write_json
 
 def _print(data):print(json.dumps(data,indent=2,ensure_ascii=False,default=str))
 def _root(args):return Path(getattr(args,"root", ".")).resolve()
@@ -179,19 +179,20 @@ def _cmd_uninstall(args):
     return 0
 
 def _cmd_init(args):
-    from .domain.config import Config, load_config
+    from .domain.config import load_config
     from .usecases.install import installation_plan,apply_install
-    cfg=load_config(_root(args))
+    root=_project_target(args)
+    cfg=load_config(root)
     if args.profile:cfg.profile=args.profile
-    if args.hosts:cfg.hosts=args.hosts.split(",")
+    if args.hosts:cfg.hosts=[h.strip() for h in args.hosts.split(",") if h.strip()]
     if args.graph:cfg.code_intelligence=args.graph
     if args.knowledge:cfg.knowledge=args.knowledge
     cfg.validate()
     from .adapters.detect import detect
-    detection=detect(_root(args))
+    detection=detect(root)
     if args.detect_tests and not cfg.tests:
         cfg.tests=detection["test_commands"]
-    result=apply_install(_root(args),cfg) if args.apply else installation_plan(_root(args),cfg)
+    result=apply_install(root,cfg) if args.apply else installation_plan(root,cfg)
     if not args.apply:result.pop("wanted",None)
     result["detection"]=detection
     _print(result);return 0
@@ -274,7 +275,7 @@ def _cmd_work(args):
         goal=args.goal or (task or {}).get("goal")
         if not goal:raise EgoError("INVALID_GOAL","--goal is required unless --task carries a goal",2)
         result=run_loop(root,goal,done_checks=checks,host=args.host,
-                        scope=args.scope.split(",") if args.scope else None,max_iterations=args.max_iterations,
+                        scope=[s.strip() for s in args.scope.split(",") if s.strip()] if args.scope else None,max_iterations=args.max_iterations,
                         max_budget_usd=args.max_budget_usd,max_wall_seconds=args.max_wall_seconds,
                         trust_cli=args.trust_cli,execute_planner=args.execute,apply=args.apply,approve=args.approve,
                         autonomy=args.autonomy,isolated=args.attest_external_sandbox,plan_first=args.plan_first,task=task)
@@ -288,7 +289,7 @@ def _cmd_work(args):
         _print(result);return 0
     if args.action=="plan":
         from .usecases.planner import plan_work
-        result=plan_work(root,args.goal,args.host,args.scope.split(",") if args.scope else None,execute=args.execute)
+        result=plan_work(root,args.goal,args.host,[s.strip() for s in args.scope.split(",") if s.strip()] if args.scope else None,execute=args.execute)
         if args.out:
             # The task file carries the planning cost, so a later `work run` reports the plan phase too.
             task=dict(result["task"])
@@ -340,12 +341,8 @@ def _cmd_memory(args):
     p=FileMemory(root)  # process memory (facts about the work itself) is always local; project knowledge is `ego knowledge`
     if args.action=="add":_print(p.add(args.text,tags=args.tags or [],evidence=args.evidence or []));return 0
     if args.action=="search":_print(p.search(args.query));return 0
-    if args.action=="list":
-        if not hasattr(p,"list"):raise EgoError("UNSUPPORTED","Memory provider does not support list")
-        _print(p.list());return 0
-    if args.action=="delete":
-        if not hasattr(p,"delete"):raise EgoError("UNSUPPORTED","Memory provider does not support delete")
-        _print({"deleted":p.delete(args.id)});return 0
+    if args.action=="list":_print(p.list());return 0
+    if args.action=="delete":_print({"deleted":p.delete(args.id)});return 0
 
 def _cmd_knowledge(args):
     """Project knowledge for `knowledge = "file"`: an index plus one file per topic. With alter the knowledge lives there."""
@@ -712,7 +709,7 @@ def build_parser()->argparse.ArgumentParser:
     r.add_argument("--goal",help="Defaults to the goal of --task")
     r.add_argument("--task",help="Approved task JSON run as the first iteration instead of a direct attempt or a new plan")
     r.add_argument("--done-check",action="append",required=True,help="Command that exits 0 when the goal holds; repeatable. A command line or a JSON argv array")
-    r.add_argument("--host",choices=["mock","claude","codex","opencode"],default="mock");r.add_argument("--scope")
+    r.add_argument("--host",choices=["mock","claude","codex","opencode","agy"],default="mock");r.add_argument("--scope")
     r.add_argument("--max-iterations",type=int,default=3);r.add_argument("--max-budget-usd",type=float);r.add_argument("--max-wall-seconds",type=int)
     r.add_argument("--execute",action="store_true",help="Allow the planning model call");r.add_argument("--trust-cli",action="store_true")
     r.add_argument("--plan-first",action="store_true",help="Call the planner before the first iteration instead of only after a failed direct attempt")
@@ -835,7 +832,12 @@ def main(argv:list[str]|None=None)->int:
         cut=args_list.index("--")
         passthrough=args_list[cut+1:]
         args_list=args_list[:cut]
-    if "--root" in args_list:
+    root_eq = next((i for i, a in enumerate(args_list) if a.startswith("--root=")), None)
+    if root_eq is not None:
+        item = [args_list.pop(root_eq)]
+        if args_list: args_list[1:1] = item
+        else: args_list.extend(item)
+    elif "--root" in args_list:
         idx=args_list.index("--root")
         if idx+1>=len(args_list):
             parser.error("--root requires a path")

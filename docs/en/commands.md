@@ -9,7 +9,7 @@
 - **Project root:** every command acts on the current directory unless `--root <path>` is given. `--root` may appear after the command or after a nested action (`ego work run --root /tmp/app ...`).
 - **Output:** JSON on stdout. Errors are JSON on stderr: `{"status": "ERROR", "reason_code": "...", "message": "..."}`.
 - **Dry run by default:** commands that write project files (`init`, `sync`) only preview unless `--apply` is given. `ego apply` asks for confirmation instead.
-- **Hosts:** `claude`, `codex`, `opencode`, `agy`, plus the offline `mock` host for runs and evaluations.
+- **Hosts:** `claude`, `codex`, `opencode`, `agy`, plus the offline `mock` host for runs.
 
 | Exit code | Meaning |
 |---|---|

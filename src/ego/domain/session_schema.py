@@ -41,7 +41,7 @@ def build_checkpoint_model(limits: SessionSchemaLimits = DEFAULT_SESSION_SCHEMA_
         model_config = ConfigDict(extra="allow")
 
         schema_version: Literal[1] = Field(description="Checkpoint format version")
-        task_id: Annotated[str, Field(pattern=r"^[a-zA-Z0-9_-]+$", max_length=64, description="Alphanumeric task ID")]
+        task_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", max_length=64, description="Alphanumeric task ID")]
         status: Literal["IN_PROGRESS", "VERIFIED", "COMPLETED", "BLOCKED"]
         kind: CheckpointKindLiteral = "ongoing"
         goal: Annotated[str, Field(min_length=1, max_length=limits.max_goal_chars, pattern=r"\S")]
@@ -58,9 +58,6 @@ def build_checkpoint_model(limits: SessionSchemaLimits = DEFAULT_SESSION_SCHEMA_
         run: Annotated[str, Field(max_length=64)] | None = None
 
     return _CheckpointSpec
-
-
-CheckpointSpec = build_checkpoint_model(DEFAULT_SESSION_SCHEMA_LIMITS)
 
 
 def validate_checkpoint_schema(record: dict, *, limits: SessionSchemaLimits | None = None) -> None:

@@ -450,3 +450,28 @@ def test_file_knowledge_without_mcp_points_at_the_index_only_when_it_exists(tmp_
     (tmp_path / ".ego" / "knowledge").mkdir(parents=True)
     (tmp_path / ".ego" / "knowledge" / "index.md").write_text("# Knowledge index\n")
     assert ".ego/knowledge/index.md" in build_task_prompt({"knowledge": "file"}, node, tmp_path)
+
+
+def test_check_write_allows_gitignore_and_github_but_blocks_git_and_env(tmp_path):
+    from ego.domain.policy import check_write
+    from ego.shared.util import EgoError
+
+    assert check_write(tmp_path, ".gitignore") == (tmp_path / ".gitignore").resolve()
+    assert check_write(tmp_path, ".github/workflows/ci.yml") == (tmp_path / ".github/workflows/ci.yml").resolve()
+    for blocked in (".git/config", ".env", ".env.local"):
+        with pytest.raises(EgoError):
+            check_write(tmp_path, blocked)
+
+
+def test_check_hook_payload_blocks_rm_fr_root_and_relaxed_rejects_non_dict_tool_input():
+    from ego.domain.policy import check_hook_payload
+
+    assert check_hook_payload("pre-tool", {"tool_name": "Bash", "tool_input": {"command": "rm -fr /"}})["decision"] == "deny"
+    assert check_hook_payload("pre-tool", {"tool_name": "Write", "tool_input": "not-a-dict"}, policy_mode="relaxed")["decision"] == "deny"
+
+
+def test_build_task_prompt_file_knowledge_with_github_mcp_has_no_alter_instruction(tmp_path):
+    node = {"id": "n1", "prompt": "Check PR", "mcp": ["github"]}
+    prompt = build_task_prompt({"knowledge": "file"}, node, tmp_path)
+    assert "alter_task_context" not in prompt
+    assert "from alter" not in prompt

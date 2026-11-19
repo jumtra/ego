@@ -1,8 +1,6 @@
 """Bounded DAG execution: file-level isolation, verified repairs, checkpoint/resume and opt-in apply."""
 from __future__ import annotations
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass
-import copy
 import json
 from pathlib import Path
 import shutil
@@ -11,7 +9,6 @@ import tempfile
 import threading
 import time
 import uuid
-from typing import Any
 from ..domain.config import load_config
 from ..domain.policy import check_write, check_role_write
 from ..adapters.runner import run_agent, run_checked_command
@@ -262,7 +259,6 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                             git_branch_delete(staging,node_branch,force=True)
 
     if strategy=="compare":
-        results=[]
         for route in routes:
             res=attempt_one(route.host,route.model,route.effort,1)
             attempts.append(res["record"])
@@ -523,70 +519,60 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         staging_seq=0
         version_by_path:dict[str,tuple[int,str]]={}
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            while pending or in_flight:
-                if (runroot/"cancel.flag").exists():
-                    record["final_status"]="CANCELLED";break
-                if time.monotonic()-start>cfg.timeout_seconds*len(nodes):
-                    record["final_status"]="TIMEOUT";break
-                remaining_budget=None
-                if budget_usd is not None:
-                    remaining_budget=budget_usd-usage_summary(record)["cost_usd"]
-                    if remaining_budget<=0:
-                        record["final_status"]="BUDGET_EXHAUSTED";break
-                ready=[n for n in pending.values() if n["id"] not in running_ids and all(record["node_status"].get(dep)=="PASSED" for dep in n.get("depends_on",[]))]
-                if not ready and not in_flight:
-                    record["final_status"]="FAILED" if failed else "BLOCKED_DEPENDENCY";break
-                slots=max_workers-len(in_flight)
-                to_start=ready[:slots] if slots>0 else []
-                if to_start:
-                    for n in to_start:
-                        record["node_status"][n["id"]]="RUNNING"
-                        running_ids.add(n["id"])
-                        progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
-                    write_json(record_path,record)
-                    for n in to_start:
-                        nid=n["id"]
-                        fut=pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),
-                                        feedback=feedbacks.pop(nid,''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,
-                                        handoff=handoff,budget_usd=remaining_budget,progress=progress,project_root=root,
-                                        alter_rules=alter_rules,use_worktree=bool(record.get("worktree")),run_id=run_id)
-                        in_flight[fut]=(nid,staging_seq)
-                done,_=wait(in_flight.keys(),return_when=FIRST_COMPLETED)
-                # Each node is persisted as soon as it finishes: a crash or cancel loses only the unfinished nodes.
-                for fut in done:
-                    nid,start_seq=in_flight.pop(fut)
-                    running_ids.discard(nid)
-                    result=fut.result()
-                    identifier=result["id"]
-                    if record.get("worktree"):
-                        branch=result.get("branch")
-                        if result["status"]=="PASSED" and branch:
-                            with _STAGING_LOCK:
-                                merged,merge_out=git_merge_branch(staging,branch,changed_paths=list(result["edits"].keys()),message=f"ego merge {identifier}")
-                                git_branch_delete(staging,branch,force=True)
-                            if not merged:
-                                for rem_fut in list(in_flight.keys()):
-                                    in_flight.pop(rem_fut)
-                                    try:
-                                        rem_res=rem_fut.result()
-                                        if rem_res.get("branch"):
-                                            with _STAGING_LOCK:
-                                                git_branch_delete(staging,rem_res["branch"],force=True)
-                                    except Exception:
-                                        pass
-                                record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
-                                managed_checkpoint(root,record,state="BLOCKED",task_file=record.get("task_file"))
-                                raise EgoError("MERGE_CONFLICT",f"Git merge conflict for {identifier}: {clip_output(merge_out,800)}")
-                            staging_seq+=1
-                    else:
+            try:
+                while pending or in_flight:
+                    if (runroot/"cancel.flag").exists():
+                        record["final_status"]="CANCELLED";break
+                    if time.monotonic()-start>cfg.timeout_seconds*len(nodes):
+                        record["final_status"]="TIMEOUT";break
+                    remaining_budget=None
+                    if budget_usd is not None:
+                        remaining_budget=budget_usd-usage_summary(record)["cost_usd"]
+                        if remaining_budget<=0:
+                            record["final_status"]="BUDGET_EXHAUSTED";break
+                    ready=[n for n in pending.values() if n["id"] not in running_ids and all(record["node_status"].get(dep)=="PASSED" for dep in n.get("depends_on",[]))]
+                    if not ready and not in_flight:
+                        record["final_status"]="FAILED" if failed else "BLOCKED_DEPENDENCY";break
+                    slots=max_workers-len(in_flight)
+                    to_start=ready[:slots] if slots>0 else []
+                    if to_start:
+                        for n in to_start:
+                            record["node_status"][n["id"]]="RUNNING"
+                            running_ids.add(n["id"])
+                            progress.emit("node_started",node=n["id"],kind=n.get("kind","agent"),role=n.get("role"))
+                        write_json(record_path,record)
+                        for n in to_start:
+                            nid=n["id"]
+                            fut=pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),
+                                            feedback=feedbacks.pop(nid,''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,
+                                            handoff=handoff,budget_usd=remaining_budget,progress=progress,project_root=root,
+                                            alter_rules=alter_rules,use_worktree=bool(record.get("worktree")),run_id=run_id)
+                            in_flight[fut]=(nid,staging_seq)
+                    done,_=wait(in_flight.keys(),return_when=FIRST_COMPLETED)
+                    # Each node is persisted as soon as it finishes: a crash or cancel loses only the unfinished nodes.
+                    for fut in done:
+                        nid,start_seq=in_flight.pop(fut)
+                        running_ids.discard(nid)
+                        result=fut.result()
+                        identifier=result["id"]
                         if result["status"]=="PASSED":
-                            for rel in result["edits"]:
-                                prev_seq,prev_owner=version_by_path.get(rel,(0,""))
-                                if prev_seq>start_seq:
+                            branch=result.get("branch") if record.get("worktree") else None
+                            if branch:
+                                with _STAGING_LOCK:
+                                    merged,merge_out=git_merge_branch(staging,branch,changed_paths=list(result["edits"].keys()),message=f"ego merge {identifier}")
+                                    git_branch_delete(staging,branch,force=True)
+                                if not merged:
                                     record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
                                     managed_checkpoint(root,record,state="BLOCKED",task_file=record.get("task_file"))
-                                    raise EgoError("MERGE_CONFLICT",f"{rel} edited by {identifier} and {prev_owner}")
-                            if result["edits"]:
+                                    raise EgoError("MERGE_CONFLICT",f"Git merge conflict for {identifier}: {clip_output(merge_out,800)}")
+                                staging_seq+=1
+                            elif result["edits"]:
+                                for rel in result["edits"]:
+                                    prev_seq,prev_owner=version_by_path.get(rel,(0,""))
+                                    if prev_seq>start_seq:
+                                        record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
+                                        managed_checkpoint(root,record,state="BLOCKED",task_file=record.get("task_file"))
+                                        raise EgoError("MERGE_CONFLICT",f"{rel} edited by {identifier} and {prev_owner}")
                                 staging_seq+=1
                                 with _STAGING_LOCK:
                                     for rel,data in result["edits"].items():
@@ -595,32 +581,42 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                                             if path.exists():path.unlink()
                                         else:atomic_bytes(path,data)
                                         version_by_path[rel]=(staging_seq,identifier)
-                    record["node_status"][identifier]=result["status"]
-                    # No bytes in persisted JSON, only references to changed paths
-                    record["results"][identifier]={k:v for k,v in result.items() if k!="edits"}
-                    if result["status"]!="PASSED":failed.append(identifier)
-                    pending.pop(identifier)
-                    # A rejection with evidence sends only the reviewed coder (and what the judge waits on) back.
-                    if result.get("verdict")=="REJECT" and identifier in failed and retries.get(identifier,0)<amap[identifier].get("max_retries",1):
-                        jnode=amap[identifier]
-                        failed.remove(identifier)
-                        retries[identifier]=retries.get(identifier,0)+1
-                        progress.emit("judge_retry",judge=identifier,reviews=jnode["reviews"],retry=retries[identifier])
-                        feedbacks[jnode["reviews"]]=format_findings(result["findings"])
-                        for rid in _between(amap,jnode["reviews"],identifier):
-                            record["node_status"].pop(rid,None)
-                            pending[rid]=amap[rid]
-                    # Persist this node now: staging, record.json and the handoff checkpoint.
-                    with _STAGING_LOCK:
-                        record["changed_files"]=_changed(record["base_snapshot"],snapshot(staging))
-                        record["usage"]=usage_summary(record)
-                        write_json(record_path,record)
-                        cp=managed_checkpoint(root,record,state="BLOCKED" if failed else "IN_PROGRESS",task_file=record.get("task_file"))
-                    extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"))} if result.get("verdict") else {}
-                    progress.emit("node_finished",node=identifier,status=result["status"],attempts=len(result["attempts"]),
-                                  changed=sorted(result["edits"])[:20],checkpoint_revision=cp["revision"],**extra)
-                # A failure stops only its dependents: independent nodes still finish, so a
-                # corrected rerun (`--from`) carries them instead of running them for the first time.
+                        record["node_status"][identifier]=result["status"]
+                        # No bytes in persisted JSON, only references to changed paths
+                        record["results"][identifier]={k:v for k,v in result.items() if k!="edits"}
+                        if result["status"]!="PASSED":failed.append(identifier)
+                        pending.pop(identifier)
+                        # A rejection with evidence sends only the reviewed coder (and what the judge waits on) back.
+                        if result.get("verdict")=="REJECT" and identifier in failed and retries.get(identifier,0)<amap[identifier].get("max_retries",1):
+                            jnode=amap[identifier]
+                            failed.remove(identifier)
+                            retries[identifier]=retries.get(identifier,0)+1
+                            progress.emit("judge_retry",judge=identifier,reviews=jnode["reviews"],retry=retries[identifier])
+                            feedbacks[jnode["reviews"]]=format_findings(result["findings"])
+                            for rid in _between(amap,jnode["reviews"],identifier):
+                                record["node_status"].pop(rid,None)
+                                pending[rid]=amap[rid]
+                        # Persist this node now: staging, record.json and the handoff checkpoint.
+                        with _STAGING_LOCK:
+                            record["changed_files"]=_changed(record["base_snapshot"],snapshot(staging))
+                            record["usage"]=usage_summary(record)
+                            write_json(record_path,record)
+                            cp=managed_checkpoint(root,record,state="BLOCKED" if failed else "IN_PROGRESS",task_file=record.get("task_file"))
+                        extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"))} if result.get("verdict") else {}
+                        progress.emit("node_finished",node=identifier,status=result["status"],attempts=len(result["attempts"]),
+                                      changed=sorted(result["edits"])[:20],checkpoint_revision=cp["revision"],**extra)
+                    # A failure stops only its dependents: independent nodes still finish, so a
+                    # corrected rerun (`--from`) carries them instead of running them for the first time.
+            finally:
+                for rem_fut in list(in_flight.keys()):
+                    in_flight.pop(rem_fut)
+                    try:
+                        rem_res=rem_fut.result()
+                        if record.get("worktree") and rem_res.get("branch"):
+                            with _STAGING_LOCK:
+                                git_branch_delete(staging,rem_res["branch"],force=True)
+                    except Exception:
+                        pass
         if not pending and not failed:
             record["final_status"]="COMPARISON_READY" if any(v.get("review_required") for v in record["results"].values()) else "PASSED"
         elif failed and record["final_status"]=="RUNNING":
@@ -686,7 +682,7 @@ def _alter_reporter(root:Path,ref:dict,run_id:str,runroot:Path):
         elif event=="node_finished":
             failed=fields["status"]!="PASSED"
             nodes[node]={"status":fields["status"],"attempts":fields["attempts"],"failure":failures.get(node,"") if failed else ""}
-        elif event=="attempt_finished" and any(c["status"]!="PASSED" for c in fields.get("checks",[])):
+        elif event=="attempt_finished" and fields.get("status")!="PASS":
             failures[node]=clip_output(fields.get("feedback") or "",300)
         if event in ("run_started","node_started","node_finished","attempt_finished"):state="running"
         elif event=="run_finished":state="passed" if fields["final_status"]=="PASSED" else "failed"

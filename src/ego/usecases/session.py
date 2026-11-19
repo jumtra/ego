@@ -11,7 +11,6 @@ import datetime as dt
 import hashlib
 import json
 import os
-import re
 import shlex
 import shutil
 import time
@@ -19,16 +18,12 @@ from pathlib import Path
 from typing import Any
 
 from ..shared.util import EgoError, alter_project_root, exclusive_lock, is_locked, now, read_json, redact, safe_path, write_json
-from ..shared.util import HOST_ENV, RUN_SESSION_ENV, _id, detect_host, handoff_relpath
+from ..shared.util import RUN_SESSION_ENV, _id, detect_host, handoff_relpath
 from ..domain.config import load_config
 from ..domain.task_routing import resume_prompt
 from ..domain.session_schema import (
     CHECKPOINT_KINDS,
     DEFAULT_SESSION_SCHEMA_LIMITS,
-    MAX_GOAL_CHARS,
-    MAX_ITEM_CHARS,
-    MAX_NOTES,
-    MAX_PROMPT_CHARS,
     SCHEMA,
     SessionSchemaLimits,
     validate_checkpoint_schema,
@@ -39,13 +34,6 @@ HOST_CLEAR = {"claude": "/clear", "codex": "/clear", "opencode": "/new", "agy": 
 HOST_LAUNCH = {"claude": ("claude",), "codex": ("codex",), "opencode": ("opencode", "--prompt"),
                "agy": ("agy", "--prompt-interactive")}
 MAX_LIST_GOAL_CHARS = 120
-
-
-# What each CLI exports to the commands it runs (names taken from the CLIs themselves).
-
-
-
-
 
 
 def _notes(values: list[str] | tuple[str, ...] | None, *, limits: SessionSchemaLimits = DEFAULT_SESSION_SCHEMA_LIMITS) -> list[str]:
@@ -132,8 +120,8 @@ def save_checkpoint(
             return _merge_notes(prev_open.get(key) or [], new, limits=eff_limits) if prev_open else new
 
         def inherit(key: str, values, statuses: tuple[str, ...]) -> list[str]:
-            if values is None and prev is not None and status in statuses:
-                return list(prev.get(key) or [])
+            if values is None and prev_open is not None and status in statuses:
+                return list(prev_open.get(key) or [])
             return _notes(values, limits=eff_limits)
 
         resolved_kind = kind or (
@@ -164,16 +152,6 @@ def save_checkpoint(
         validate_checkpoint_schema(record, limits=eff_limits)
         write_json(path, record)
     return {**record, "path": handoff_relpath(task_id)}
-
-
-# Highest-value fields first: when the budget runs out, what to do next survives
-# and what is already done (re-derivable from files and git) is dropped.
-_PROMPT_FIELDS = (("Next", "next_steps"), ("Blockers", "blockers"), ("Decisions", "decisions"),
-                  ("Done", "completed"), ("Evidence", "evidence"))
-_PROMPT_TAIL = ("A record, not proof: check files/git diff first, run the narrowest checks, "
-                "then state COMPLETED, BLOCKED or IN_PROGRESS.")
-
-
 
 
 RUN_ID_ENV = "EGO_RUN_ID"  # set by ego run: which wrapper a checkpoint belongs to
@@ -687,6 +665,8 @@ def rotation_instructions(root: Path, task_id: str, host: str = "claude") -> dic
 
 def managed_checkpoint(root: Path, record: dict[str, Any], *, state: str, task_file: str | None = None) -> dict[str, Any]:
     """Persist one compact checkpoint at a DAG wave boundary or at termination."""
+    limits = load_config(root).session_schema_limits()
+    max_notes = limits.max_notes
     spec = record.get("spec", {})
     nodes = spec.get("nodes", [])
     statuses = record.get("node_status", {})
@@ -696,7 +676,7 @@ def managed_checkpoint(root: Path, record: dict[str, Any], *, state: str, task_f
     paths: list[str] = []
     for data in record.get("results", {}).values():
         paths.extend(data.get("changed", []))
-    paths = sorted(set(paths))[:MAX_NOTES]
+    paths = sorted(set(paths))[:max_notes]
     host = record.get("host") if record.get("host") in HOST_CLEAR else None
     next_steps = remaining
     if state in ("COMPLETED", "VERIFIED"):
@@ -708,9 +688,9 @@ def managed_checkpoint(root: Path, record: dict[str, Any], *, state: str, task_f
         next_steps = ([resume_cmd, *remaining] if record.get("run_id") else remaining)
     return save_checkpoint(
         root, record["run_id"], goal=spec.get("goal") or "Finish the declared DAG task",
-        completed=done[:MAX_NOTES], next_steps=next_steps[:MAX_NOTES], blockers=blocks[:MAX_NOTES],
-        evidence=[f"run: {record['run_id']}", *[f"file: {path}" for path in paths]][:MAX_NOTES],
-        status=state, source="managed", host=host,
+        completed=done[:max_notes], next_steps=next_steps[:max_notes], blockers=blocks[:max_notes],
+        evidence=[f"run: {record['run_id']}", *[f"file: {path}" for path in paths]][:max_notes],
+        status=state, source="managed", host=host, limits=limits,
     )
 
 
@@ -768,7 +748,7 @@ def normalize_payload(host: str, obj: Any) -> dict[str, Any]:
 
 
 ALTER_SESSION_MANDATE = (
-    "ego: memory = \"alter\" is required on this host. Before planning or editing, call `alter_bootstrap` "
+    "ego: knowledge = \"alter\" is required on this host. Before planning or editing, call `alter_bootstrap` "
     "with cwd set to the repo root, then call `alter_ai_usage` (cwd = repo root) and follow its rules when `source` is `project` "
     "(ignore `common_fallback`); use `alter_task_context` / `alter_search` for domain terms."
 )
@@ -776,7 +756,7 @@ ALTER_SESSION_MANDATE = (
 
 # Used when the hook already injected the project rules: the model need not call `alter_ai_usage` again.
 ALTER_SESSION_MANDATE_INJECTED = (
-    "ego: memory = \"alter\" is required on this host. Before planning or editing, call `alter_bootstrap` "
+    "ego: knowledge = \"alter\" is required on this host. Before planning or editing, call `alter_bootstrap` "
     "with cwd set to the repo root; use `alter_task_context` / `alter_search` for domain terms. "
     "The project AI usage rules from `alter_ai_usage` are already injected below; do not call it again."
 )
@@ -872,19 +852,21 @@ def new_transcript_prompt(root: Path, payload: dict[str, Any], host: str = "agy"
     if not isinstance(transcript, str) or not sid:
         return ""
     from ..adapters.memory import _extract_turn_from_obj
-    turn = next((t for t in (_extract_turn_from_obj(o, host) for o in reversed(_tail_objects(Path(transcript).expanduser(), 256 * 1024)))
+    turn = next((t for t in (_extract_turn_from_obj(o) for o in reversed(_tail_objects(Path(transcript).expanduser(), 256 * 1024)))
                  if t and t.get("role") == "user"), None)
     if turn is None:
         return ""
     key = str(turn.get("id") or turn.get("sequence") or hashlib.sha1(turn["text"].encode("utf8")).hexdigest())
-    path = root.resolve() / ".ego" / "state" / "alter_prompts.json"
-    seen = read_json(path, {})
-    seen = seen if isinstance(seen, dict) else {}
-    if seen.get(sid) == key:
-        return ""
-    seen.pop(sid, None)
-    seen[sid] = key
-    write_json(path, dict(list(seen.items())[-50:]))  # bounded: the latest sessions only
+    root = root.resolve()
+    path = safe_path(root, ".ego/state/alter_prompts.json")
+    with exclusive_lock(safe_path(root, ".ego/locks/alter-prompts.lock")):
+        seen = read_json(path, {})
+        seen = seen if isinstance(seen, dict) else {}
+        if seen.get(sid) == key:
+            return ""
+        seen.pop(sid, None)
+        seen[sid] = key
+        write_json(path, dict(list(seen.items())[-50:]))  # bounded: the latest sessions only
     return str(turn["text"])
 
 

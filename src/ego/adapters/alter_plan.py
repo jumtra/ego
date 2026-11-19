@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import shlex
 from pathlib import Path
-from ..shared.util import EgoError
-from ..domain.task_schema import MAX_PROMPT_CHARS as PROMPT_MAX, PlanSchemaLimits, validate_alter_plan_spec
+from ..shared.util import EgoError, alter_project_root
+from ..domain.task_schema import PlanSchemaLimits, validate_alter_plan_spec
 from .memory import MCPStdio, _alter_mcp_spec, ALTER_HOST_HINT
 
 NODE_EXTRA_KEYS=('kind','role','reviews','host','hosts','model','models','agent','mcp','max_retries','strategy','fallback_on','argv','outputs','notes','timeout_seconds')
@@ -31,11 +31,18 @@ def spec_to_task(spec: dict, plan_id: str, spec_hash: str, *, limits: PlanSchema
     if spec.get('done'): task['done']=spec['done']
     return task
 
+def _split_check(check: str) -> list[str]:
+    try:
+        return shlex.split(check)
+    except ValueError as exc:
+        raise EgoError('INVALID_SPEC', f'Invalid check command syntax: {exc}', 2) from exc
+
+
 def _spec_to_node(s: dict) -> dict:
     extra=s.get('extra',{})
     kind=extra.get('kind','agent')
     node={'id':s['node_id'],'kind':kind,'depends_on':list(s.get('depends_on',[])),'prompt':s.get('prompt',''),
-          'write_allowlist':s.get('where',[]),'checks':[shlex.split(c) for c in s.get('checks',[])]}
+          'write_allowlist':s.get('where',[]),'checks':[_split_check(c) for c in s.get('checks',[])]}
     if s.get('intent'): node['intent']=s['intent']
     if s.get('requirement'): node['requirement']=s['requirement']
     if s.get('steps'): node['steps']=s['steps']
@@ -48,9 +55,9 @@ def _spec_to_node(s: dict) -> dict:
 
 def _payload(result: dict) -> dict:
     if not isinstance(result, dict): return {}
-    if isinstance(result.get('structuredContent'), dict): return result['structuredContent']
     texts = [b.get('text', '') for b in result.get('content', []) if isinstance(b, dict) and b.get('type') == 'text']
     if result.get('isError'): raise EgoError('ALTER_ERROR', (texts[0] if texts else '')[:400], 5)
+    if isinstance(result.get('structuredContent'), dict): return result['structuredContent']
     for text in texts:
         if text.startswith('{'):
             try: return json.loads(text)
@@ -66,14 +73,19 @@ class AlterPlanClient:
         self.root = root
 
     def _call(self, name: str, args: dict) -> dict:
-        try: result = self.mcp.call_tool(name, args)
+        try:
+            result = self.mcp.call_tool(name, args)
+            return _payload(result)
         except EgoError as exc:
             if '409' in str(exc): raise EgoError('ALTER_PLAN_CONFLICT', str(exc), 5) from exc
             raise
-        return _payload(result)
 
     def scope(self) -> str:
-        return self._call('alter_bootstrap', {'cwd': str(self.root)})['scope']
+        payload = self._call('alter_bootstrap', {'cwd': str(alter_project_root(self.root).resolve())})
+        scope = payload.get('scope')
+        if not isinstance(scope, str) or not scope.strip():
+            raise EgoError('ALTER_ERROR', 'Missing scope from alter_bootstrap', 5)
+        return scope
 
     def create(self, spec: dict, scope: str) -> dict:
         return self._call('alter_ego_plan', {'action': 'create', 'scope': scope, **spec})

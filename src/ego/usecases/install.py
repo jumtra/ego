@@ -1,10 +1,8 @@
 """Non-destructive installation, diff planning, backup, ownership and rollback."""
 from __future__ import annotations
 from pathlib import Path
-import json
 import shutil
-import time
-from ..domain.config import Config, save_config, dump_config
+from ..domain.config import Config, dump_config
 from ..domain.templates import generated_files, MARK_BEGIN, MARK_END, LEGACY_SKILL_HASHES
 from .. import __version__
 from ..shared.util import EgoError, safe_path, filehash, sha256, read_json, write_json, atomic_text, ident, exclusive_lock, now
@@ -21,6 +19,8 @@ def _strip_block(text: str) -> str:
         raise EgoError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
     a = text.index(MARK_BEGIN)
     b = text.index(MARK_END) + len(MARK_END)
+    if a >= b:
+        raise EgoError("MANAGED_BLOCK_CONFLICT", "Ambiguous generated block")
     kept = (text[:a] + text[b:]).strip()
     return kept + "\n" if kept else ""
 
@@ -198,9 +198,13 @@ def register_quietly(root: Path) -> None:
 
 def unregister(root: Path) -> bool:
     key = str(root.resolve())
-    found = key in _load()
-    if found:
-        _mutate(lambda projects: projects.pop(key, None))
+    found = False
+
+    def _remove(projects: dict[str, dict[str, Any]]) -> None:
+        nonlocal found
+        found = projects.pop(key, None) is not None
+
+    _mutate(_remove)
     return found
 
 
@@ -221,12 +225,10 @@ def uninstall_project(root: Path) -> dict:
         p = safe_path(root, name)
         if p.exists():
             text = p.read_text(encoding="utf-8")
-            if MARK_BEGIN in text and MARK_END in text:
-                a = text.index(MARK_BEGIN)
-                b = text.index(MARK_END) + len(MARK_END)
-                cleaned = (text[:a] + text[b:]).strip()
+            if MARK_BEGIN in text or MARK_END in text:
+                cleaned = _strip_block(text)
                 if cleaned:
-                    atomic_text(p, cleaned + "\n")
+                    atomic_text(p, cleaned)
                     removed.append(f"{name} (cleaned)")
                 else:
                     p.unlink()

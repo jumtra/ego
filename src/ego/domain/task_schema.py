@@ -243,7 +243,7 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
                     raise ValueError(f"judge {n.id} is read-only: no write_allowlist")
                 if n.role == "tester" and any(not str(p).startswith("tests/") for p in (n.write_allowlist or [])):
                     raise ValueError(f"tester {n.id} may only write under tests/")
-                if n.kind != "gate" and n.role != "judge" and not n.write_allowlist:
+                if n.kind not in ("gate", "splitter") and n.role != "judge" and not n.write_allowlist:
                     raise ValueError(f"write_allowlist required for {n.id}")
                 if n.kind not in ("code", "gate"):
                     allow = n.write_allowlist or []
@@ -305,27 +305,7 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
 
 
 _DEFAULT_MODELS = build_task_schema_models(DEFAULT_PLAN_SCHEMA_LIMITS)
-NoteString = Annotated[
-    str,
-    Field(
-        min_length=1,
-        max_length=MAX_NOTE_CHARS,
-        pattern=r"\S",
-        description=f"Non-empty concise string (at most {MAX_NOTE_CHARS} characters)",
-    ),
-]
-NoteList = Annotated[
-    list[NoteString],
-    Field(
-        max_length=MAX_NOTE_ITEMS,
-        description=f"List of at most {MAX_NOTE_ITEMS} concise note strings",
-    ),
-]
-RequirementSpec = _DEFAULT_MODELS.RequirementSpec
 NodeSpec = _DEFAULT_MODELS.NodeSpec
-TaskSpec = _DEFAULT_MODELS.TaskSpec
-AlterPlanNodeSpec = _DEFAULT_MODELS.AlterPlanNodeSpec
-AlterPlanSpec = _DEFAULT_MODELS.AlterPlanSpec
 
 
 class AlterPushNodeSpec(BaseModel):
@@ -368,11 +348,11 @@ def _format_pydantic_error(err: ValidationError, prefix: str = "", limits: PlanS
     if "too_many_items" in err_type or err_type == "too_long":
         limit = ctx.get("max_length", limits.max_note_items)
         return f"{target} exceeds max items of {limit}; must be <= {limit} items"
+    if "string_too_short" in err_type:
+        return f"{target} must be a nonempty string"
     if "too_short" in err_type:
         limit = ctx.get("min_length", 1)
         return f"{target} requires at least {limit} items; must be at least {limit} items"
-    if "string_too_short" in err_type:
-        return f"{target} must be a nonempty string"
     if "string_pattern_mismatch" in err_type:
         return f"{target} format is invalid; must be valid pattern"
     if "missing" in err_type:
@@ -410,25 +390,6 @@ def validate_node_schema(node: dict, *, limits: PlanSchemaLimits | None = None) 
         models.NodeSpec.model_validate(node)
     except ValidationError as err:
         raise EgoError("INVALID_TASK", _format_pydantic_error(err, prefix=prefix, limits=resolved), 2) from err
-
-
-def validate_alter_plan_node(node: dict, *, limits: PlanSchemaLimits | None = None) -> None:
-    """Validate a single alter plan node dictionary via AlterPlanNodeSpec."""
-    if not isinstance(node, dict):
-        raise EgoError("INVALID_TASK", "Alter plan node must be an object", 2)
-    node_id = str(node.get("node_id", "node"))
-    resolved, models = _models_for(limits)
-    try:
-        models.AlterPlanNodeSpec.model_validate(node)
-    except ValidationError as err:
-        first = err.errors()[0]
-        if first.get("loc") == ("prompt",) and "string_too_long" in first.get("type", ""):
-            raise EgoError(
-                "INVALID_TASK",
-                f"prompt of {node_id} exceeds {resolved.max_prompt_chars} characters; shorten it and move detail into steps",
-                2,
-            ) from err
-        raise EgoError("INVALID_TASK", _format_pydantic_error(err, prefix=node_id, limits=resolved), 2) from err
 
 
 def validate_alter_plan_spec(spec: dict, *, limits: PlanSchemaLimits | None = None) -> None:

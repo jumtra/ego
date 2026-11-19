@@ -105,8 +105,11 @@ def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...], *, 
             mcp_servers = codex_cfg.get("mcp_servers")
             if isinstance(mcp_servers, dict):
                 for name, entry in mcp_servers.items():
-                    if isinstance(entry, dict) and entry.get("enabled") is not False:
-                        servers[name] = entry
+                    if isinstance(entry, dict):
+                        if entry.get("enabled") is False:
+                            servers.pop(name, None)
+                        else:
+                            servers[name] = entry
     elif host == "opencode":
         oc_paths = [
             Path.home() / ".config" / "opencode" / "config.json",
@@ -118,6 +121,9 @@ def select_mcp_servers(cwd: Path | None, names: list[str] | tuple[str, ...], *, 
             mcp_map = oc_cfg.get("mcp")
             if isinstance(mcp_map, dict):
                 for name, entry in mcp_map.items():
+                    if isinstance(entry, dict) and entry.get("enabled") is False:
+                        servers.pop(name, None)
+                        continue
                     norm = _normalize_opencode_mcp(entry)
                     if norm is not None:
                         servers[name] = norm

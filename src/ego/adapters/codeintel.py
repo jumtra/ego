@@ -3,15 +3,36 @@
 Advanced operations are NEVER described as graph results when only a text fallback ran.
 """
 from __future__ import annotations
+import os
 from pathlib import Path
 import json
 import re
 import shutil
-import subprocess
 from ..shared.util import EgoError
 from .runner import run_process
 
 PROVIDER_BINS={"codegraph":"codegraph","graphify":"graphify","none":None}
+_SKIP_DIRS = {".git", ".ego", "node_modules", ".venv", "__pycache__", "dist", "build", ".codegraph", "graphify-out"}
+_SOURCE_EXTS = {".py", ".js", ".ts", ".tsx", ".cs", ".go", ".rs", ".java", ".md", ".gd", ".json", ".toml"}
+
+
+def _iter_source_files(root: Path, max_files: int = 1200):
+    count = 0
+    for dirpath, dirs, filenames in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS and not (Path(dirpath) / d).is_symlink())
+        for name in sorted(filenames):
+            if count > max_files:
+                return
+            file = Path(dirpath) / name
+            if file.is_symlink() or file.suffix not in _SOURCE_EXTS:
+                continue
+            try:
+                if file.stat().st_size > 300000:
+                    continue
+            except OSError:
+                continue
+            count += 1
+            yield file
 
 
 def health(provider:str)->dict:
@@ -40,17 +61,13 @@ def _cli(provider:str,root:Path,argv:list[str],timeout:int=120)->dict:
 
 def text_fallback(root:Path,query:str,limit:int=30)->dict:
     if not query or len(query)>400:raise EgoError("BAD_QUERY",query,2)
-    results=[];count=0
+    results=[]
     root=root.resolve()
-    skip={".git",".ego","node_modules",".venv","__pycache__","dist","build",".codegraph","graphify-out"}
     needles=query.lower().split()
-    for file in root.rglob("*"):
-        if len(results)>=limit or count>1200:break
-        if any(x in skip for x in file.relative_to(root).parts) or not file.is_file() or file.is_symlink():continue
-        if file.suffix not in (".py",".js",".ts",".tsx",".cs",".go",".rs",".java",".md",".gd",".json",".toml") or file.stat().st_size>300000:continue
-        count+=1
+    for file in _iter_source_files(root):
+        if len(results)>=limit:break
         try:lines=file.read_text(encoding="utf-8").splitlines()
-        except UnicodeError:continue
+        except (OSError,UnicodeError):continue
         for i,line in enumerate(lines,1):
             if all(term in line.lower() for term in needles):
                 results.append({"path":file.relative_to(root).as_posix(),"line":i,"snippet":line.strip()[:240]})
@@ -72,22 +89,17 @@ def rank_files(root:Path,query:str,limit:int=8)->dict:
     """
     terms=[t for t in dict.fromkeys(re.findall(r"[a-z_][a-z0-9_]{2,}",query.lower())) if t not in _STOPWORDS][:12]
     root=root.resolve()
-    skip={".git",".ego","node_modules",".venv","__pycache__","dist","build",".codegraph","graphify-out"}
-    scored=[];count=0
-    for file in root.rglob("*"):
-        if not terms or count>1200:break
-        rel_parts=file.relative_to(root).parts
-        if any(x in skip for x in rel_parts) or not file.is_file() or file.is_symlink():continue
-        if file.suffix not in (".py",".js",".ts",".tsx",".cs",".go",".rs",".java",".md",".gd",".json",".toml") or file.stat().st_size>300000:continue
-        count+=1
-        try:text=file.read_text(encoding="utf-8")
-        except UnicodeError:continue
-        rel=file.relative_to(root).as_posix();lower=text.lower();path_lower=rel.lower()
-        hit=[t for t in terms if t in lower or t in path_lower]
-        if not hit:continue
-        score=len(hit)+sum(1 for t in hit if t in path_lower)
-        anchor=next(((i,line.strip()[:160]) for i,line in enumerate(text.splitlines(),1) if any(t in line.lower() for t in hit)),(1,""))
-        scored.append((score,rel,anchor,hit))
+    scored=[]
+    if terms:
+        for file in _iter_source_files(root):
+            try:text=file.read_text(encoding="utf-8")
+            except (OSError,UnicodeError):continue
+            rel=file.relative_to(root).as_posix();lower=text.lower();path_lower=rel.lower()
+            hit=[t for t in terms if t in lower or t in path_lower]
+            if not hit:continue
+            score=len(hit)+sum(1 for t in hit if t in path_lower)
+            anchor=next(((i,line.strip()[:160]) for i,line in enumerate(text.splitlines(),1) if any(t in line.lower() for t in hit)),(1,""))
+            scored.append((score,rel,anchor,hit))
     scored.sort(key=lambda x:(-x[0],x[1]))
     return {"strategy":"local_term_rank","supported":True,"truncated":len(scored)>limit,
             "matches":[{"path":rel,"line":a[0],"snippet":a[1],"terms":hit} for _,rel,a,hit in scored[:limit]]}
@@ -117,6 +129,8 @@ def index(root:Path,provider:str,execute:bool=False)->dict:
 
 
 def impact(root:Path,symbol_name:str,provider:str)->dict:
+    if provider not in PROVIDER_BINS:raise EgoError("UNKNOWN_CODE_PROVIDER",provider,2)
+    if not re.fullmatch(r"[A-Za-z_][\w.]{0,120}",symbol_name):raise EgoError("BAD_SYMBOL",symbol_name,2)
     if provider=="codegraph" and shutil.which("codegraph"):
         return _cli(provider,root,["impact",symbol_name,"--json"])
     if provider=="graphify" and shutil.which("graphify"):
@@ -125,6 +139,7 @@ def impact(root:Path,symbol_name:str,provider:str)->dict:
 
 
 def affected_tests(root:Path,files:list[str],provider:str)->dict:
+    if provider not in PROVIDER_BINS:raise EgoError("UNKNOWN_CODE_PROVIDER",provider,2)
     if provider=="codegraph" and shutil.which("codegraph"):
         from ..shared.util import safe_path
         for rel in files:safe_path(root,rel)

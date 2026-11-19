@@ -21,8 +21,26 @@ def should_prompt(args) -> bool:
     if args.non_interactive or args.dry_run or args.check:
         return False
     # Explicit selections are a complete non-interactive invocation by default.
-    if any(getattr(args, key, None) is not None for key in
-           ("profile", "hosts", "graph", "knowledge", "runtime")) or args.detect_tests:
+    if (
+        any(
+            getattr(args, key, None) is not None
+            for key in (
+                "profile",
+                "hosts",
+                "graph",
+                "knowledge",
+                "runtime",
+                "policy",
+                "models",
+                "roles",
+                "plan_schema",
+                "session_schema",
+                "clear_suggest_tokens",
+            )
+        )
+        or args.detect_tests
+        or getattr(args, "install_alter_skills", False)
+    ):
         return False
     return sys.stdin.isatty() and sys.stdout.isatty()
 

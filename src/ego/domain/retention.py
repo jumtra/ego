@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..shared.util import EgoError, exclusive_lock, read_json, write_json
+from ..shared.util import EgoError, atomic_text, exclusive_lock, read_json, write_json
 
 RUNS_KEEP = 30               # run directories (including their staging copies)
 STAGING_MAX_AGE_DAYS = 3     # staging copies not updated for this long are removed
@@ -73,12 +73,18 @@ def _prune_runs(root: Path) -> int:
         record = read_json(runroot / "record.json", {})
         if not isinstance(record, dict) or record.get("final_status") in (None, "RUNNING"):
             continue  # unfinished or unreadable: may still be resumed
-        try:
-            with exclusive_lock(root / ".ego" / "locks" / (runroot.name + ".lock"), blocking=False):
-                _remove_run(root, runroot)
+        lock_path = root / ".ego" / "locks" / (runroot.name + ".lock")
+        if lock_path.exists():
+            try:
+                with exclusive_lock(lock_path, blocking=False):
+                    _remove_run(root, runroot)
+                    lock_path.unlink(missing_ok=True)
+                removed += 1
+            except EgoError:
+                continue  # the run is active in another process
+        else:
+            _remove_run(root, runroot)
             removed += 1
-        except EgoError:
-            continue  # the run is active in another process
     if removed:
         _worktree_prune(root)
     return removed
@@ -113,16 +119,29 @@ def _prune_stagings(root: Path) -> int:
     return removed
 
 
+SHARED_LOCKS = frozenset({
+    "install.lock",
+    "events.lock",
+    "memory.lock",
+    "alter-analysis.lock",
+    "alter-prompts.lock",
+    "session-advice.lock",
+    "usage-advice.lock",
+})
+
+
 def _prune_run_locks(root: Path) -> int:
     """Remove per-run lock files whose run directory is gone. Run IDs are unique, so no
-    other process can reopen such a lock; shared lock names (install, events, memory) are
-    never touched, because deleting a lock another process may be waiting on is unsafe."""
+    other process can reopen such a lock; shared lock names are never touched, because
+    deleting a lock another process may be waiting on is unsafe."""
     locks = root / ".ego" / "locks"
     runs = root / ".ego" / "state" / "runs"
     if not locks.is_dir():
         return 0
     removed = 0
-    for path in locks.glob("run-*.lock"):
+    for path in locks.glob("*.lock"):
+        if path.name in SHARED_LOCKS:
+            continue
         if (runs / path.name[: -len(".lock")]).exists():
             continue
         try:
@@ -184,7 +203,7 @@ def _prune_events(root: Path) -> int:
         lines = path.read_text(encoding="utf8").splitlines(keepends=True)
         if len(lines) <= EVENTS_KEEP_LINES:
             return 0
-        path.write_text("".join(lines[-EVENTS_KEEP_LINES:]), encoding="utf8")
+        atomic_text(path, "".join(lines[-EVENTS_KEEP_LINES:]))
         return len(lines) - EVENTS_KEEP_LINES
 
 

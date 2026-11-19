@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 from ..adapters.runner import RunResult
+from ..domain.config import load_config
 from .session import RUN_ID_ENV, context_tokens, latest_open_checkpoint, resume_prompt
-from ..domain.usage import TOKEN_KEYS
 from ..shared.util import ALTER_ROOT_ENV, read_json
 
 CONTINUE_PROMPT = "Continue the task from where you stopped."
@@ -107,15 +107,18 @@ def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callab
                 emit(segment=len(results), tokens=tokens, action="continue")
                 session, text = r.session_id, CONTINUE_PROMPT
                 continue
+            save_remaining = (max_budget_usd - spent()) if max_budget_usd is not None else None
+            if save_remaining is not None and save_remaining <= 0:
+                return _merge(results, status="FAIL", reason="BUDGET_EXHAUSTED", rotations=rotations)
             saved = agent(host, _save_request(tokens, threshold), cwd, max(1, int(deadline - time.monotonic())), max_turns=3,
-                          read_only=False, resume_session=r.session_id, env=env, max_budget_usd=remaining, **kw)
+                          read_only=False, resume_session=r.session_id, env=env, max_budget_usd=save_remaining, **kw)
             results.append(saved)
             checkpoint = latest_open_checkpoint(cwd, run=tag, consumed=consumed)
             if checkpoint is None:
                 return _merge(results, status="FAIL", reason="NO_CHECKPOINT", rotations=rotations)
             consumed[checkpoint["task_id"]] = int(checkpoint.get("revision", 1))
             emit(segment=len(results), tokens=tokens, action="rotate")
-            session, text = None, prompt + "\n\n" + resume_prompt(checkpoint)
+            session, text = None, prompt + "\n\n" + resume_prompt(checkpoint, limits=load_config(project_root).session_schema_limits())
             rotations += 1
     finally:
         _drop_handoffs(cwd, tag)
