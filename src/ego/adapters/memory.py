@@ -6,12 +6,12 @@ import json
 import os
 from pathlib import Path
 import re
-import selectors
 import shlex
 import shutil
 import subprocess
 import time
 from typing import Any
+from .. import __version__
 from ..shared.util import EgoError, RUN_SESSION_ENV, alter_project_root, ident, now, read_json, write_json, exclusive_lock, redact, sha256
 
 class FileMemory:
@@ -62,13 +62,16 @@ class MCPStdio:
         assert p.stdin and p.stdout
         read_buffer=b""
         def send(obj:dict):
-            p.stdin.write((json.dumps(obj,separators=(",", ":"))+"\n").encode("utf8"));p.stdin.flush()
+            try:
+                p.stdin.write((json.dumps(obj,separators=(",", ":"))+"\n").encode("utf8"));p.stdin.flush()
+            except BrokenPipeError as exc:
+                raise EgoError("MCP_ERROR", f"MCP pipe broken during {name}: {exc}") from exc
         def receive(req_id:int):
             nonlocal read_buffer
             import select
             deadline=time.monotonic()+self.timeout
             while time.monotonic()<deadline:
-                if b"\n" in read_buffer:
+                while b"\n" in read_buffer:
                     line,read_buffer=read_buffer.split(b"\n",1)
                     try: obj=json.loads(line)
                     except ValueError: continue
@@ -78,19 +81,26 @@ class MCPStdio:
                 ready,_,_=select.select([p.stdout],[],[],min(0.5,max(0,deadline-time.monotonic())))
                 if ready:
                     chunk=os.read(p.stdout.fileno(),65536)
-                    if not chunk: break
+                    if not chunk:
+                        raise EgoError("MCP_ERROR", f"Unexpected EOF from MCP server during {name}")
                     read_buffer+=chunk
             raise EgoError("MCP_TIMEOUT",name,5)
         try:
-            send({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ego","version":"1.4"}}})
+            send({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ego","version":__version__}}})
             receive(1)
             send({"jsonrpc":"2.0","method":"notifications/initialized"})
             send({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":args}})
             return receive(2)
         finally:
-            p.terminate()
-            try:p.wait(timeout=2)
-            except subprocess.TimeoutExpired:p.kill();p.wait()
+            try:
+                p.terminate()
+                try:p.wait(timeout=2)
+                except subprocess.TimeoutExpired:p.kill();p.wait()
+            finally:
+                for stream in (p.stdin, p.stdout, p.stderr):
+                    if stream is not None:
+                        try:stream.close()
+                        except OSError:pass
 
 ALTER_HOST_HINT="Add the alter MCP server to the host (alter_task_context / alter_ai_usage) or set EGO_ALTER_MCP_COMMAND"
 ALTER_SKILLS_VERSION="v0.2.1"
@@ -119,7 +129,7 @@ def alter_skills_installed(
     """Return True if alter-skills appears installed in global or project skill dirs."""
     home = home or Path.home()
     if clients is not None:
-        selected = [c.strip().lower() for c in clients if isinstance(c, str) and c.strip() in ALTER_SKILLS_CLIENTS]
+        selected = [c.strip().lower() for c in clients if isinstance(c, str) and c.strip().lower() in ALTER_SKILLS_CLIENTS]
         if selected:
             return all(
                 any((d / ALTER_SKILLS_MARKER).exists() for d in _client_skill_dirs(root, home, client))
@@ -179,7 +189,7 @@ def install_alter_skills(root: Path, *, clients: list[str]|tuple[str,...]|None=N
 
 
 def ensure_alter_skills_quietly(root: Path, *, clients: list[str]|tuple[str,...]|None=None) -> dict[str, Any]:
-    """Install alter-skills globally when memory='alter' and skills are not yet installed (fail-open)."""
+    """Install alter-skills globally when knowledge='alter' and skills are not yet installed (fail-open)."""
     if os.environ.get("EGO_ALTER_AUTO_INSTALL_SKILLS", "1").strip().lower() in ("0", "false", "off", "no"):
         return {"status": "skipped", "reason": "disabled"}
     if alter_skills_installed(root, clients=clients):
@@ -228,6 +238,13 @@ def _alter_mcp_spec(root: Path) -> tuple[list[str], dict[str, str] | None] | Non
     return None
 
 
+def _raise_if_mcp_error(result: Any) -> None:
+    if isinstance(result, dict) and result.get("isError"):
+        texts = [b.get("text", "") for b in result.get("content", []) if isinstance(b, dict) and b.get("type") == "text"]
+        detail = next((t.strip() for t in texts if isinstance(t, str) and t.strip()), "") or str(result)
+        raise EgoError("ALTER_ERROR", detail[:400], 5)
+
+
 def ensure_alter_project(root: Path, *, force: bool = False, timeout: int = 10) -> dict[str, Any]:
     """Ensure the repository at root is registered in Alter via alter_bootstrap(cwd=...)."""
     if os.environ.get("EGO_ALTER_AUTO_REGISTER", "1").lower() in ("0", "false", "off", "no"):
@@ -243,7 +260,8 @@ def ensure_alter_project(root: Path, *, force: bool = False, timeout: int = 10) 
         return {"status": "skipped", "reason": "alter MCP not configured"}
     cmd, env = spec
     try:
-        MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_bootstrap", {"cwd": key})
+        result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_bootstrap", {"cwd": key})
+        _raise_if_mcp_error(result)
     except (EgoError, OSError, ValueError) as exc:
         return {"status": "error", "reason": str(exc)}
     updated = dict(projects)
@@ -305,7 +323,7 @@ def _make_turn(
     return turn
 
 
-def _extract_turn_from_obj(obj: dict[str, Any], host: str) -> dict[str, Any] | None:
+def _extract_turn_from_obj(obj: dict[str, Any]) -> dict[str, Any] | None:
     """Normalize a single Claude/Codex/AGY/OpenCode record into a user/assistant turn."""
     # AGY transcript format: USER_INPUT (non-SYSTEM) / PLANNER_RESPONSE (MODEL)
     otype = obj.get("type")
@@ -388,7 +406,7 @@ def _extract_turn_from_obj(obj: dict[str, Any], host: str) -> dict[str, Any] | N
             role,
             text,
             turn_id=info.get("id"),
-            sequence=info.get("sequence") or obj.get("sequence"),
+            sequence=info.get("sequence") if info.get("sequence") is not None else obj.get("sequence"),
             at=time_info.get("created") or info.get("at"),
         )
 
@@ -422,13 +440,12 @@ def extract_session_messages(
     """Extract chronological user/assistant text turns from Claude/Codex/AGY JSONL or OpenCode messages."""
     if max_turns <= 0:
         return []
-    norm_host = (host or "claude").strip().lower()
     turns: list[dict[str, Any]] = []
 
     if messages is not None:
         for item in messages:
             if isinstance(item, dict):
-                turn = _extract_turn_from_obj(item, norm_host)
+                turn = _extract_turn_from_obj(item)
                 if turn is not None:
                     turns.append(turn)
 
@@ -448,7 +465,7 @@ def extract_session_messages(
                 except ValueError:
                     continue
                 if isinstance(obj, dict):
-                    turn = _extract_turn_from_obj(obj, norm_host)
+                    turn = _extract_turn_from_obj(obj)
                     if turn is not None:
                         turns.append(turn)
 
@@ -642,6 +659,7 @@ def submit_alter_session_review(
             args["title"] = redact(str(title).strip())
 
         result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_record_conversation", args)
+        _raise_if_mcp_error(result)
 
         if segments_to_save is not None:
             write_json(alter_segments_path(root, sid), {
@@ -760,6 +778,7 @@ def submit_alter_checkpoint_review(
             "add": add,
         }
         result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_session_digest", args)
+        _raise_if_mcp_error(result)
         return {"status": "submitted", "session_id": sid, "count": len(add), "result": result}
     except Exception as exc:
         return {"status": "error", "reason": str(exc)}
@@ -783,5 +802,5 @@ def knowledge_health(root: Path, name: str) -> dict:
         return {"provider": "alter", "status": "ok" if resolved else "host-managed",
                 "mode": "mcp-cli" if resolved else "host-mcp", "command_configured": configured, "mcp_resolved": resolved,
                 "skills_installed": alter_skills_installed(root),
-                "hint": None if configured else ALTER_HOST_HINT}
+                "hint": None if resolved else ALTER_HOST_HINT}
     raise EgoError("UNKNOWN_KNOWLEDGE", name, 2)

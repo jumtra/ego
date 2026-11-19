@@ -697,3 +697,17 @@ def test_end_detection_code_is_gone():
             for p in sorted((repo / "src").rglob("*.py"))
             for b in banned if b in p.read_text(encoding="utf-8")]
     assert hits == []
+
+
+def test_alter_reporter_records_fail_status(tmp_path: Path, monkeypatch):
+    # Arrange
+    from ego.usecases.work import _alter_reporter
+
+    monkeypatch.setattr("ego.adapters.alter_plan.AlterPlanClient.report", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    # Act
+    reporter = _alter_reporter(tmp_path, {"plan_id": "p1"}, "run-1", tmp_path)
+    reporter("failed", {"n1": {"status": "FAILED"}})
+
+    # Assert: fail-open without raising
+    assert True

@@ -181,8 +181,9 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
         seed_task = dict(task)
         # A task file written by `ego work plan --out` carries what that plan cost.
         seed_usage = seed_task.pop("planner_usage", None)
-        if cfg.models and "models" not in seed_task.get("defaults", {}):
-            seed_task["defaults"] = {**seed_task.get("defaults", {}), "models": dict(cfg.models)}
+        defaults = seed_task.get("defaults")
+        if cfg.models and (defaults is None or (isinstance(defaults, dict) and "models" not in defaults)):
+            seed_task["defaults"] = {**(defaults or {}), "models": dict(cfg.models)}
         # Reject a broken approved plan before the ledger exists; replanning it would silently replace it.
         validate_task(seed_task, limits=limits)
         for node in seed_task["nodes"]:

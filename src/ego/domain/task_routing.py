@@ -7,11 +7,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from .config import HOSTS, VALID_EFFORTS, parse_role_spec
+from .config import EFFORT_ALIASES, HOSTS, VALID_EFFORTS, parse_role_spec
 from .session_schema import (
     DEFAULT_SESSION_SCHEMA_LIMITS,
-    MAX_NOTES as SESSION_MAX_NOTES,
-    MAX_PROMPT_CHARS as SESSION_MAX_PROMPT_CHARS,
     SessionSchemaLimits,
 )
 from ..shared.util import EgoError, alter_project_root, clip_output, handoff_relpath, _id, safe_path
@@ -59,6 +57,8 @@ def _parse_model_entry(entry: Any) -> tuple[str | None, str | None]:
             raise EgoError("INVALID_MODEL", "model in table must be a valid non-empty string <= 128 chars", 2)
         model = None if raw_m.strip() in ("auto", "native-default") else raw_m.strip()
         raw_e = entry.get("effort")
+        if isinstance(raw_e, str):
+            raw_e = EFFORT_ALIASES.get(raw_e, raw_e)
         if raw_e is not None and (not isinstance(raw_e, str) or raw_e not in VALID_EFFORTS):
             raise EgoError("INVALID_MODEL", f"effort must be one of {sorted(VALID_EFFORTS)}", 2)
         effort = None if raw_e in (None, "auto") else raw_e
@@ -180,7 +180,7 @@ def validate_task_context(spec: dict, nodes: list[dict], *, default_host: str = 
             raise EgoError("INVALID_TASK", "Compare nodes are terminal; select/review before using output", 2)
 
 
-def _project_rule_files(cwd: Path) -> list[tuple[str, str]]:
+def _project_rule_files(cwd: Path, *, max_bytes: int = MAX_INSTRUCTION_BYTES) -> list[tuple[str, str]]:
     """Project rule files under .agents/rules and .claude/rules, deduplicated when identical."""
     seen: set[tuple[str, str]] = set()
     rules: list[tuple[str, str]] = []
@@ -193,7 +193,7 @@ def _project_rule_files(cwd: Path) -> list[tuple[str, str]]:
             if not p.is_file() or p.is_symlink():
                 continue
             size = p.stat().st_size
-            if size > MAX_INSTRUCTION_BYTES or total + size > MAX_INSTRUCTION_BYTES:
+            if size > max_bytes or total + size > max_bytes:
                 continue
             text = p.read_text(encoding="utf-8", errors="replace").strip()
             if not text or (p.name, text) in seen:
@@ -206,12 +206,13 @@ def _project_rule_files(cwd: Path) -> list[tuple[str, str]]:
 
 def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", handoff: dict | None = None,
                       project_root: Path | None = None, alter_rules: list[str] | None = None,
-                      alter_context: str = "") -> str:
+                      alter_context: str = "", limits: PlanSchemaLimits | None = None) -> str:
     """Pass trusted user instructions explicitly, file references as references.
 
     Dependency output is intentionally not appended verbatim: it can contain
     injected instructions; successor nodes consume checked-in staged artifacts.
     """
+    max_bytes = limits.max_instructions_chars if limits is not None else MAX_INSTRUCTION_BYTES
     parts = ["You are completing one stage of a bounded software-development task."]
     goal=spec.get("goal", "")
     if goal: parts.append("## Overall objective (user instruction)\n" + goal)
@@ -219,9 +220,9 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
     if spec.get("instructions_file"):
         rel=spec["instructions_file"]
         src=safe_path(cwd,rel,allow_missing=False)
-        if not src.is_file() or src.stat().st_size>MAX_INSTRUCTION_BYTES:raise EgoError("INSTRUCTIONS_TOO_LARGE",rel,2)
+        if not src.is_file() or src.stat().st_size>max_bytes:raise EgoError("INSTRUCTIONS_TOO_LARGE",rel,2)
         parts.append(f"## Shared instructions from {rel}\n" + src.read_text(encoding="utf8"))
-    rule_files = _project_rule_files(cwd)
+    rule_files = _project_rule_files(cwd, max_bytes=max_bytes)
     if rule_files:
         parts.append("## Project rules\n" + "\n\n".join(f"### {rel}\n{text}" for rel, text in rule_files))
     rules_list = alter_rules if alter_rules is not None else spec.get("alter_rules")
@@ -235,7 +236,7 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
         parts.append(f"## Assigned custom agent\n{agent}")
         src = _agent_file(cwd, agent)
         if src is not None:
-            if src.stat().st_size > MAX_INSTRUCTION_BYTES: raise EgoError("INSTRUCTIONS_TOO_LARGE", src.name, 2)
+            if src.stat().st_size > max_bytes: raise EgoError("INSTRUCTIONS_TOO_LARGE", src.name, 2)
             parts.append(f"## Custom agent definition from {src.relative_to(cwd)}\n" + src.read_text(encoding="utf8"))
     parts.append("## This node's instructions (user instruction)\n" + node["prompt"])
     req = node.get("requirement") or {}
@@ -253,7 +254,7 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
         else:  # file knowledge: the index says which topic files matter; open only those
             how = ("Before editing, retrieve the project's domain knowledge and glossary: read .ego/knowledge/index.md if it exists "
                    "and open only the topic files this stage needs (`ego knowledge search <words>` finds them)"
-                   + (f"; also {alter_lookup}" if servers else "") + ".")
+                   + (f"; also {alter_lookup}" if "alter" in servers else "") + ".")
         ctx_text = (alter_context or str(node.get("alter_context") or "")).strip()
         parts.append("## Required MCP / Knowledge context\n"
                      + (("Required MCP servers: " + ", ".join(servers) + "\n") if servers else "")
@@ -277,7 +278,7 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
         rel=node["instructions_file"]
         src=safe_path(cwd, rel, allow_missing=False)
         if not src.is_file():raise EgoError("INSTRUCTIONS_NOT_FILE", rel, 2)
-        if src.stat().st_size > MAX_INSTRUCTION_BYTES: raise EgoError("INSTRUCTIONS_TOO_LARGE", rel, 2)
+        if src.stat().st_size > max_bytes: raise EgoError("INSTRUCTIONS_TOO_LARGE", rel, 2)
         parts.append(f"## Additional instructions from {rel}\n" + src.read_text(encoding="utf8"))
     context=node.get("context_files", [])
     for rel in context: safe_path(cwd, rel, allow_missing=False)
@@ -314,13 +315,10 @@ def build_task_prompt(spec: dict, node: dict, cwd: Path, *, feedback: str = "", 
                      "Each finding must be '- path:line: issue'. A finding without file path and line number is forbidden and will be discarded.")
     parts.append("Use minimal relevant context; do not create requirements or implementation-plan docs unless explicitly requested or technically necessary. State VERIFIED vs APPLIED precisely. Never edit files outside scope.")
     prompt="\n\n".join(parts)
-    if len(prompt.encode("utf8")) > MAX_INSTRUCTION_BYTES * 2:
+    if len(prompt.encode("utf8")) > max_bytes * 2:
         raise EgoError("INSTRUCTIONS_TOO_LARGE", "Prompt exceeds safe CLI envelope", 2)
     return prompt
 
-
-MAX_NOTES = SESSION_MAX_NOTES
-MAX_PROMPT_CHARS = SESSION_MAX_PROMPT_CHARS
 
 _PROMPT_FIELDS = (("Next", "next_steps"), ("Blockers", "blockers"), ("Decisions", "decisions"),
                   ("Done", "completed"), ("Evidence", "evidence"))

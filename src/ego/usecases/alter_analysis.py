@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..shared.util import now, read_json, write_json
+from ..shared.util import exclusive_lock, now, read_json, safe_path, write_json
 
 MIN_TURNS = 4
 ANALYZER_ENV = "EGO_ALTER_ANALYZER"
@@ -33,10 +33,19 @@ def _load_state(root: Path) -> dict[str, Any]:
     return sessions if isinstance(sessions, dict) else {}
 
 
-def _save_entry(root: Path, sid: str, entry: dict[str, Any]) -> None:
+def _lock_path(root: Path) -> Path:
+    return safe_path(root.resolve(), ".ego/locks/alter-analysis.lock")
+
+
+def _write_entry(root: Path, sid: str, entry: dict[str, Any]) -> None:
     sessions = _load_state(root)
     sessions[sid] = {**(sessions.get(sid) or {}), **entry, "updated_at": now()}
     write_json(_state_path(root), {"schema_version": 1, "sessions": sessions})
+
+
+def _save_entry(root: Path, sid: str, entry: dict[str, Any]) -> None:
+    with exclusive_lock(_lock_path(root)):
+        _write_entry(root, sid, entry)
 
 
 def _enabled(root: Path) -> bool:
@@ -91,11 +100,13 @@ def launch_analysis(root: Path, sid: str) -> dict[str, Any]:
         turns = _turns_file(root, sid)
         if turns is None or len(turns["turns"]) < MIN_TURNS:
             return {"status": "skipped", "reason": "not enough turns", "session_id": sid}
-        entry = _load_state(root).get(sid)
-        timeout = _limit(root)
-        if _up_to_date(entry, len(turns["turns"])) or (isinstance(entry, dict) and _running(entry, timeout)):
-            return {"status": "skipped", "reason": entry.get("status"), "session_id": sid}
-        _spawn_analysis(root, sid)
+        with exclusive_lock(_lock_path(root)):
+            entry = _load_state(root).get(sid)
+            timeout = _limit(root)
+            if _up_to_date(entry, len(turns["turns"])) or (isinstance(entry, dict) and _running(entry, timeout)):
+                return {"status": "skipped", "reason": entry.get("status"), "session_id": sid}
+            _write_entry(root, sid, {"status": "running"})
+            _spawn_analysis(root, sid)
         return {"status": "launched", "session_id": sid}
     except Exception as exc:  # fail open
         return {"status": "error", "reason": str(exc)[:200]}
@@ -153,7 +164,7 @@ def analyze_session(root: Path, sid: str) -> dict[str, Any]:
         sid = str(sid or "").strip()
         if not sid:
             return {"status": "skipped", "reason": "missing session_id"}
-        if not _enabled(root):
+        if not (cfg.knowledge == "alter" and bool(cfg.alter_analysis)):
             return {"status": "skipped", "reason": "disabled"}
         turns = _turns_file(root, sid)
         if turns is None or len(turns["turns"]) < MIN_TURNS:
@@ -173,9 +184,10 @@ def analyze_session(root: Path, sid: str) -> dict[str, Any]:
         override = cfg.alter_analyzer.get(host) if isinstance(cfg.alter_analyzer, dict) else None
         model = override.get("model") if isinstance(override, dict) else None
 
-        attempts = int((_load_state(root).get(sid) or {}).get("attempts") or 0) + 1
-        _save_entry(root, sid, {"status": "running", "attempts": attempts, "host": host, "model": model,
-                                "conversation_id": conversation_id})
+        with exclusive_lock(_lock_path(root)):
+            attempts = int((_load_state(root).get(sid) or {}).get("attempts") or 0) + 1
+            _write_entry(root, sid, {"status": "running", "attempts": attempts, "host": host, "model": model,
+                                     "conversation_id": conversation_id})
         env = {**os.environ, ANALYZER_ENV: "1", "EGO_ALTER_AUTO_REVIEW": "0"}  # analyzer must not record itself
         result = run_agent(host, _analyzer_prompt(conversation_id, turns["turns"]), root,
                            timeout=int(cfg.alter_analysis_timeout_seconds), model=model, read_only=False,

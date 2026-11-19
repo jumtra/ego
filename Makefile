@@ -1,4 +1,4 @@
-.PHONY: test smoke bench install uninstall
+.PHONY: test smoke install uninstall
 
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
@@ -10,6 +10,7 @@ install:
 	@echo "Installed: $(BINDIR)/ego"
 
 uninstall:
+	@rm -f "$(BINDIR)/ego"
 	@echo "Uninstalled ego CLI from: $(BINDIR)"
 
 test:
@@ -17,8 +18,4 @@ test:
 
 smoke:
 	PYTHONPATH=src python3 -m ego --version
-	PYTHONPATH=src python3 -m ego modules list
-	PYTHONPATH=src python3 -m ego optimize status
-
-bench:
-	PYTHONPATH=src python3 -m ego bench --trials 10
+	PYTHONPATH=src python3 -m ego doctor --root .

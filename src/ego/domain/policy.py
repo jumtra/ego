@@ -1,13 +1,12 @@
 """Execution policy. Hooks are advisory; OS-level containment is required for untrusted agents."""
 from __future__ import annotations
-import os
 from pathlib import Path
 import re
 import shutil
 from ..shared.util import EgoError, safe_path
 
 BLOCK_PATTERNS = [
-    r"(?<!\w)(?:sudo\s+)?rm\s+-[a-zA-Z]*[rR][a-zA-Z]*[fF][a-zA-Z]*\s+(?:/|~|\$HOME)(?:\s|$)",
+    r"(?<!\w)(?:sudo\s+)?rm\s+(?=(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[rR])(?=(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[fF])(?:-[a-zA-Z]+\s+)+(?:/|~|\$HOME)(?:\s|$)",
     r"(?:curl|wget)\s+[^|\n]+\|\s*(?:sh|bash|zsh)",
     r"\b(?:mkfs\.|dd\s+if=|chmod\s+-R\s+777\s+/)",
 ]
@@ -40,7 +39,8 @@ def check_role_write(role, rel: str) -> None:
 def check_write(root: Path, rel: str, allow: list[str] | None = None) -> Path:
     import fnmatch
     p = safe_path(root, rel)
-    if rel.startswith(PROTECTED): raise EgoError("PROTECTED_PATH", rel)
+    if any(rel == prot or rel.startswith(f"{prot}/") for prot in PROTECTED) or rel.startswith(".env."):
+        raise EgoError("PROTECTED_PATH", rel)
     if allow is not None and not any(fnmatch.fnmatch(rel, pattern) for pattern in allow):
         raise EgoError("OUT_OF_SCOPE", rel)
     return p
@@ -58,18 +58,17 @@ def sandbox_diagnostics() -> dict:
 def check_hook_payload(event: str, payload: dict, policy_mode: str = "strict") -> dict:
     if event != "pre-tool": return {"decision": "allow", "reason": "no policy change"}
     if not isinstance(payload, dict): return {"decision": "deny", "reason": "invalid JSON payload"}
+    ti = payload.get("tool_input", {})
+    if not isinstance(ti, dict): return {"decision": "deny", "reason": "invalid tool_input"}
+    command = str(ti.get("command", ""))
     if policy_mode == "relaxed":
-        cmd = str(payload.get("tool_input", {}).get("command", ""))
-        if any(re.search(p, cmd, re.I) for p in BLOCK_PATTERNS):
+        if any(re.search(p, command, re.I) for p in BLOCK_PATTERNS):
             return {"decision": "deny", "reason": "destructive shell command"}
         return {"decision": "allow", "reason": "relaxed policy: operation permitted"}
     tool = payload.get("tool_name", "")
-    ti = payload.get("tool_input", {})
-    if not isinstance(ti, dict): return {"decision": "deny", "reason": "invalid tool_input"}
     target = ti.get("file_path", "")
     if tool in ("Write", "Edit", "MultiEdit") and any(s in str(target) for s in (".ego/ownership.json", ".ego/locks/", ".git/")):
         return {"decision": "deny", "reason": "protected path"}
-    command = str(ti.get("command", ""))
     if tool == "Bash" and any(re.search(p, command, re.I) for p in BLOCK_PATTERNS):
         return {"decision": "deny", "reason": "destructive shell command"}
     return {"decision": "allow", "reason": "no high-risk operation detected"}

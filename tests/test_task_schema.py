@@ -306,3 +306,14 @@ def test_plan_schema_limits_from_config_override_validation_and_prompt_schema(tm
     with pytest.raises(EgoError) as exc_goal:
         plan_work(tmp_path, "x" * 21, host="mock")
     assert exc_goal.value.code == "INVALID_GOAL"
+
+
+def test_validate_task_reports_string_too_short_message():
+    spec = {
+        "goal": "valid goal",
+        "nodes": [{"id": "impl", "kind": "agent", "intent": "", "prompt": "Implement", "write_allowlist": ["src/**"]}],
+    }
+    with pytest.raises(EgoError) as exc:
+        validate_task(spec)
+    assert exc.value.code == "INVALID_TASK"
+    assert "must be a nonempty string" in str(exc.value)

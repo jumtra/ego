@@ -36,22 +36,24 @@ def refresh_catalog(root: Path, *, hosts: list[str] | None = None, timeout: int 
     now=time.time()
     cache.setdefault("schema_version",1)
     cache.setdefault("hosts", {})
-    cache["hosts"]["claude"] = {
-        "source":"vendor-stable-aliases", "models":["auto", "sonnet", "opus", "haiku"],
-        "examples":["auto", "sonnet", "opus", "haiku", "sonnet-3.5", "sonnet-3.7", "sonnet-5.0", "sonnet-5.5"],
-        "availability":"not-verified; use /model to check account", "fetched_at":now,
-    }
-    cache["hosts"]["codex"] = {
-        "source":"native-cli-default", "models":["auto"],
-        "examples":["auto", "gpt-5-codex"],
-        "availability":"model IDs and account access managed by Codex; use /model in TUI", "fetched_at":now,
-    }
-    cache["hosts"]["agy"] = {
-        "source":"manual-only", "models":["auto"],
-        "examples":["auto", "gemini-2.5-pro", "gemini-2.5-flash"],
-        "availability":"run agy models to list account models", "fetched_at":now,
-    }
+    if "claude" in requested:
+        cache["hosts"]["claude"] = {
+            "source":"vendor-stable-aliases", "models":["auto", "sonnet", "opus", "haiku"],
+            "examples":["auto", "sonnet", "opus", "haiku"],
+            "availability":"not-verified; use /model to check account", "fetched_at":now,
+        }
+    if "codex" in requested:
+        cache["hosts"]["codex"] = {
+            "source":"native-cli-default", "models":["auto"],
+            "examples":["auto", "gpt-5-codex"],
+            "availability":"model IDs and account access managed by Codex; use /model in TUI", "fetched_at":now,
+        }
     if "agy" in requested:
+        cache["hosts"]["agy"] = {
+            "source":"manual-only", "models":["auto"],
+            "examples":["auto", "gemini-2.5-pro", "gemini-2.5-flash"],
+            "availability":"run agy models to list account models", "fetched_at":now,
+        }
         exe=shutil.which("agy")
         if exe:
             try:
@@ -99,5 +101,5 @@ def list_models(root: Path, *, host: str | None = None, refresh_if_stale: bool =
     cfg = load_config(root)
     return {"schema_version":1,"ttl_seconds":CACHE_TTL_SECONDS,
             "configured_models":cfg.models,
-            "model_policy":"auto delegates to each host's current default; explicit model IDs (e.g. sonnet, sonnet-5.5) remain pinned",
+            "model_policy":"auto delegates to each host's current default; explicit model IDs (e.g. sonnet, opus) remain pinned",
             "hosts":{h:rows.get(h,{"source":"unavailable","models":[],"availability":"refresh required"}) for h in required}}

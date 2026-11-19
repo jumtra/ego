@@ -31,7 +31,7 @@ Behaviors to expect:
 - It reports **完了** (done) only after validation passed and the change is applied, with the tests actually run. Otherwise it reports "verified, not applied" or "not done".
 - It reads project knowledge from where `knowledge` says (the `.ego/knowledge` index, or alter), uses `ego memory search` / `ego memory add` for process facts, and `ego session checkpoint` at boundaries ([Sessions](sessions.md)).
 
-`/harness-init` is the second generated skill: it inspects or reconfigures the ego installation.
+`/work-plan` and `/harness-init` are the other generated skills: `/work-plan` interviews you and gets a node-graph plan approved before editing, and `/harness-init` inspects or reconfigures the ego installation.
 
 ## Managed runs
 
@@ -173,7 +173,7 @@ Node fields:
 | `requirement`, `steps` | agent | 5W1H (`who` `what` `when` `where` `why` `how`, strings up to 400 characters) and 1-10 ordered steps the worker follows exactly as written |
 | `host` / `hosts`, `strategy`, `model` / `models`, `fallback_on` | agent | Routing, see below |
 | `agent` | agent | Optional custom agent name (from `.claude/agents/*.md`, `.agents/agents/*.md`, `.opencode/agents/*.md`, or `.codex/agents/*.toml`); its definition is embedded into the node prompt |
-| `mcp` | agent | List of 1–8 required MCP server names (e.g. `["alter"]`). Keeps host MCP servers available even when `worker_context = "lean"`, and adds domain/glossary retrieval instructions. With `knowledge = "alter"` they use only alter (`alter_task_context` / `alter_search` / `alter_get_note`); with file memory they also read `.ego/knowledge/domain.md`. Automatically enabled for `knowledge = "alter"` |
+| `mcp` | agent | List of 1–8 required MCP server names (e.g. `["alter"]`). Keeps host MCP servers available even when `worker_context = "lean"`, and adds domain/glossary retrieval instructions. With `knowledge = "alter"` they use only alter (`alter_task_context` / `alter_search` / `alter_get_note`); with file knowledge they read `.ego/knowledge/index.md` (`ego knowledge`). Automatically enabled for `knowledge = "alter"` |
 | `instructions_file`, `context_files` | agent | Extra instructions; up to 24 reference files |
 | `max_attempts`, `max_turns`, `timeout_seconds` | all | Per-node limits, capped by the config |
 

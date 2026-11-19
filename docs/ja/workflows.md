@@ -31,7 +31,7 @@
 - **完了**と報告するのは、検証に合格し、変更が適用され、実際にテストを実行した後だけです。それ以外は「検証済み、未適用」または「未完了」と報告します。
 - プロジェクトのナレッジは `knowledge` が示す場所（`.ego/knowledge` の index、または alter）から読み、処理に関する事実には `ego memory search` / `ego memory add`、区切りでは `ego session checkpoint` を使います（[セッション](sessions.md)）。
 
-`/harness-init` は生成されるもう 1 つの skill で、ego の導入状態を確認・再設定します。
+他に生成される skill として、編集前に聞き取りとノードグラフ計画の承認を行う `/work-plan` と、ego の導入状態を確認・再設定する `/harness-init` があります。
 
 ## 管理実行
 
@@ -173,7 +173,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `requirement`、`steps` | agent | 5W1H（`who` `what` `when` `where` `why` `how`、各 400 文字以内）と、ワーカーが書かれたとおりに実行する 1〜10 件の手順 |
 | `host` / `hosts`、`strategy`、`model` / `models`、`fallback_on` | agent | ルーティング。下記参照 |
 | `agent` | agent | 任意のカスタムエージェント名（`.claude/agents/*.md`、`.agents/agents/*.md`、`.opencode/agents/*.md`、`.codex/agents/*.toml` から検出）。定義内容がノードのプロンプトに埋め込まれる |
-| `mcp` | agent | 必要な MCP サーバー名のリスト（1〜8 件、例: `["alter"]`）。`worker_context = "lean"` でもホストの MCP サーバーを有効のままにし、ドメイン知識・用語集の取得指示を付与する。`knowledge = "alter"` のときは alter（`alter_task_context` / `alter_search` / `alter_get_note`）だけから取得し、file メモリのときは `.ego/knowledge/domain.md` も読む。`knowledge = "alter"` 時は自動適用 |
+| `mcp` | agent | 必要な MCP サーバー名のリスト（1〜8 件、例: `["alter"]`）。`worker_context = "lean"` でもホストの MCP サーバーを有効のままにし、ドメイン知識・用語集の取得指示を付与する。`knowledge = "alter"` のときは alter（`alter_task_context` / `alter_search` / `alter_get_note`）だけから取得し、file ナレッジのときは `.ego/knowledge/index.md`（`ego knowledge`）を読む。`knowledge = "alter"` 時は自動適用 |
 | `instructions_file`、`context_files` | agent | 追加の指示。参照ファイルは最大 24 件 |
 | `max_attempts`、`max_turns`、`timeout_seconds` | すべて | ノードごとの上限。設定値で頭打ちになる |
 

@@ -56,8 +56,8 @@ def inspect_host(host: str, *, refresh: bool = False, timeout: int = 5) -> dict:
     okh, help_text = _bounded(command,timeout)
     flags=sorted(set(FLAG_RE.findall(help_text))) if okh else []
     modes=sorted(mode for mode in ("auto","acceptEdits","bypassPermissions","plan")
-                 if re.search(r"(?<![A-Za-z])"+re.escape(mode)+r"(?![A-Za-z])",help_text))
-    result={"host":host,"available":True,"supported":okh,"version":version.strip().splitlines()[0][:180] if okv else None,
+                 if re.search(r"(?<![A-Za-z])"+re.escape(mode)+r"(?![A-Za-z])",help_text)) if okh else []
+    result={"host":host,"available":True,"supported":okh,"version":version.strip().splitlines()[0][:180] if okv and version.strip() else None,
             "executable":str(Path(executable).resolve()),"fingerprint":key,"flags":flags,"permission_modes":modes,
             "checked_at":time.time(),"reason":"ready" if okh else "Could not inspect CLI help; refresh or update host CLI"}
     cache[host]=result

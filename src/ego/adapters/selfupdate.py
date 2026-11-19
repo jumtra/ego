@@ -5,9 +5,7 @@ no changes to project .ego state. Only stable newer versions with an
 API-provided SHA256 digest may be installed. Release publishing is external.
 """
 from __future__ import annotations
-from dataclasses import dataclass
 import hashlib
-from importlib import metadata
 import json
 import os
 from pathlib import Path
@@ -17,9 +15,11 @@ import ssl
 import subprocess
 import sys
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener, urlopen
 import zipfile
 from ..shared.util import EgoError
+
+_STD_URLOPEN = urlopen
 
 REPO = "jumtra/ego"
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -48,13 +48,23 @@ def _version_tuple(v: str) -> tuple[int,int,int]:
     return tuple(map(int,match.groups()))
 
 
+class _SafeRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urlparse(newurl)
+        if parsed.scheme != "https" or parsed.hostname not in ALLOWED_DOWNLOAD_HOSTS:
+            raise EgoError("UNTRUSTED_UPDATE_REDIRECT", parsed.hostname or "", 3)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _read_url(url: str, limit: int, timeout: int=12) -> bytes:
     parsed=urlparse(url)
     if parsed.scheme!="https" or parsed.hostname not in ALLOWED_DOWNLOAD_HOSTS:
         raise EgoError("UNTRUSTED_UPDATE_URL",f"Untrusted release domain: {parsed.hostname}",3)
     req=Request(url,headers={"User-Agent":"ego-updater","Accept":"application/vnd.github+json"})
     try:
-        with urlopen(req,timeout=timeout,context=_ssl_context()) as response:
+        ctx = _ssl_context()
+        cm = urlopen(req,timeout=timeout,context=ctx) if urlopen is not _STD_URLOPEN else build_opener(HTTPSHandler(context=ctx), _SafeRedirectHandler()).open(req,timeout=timeout)
+        with cm as response:
             if response.geturl()!=url:
                 final=urlparse(response.geturl())
                 if final.scheme!="https" or final.hostname not in ALLOWED_DOWNLOAD_HOSTS:
@@ -62,7 +72,7 @@ def _read_url(url: str, limit: int, timeout: int=12) -> bytes:
             data=response.read(limit+1)
     except (OSError,ValueError) as exc:
         if "HTTP Error 404" in str(exc) and url==API:
-            raise EgoError("NO_RELEASE_PUBLISHED", "No published stable release found; publish a release wheel to enable 'harness update'",3) from exc
+            raise EgoError("NO_RELEASE_PUBLISHED", "No published stable release found; publish a release wheel to enable 'ego update'",3) from exc
         raise EgoError("UPDATE_NETWORK",str(exc),3) from exc
     if len(data)>limit:raise EgoError("UPDATE_TOO_LARGE","Release exceeds configured size limit",3)
     return data
@@ -151,11 +161,14 @@ def install_wheel(path: Path, version: str, *, approved: bool=False, offline: bo
     if not approved:
         raise EgoError("APPROVAL_REQUIRED","Use --yes or confirm interactively to install an update",3)
     _check_venv_or_raise()
-    proc=subprocess.run(_installer_argv(path,offline=offline),capture_output=True,text=True,timeout=180,check=False)
-    if proc.returncode:
-        raise EgoError("UPDATE_INSTALL_FAILED",(proc.stderr or proc.stdout)[-1600:],3)
-    check=subprocess.run([sys.executable,"-m","ego","--version"],capture_output=True,text=True,timeout=15,check=False)
-    dep_check=subprocess.run([sys.executable,"-c","import ego.domain.config, ego.usecases.projects"],capture_output=True,text=True,timeout=15,check=False)
+    try:
+        proc=subprocess.run(_installer_argv(path,offline=offline),capture_output=True,text=True,timeout=180,check=False)
+        if proc.returncode:
+            raise EgoError("UPDATE_INSTALL_FAILED",(proc.stderr or proc.stdout)[-1600:],3)
+        check=subprocess.run([sys.executable,"-m","ego","--version"],capture_output=True,text=True,timeout=15,check=False)
+        dep_check=subprocess.run([sys.executable,"-c","import ego.domain.config, ego.usecases.projects"],capture_output=True,text=True,timeout=15,check=False)
+    except (OSError,subprocess.TimeoutExpired) as exc:
+        raise EgoError("UPDATE_INSTALL_FAILED",str(exc),3) from exc
     good=check.returncode==0 and version in check.stdout and dep_check.returncode==0
     if not good:
         detail=(dep_check.stderr or check.stderr or "").strip()[-400:]

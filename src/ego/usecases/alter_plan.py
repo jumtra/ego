@@ -8,7 +8,7 @@ from ..adapters.alter_plan import AlterPlanClient, task_to_spec, spec_to_task
 from ..domain.config import load_config
 from ..domain.task_schema import AlterPushNodeSpec
 from .work import validate_task, status
-from ..shared.util import EgoError, read_json, write_json, now
+from ..shared.util import EgoError, _id, now, read_json, safe_path, write_json
 
 WAIT_STATES = ('ready', 'taken', 'running', 'passed')
 MAX_CONSECUTIVE_ERRORS = 3
@@ -36,10 +36,10 @@ def push(root: Path, task_file: str, slug: str | None = None) -> dict:
     validate_task(task, limits=limits)
     errors = plan_field_errors(task)
     if errors: raise EgoError('INVALID_TASK', '; '.join(errors), 2)
-    slug = slug or path.stem
+    slug = _id(slug or path.stem)
     client = AlterPlanClient(root)
     result = client.create(task_to_spec(task, slug, limits=limits), client.scope())
-    write_json(root / '.ego' / 'state' / 'alter_plans' / f'{slug}.json',
+    write_json(safe_path(root, f'.ego/state/alter_plans/{slug}.json'),
                {'plan_id': result['plan_id'], 'node_tasks': result['node_tasks'], 'slug': slug,
                 'task_file': task_file, 'pushed_at': now()})
     return {'plan_id': result['plan_id'], 'node_tasks': result['node_tasks'], 'state': 'draft'}
@@ -47,7 +47,7 @@ def push(root: Path, task_file: str, slug: str | None = None) -> dict:
 
 def wait(root: Path, plan_id: str, interval: float = 5.0, timeout: float = 0, write=print, sleep=time.sleep) -> dict:
     client = AlterPlanClient(root)
-    previous, errors, elapsed = None, 0, 0.0
+    previous, errors, started = None, 0, time.monotonic()
     while True:
         try:
             plan = client.get(plan_id)
@@ -62,9 +62,8 @@ def wait(root: Path, plan_id: str, interval: float = 5.0, timeout: float = 0, wr
                 write(json.dumps({'event': 'plan_state', 'plan_id': plan_id, 'state': state, 'at': now()}, ensure_ascii=False))
                 previous = state
             if state in WAIT_STATES: return plan
-        if timeout > 0 and elapsed > timeout: raise EgoError('ALTER_PLAN_TIMEOUT', plan_id, 5)
+        if timeout > 0 and time.monotonic() - started >= timeout: raise EgoError('ALTER_PLAN_TIMEOUT', plan_id, 5)
         sleep(interval)
-        elapsed += interval
 
 
 def pull(root: Path, plan_id: str, out: str, run_id: str) -> dict:

@@ -64,7 +64,6 @@ class KnowledgeStore:
         self.topics = self.base / "topics"
         self.lock = self.root / ".ego" / "locks" / "knowledge.lock"
 
-    # -- reading ---------------------------------------------------------------------------------
     def entries(self) -> list[dict[str, Any]]:
         found: list[dict[str, Any]] = []
         if self.index_path.exists():
@@ -102,7 +101,6 @@ class KnowledgeStore:
                     return {**entry, "text": path.read_text(encoding="utf-8")}
         raise EgoError("KNOWLEDGE_TOPIC_NOT_FOUND", f"No topic {slug!r}; run `ego knowledge index`", 2)
 
-    # -- writing ---------------------------------------------------------------------------------
     def _match(self, entries: list[dict[str, Any]], facts: list[str], keywords: list[str]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
         """The existing topic a new fact belongs to, with the candidates considered (strongest first)."""
         want_kw = {k.lower() for k in keywords}
@@ -127,7 +125,7 @@ class KnowledgeStore:
         facts = _facts(text)
         if not facts or len(text) > MAX_TEXT:
             raise EgoError("INVALID_KNOWLEDGE", "Empty or too large", 2)
-        kws = [k.strip() for k in (keywords or []) if k and k.strip()]
+        kws = [" ".join(k.split()) for k in (keywords or []) if isinstance(k, str) and k.strip()]
         with exclusive_lock(self.lock):
             entries = [e for e in self.entries() if not e.get("legacy")]
             target, considered = (None, [])

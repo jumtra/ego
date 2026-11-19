@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from ..domain.config import load_config
+from ..domain import config as _config_mod
 from .session import (_save_request, HOST_CLEAR, RESUGGEST_GROWTH, RUN_ID_ENV, RUN_SESSION_ENV, context_tokens,
                       latest_open_checkpoint, resume_prompt)
 from ..shared.util import EgoError, read_json, safe_path, write_json
@@ -355,7 +355,7 @@ class Rotator:
         self.saving_since, self.trigger, self.cleared = None, self.threshold, reading.key
         self.resumed = True
         self.rotations += 1
-        prompt = resume_prompt(checkpoint, limits=load_config(self.root).session_schema_limits())
+        prompt = resume_prompt(checkpoint, limits=_config_mod.load_config(self.root).session_schema_limits())
         return [(0.0, HOST_CLEAR[self.host].encode()), (0.5, b"\r"),
                 (AFTER_CLEAR, _paste(prompt)), (0.4, b"\r")]
 
@@ -431,13 +431,18 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
     """Run `argv` in a pseudo-terminal bridged to this one. Returns (exit code, rotations done)."""
     started = time.time()
     master, slave = pty.openpty()
-    interactive = os.isatty(stdin_fd)
-    if interactive:
-        _copy_size(stdin_fd, slave)
-    screen = _terminal(stdout_fd)  # a terminal to draw the status row on; the host is then one row shorter
-    if screen:
-        _set_size(slave, screen[0] - 1, screen[1])
-    pid = os.fork()
+    try:
+        interactive = os.isatty(stdin_fd)
+        if interactive:
+            _copy_size(stdin_fd, slave)
+        screen = _terminal(stdout_fd)  # a terminal to draw the status row on; the host is then one row shorter
+        if screen:
+            _set_size(slave, screen[0] - 1, screen[1])
+        pid = os.fork()
+    except Exception:
+        os.close(master)
+        os.close(slave)
+        raise
     if pid == 0:
         try:
             os.close(master)
@@ -447,7 +452,11 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
         finally:
             os._exit(127)
     os.close(slave)
-    saved = termios.tcgetattr(stdin_fd) if interactive else None
+    try:
+        saved = termios.tcgetattr(stdin_fd) if interactive else None
+    except Exception:
+        os.close(master)
+        raise
     handlers = {}
     try:
         resized = {"flag": False, "label": ctx_label(None)}  # the handler only sets a flag; the loop does the writes
@@ -489,14 +498,27 @@ def run(host: str, argv: list[str], root: Path, threshold: int, *, env: dict[str
                 _write_all(stdout_fd, data)
                 last_output = at
             if stdin_fd in ready:
-                data = os.read(stdin_fd, 65536)
+                try:
+                    data = os.read(stdin_fd, 65536)
+                except OSError as exc:
+                    if exc.errno != errno.EIO:
+                        raise
+                    data = b""
                 if not data:
                     watched.remove(stdin_fd)
                 else:
                     keys.feed(data, at)
                     _write_all(master, data)
-            if queue and at < due:
-                continue
+            if queue:
+                if at < due:
+                    continue
+                gated = len(queue) == 2 and queue[0][0] == AFTER_CLEAR
+                if not gated:
+                    _write_all(master, queue.popleft()[1])
+                    if len(queue) == 2 and queue[0][0] == AFTER_CLEAR:
+                        clear_sent_at = at  # the host was just cleared: the resume prompt waits for its new session
+                    due = at + queue[0][0] if queue else 0.0
+                    continue
             if at - last_poll < poll:
                 continue
             last_poll = at
@@ -551,7 +573,6 @@ def with_yolo(host: str, args: list[str]) -> list[str]:
 
 def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool = False) -> int:
     """`ego run`: the host CLI, interactive as usual, rotated automatically at `threshold` context tokens."""
-    from ..domain.config import load_config
     if yolo:
         args = with_yolo(host, args)
     if threshold <= 0:
@@ -581,7 +602,7 @@ def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool 
     overlay = None
     try:
         # The managed instructions sit on CLAUDE.md / AGENTS.md only while this session is open.
-        overlay = begin_overlay(root, host, load_config(root))
+        overlay = begin_overlay(root, host, _config_mod.load_config(root))
         code, rotations = run(host, argv, root, threshold, env=env, state=state, session=session, run_id=run_id)
     finally:
         session.unlink(missing_ok=True)
@@ -590,7 +611,7 @@ def run_host(host: str, args: list[str], root: Path, threshold: int, yolo: bool 
         end_overlay(overlay)
         try:
             from ..adapters.memory import alter_run_session_id
-            cfg = load_config(root)
+            cfg = _config_mod.load_config(root)
             if cfg.knowledge == "alter" and cfg.alter_analysis:
                 from .alter_analysis import launch_analysis
                 launch_analysis(root, alter_run_session_id(run_id))

@@ -524,7 +524,7 @@ def test_file_memory(project):
 
 
 def test_ego_memory_stays_file_when_memory_is_alter(project, tmp_path: Path, monkeypatch):
-    # Process memory is local even with memory = "alter": `ego memory` writes the file store and never calls alter.
+    # Process memory is local even with knowledge = "alter": `ego memory` writes the file store and never calls alter.
     _, log_path = _setup_fake_alter_mcp(tmp_path, monkeypatch)
     save_config(project, Config(knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     assert main(["memory", "add", "Use file memory for process records", "--root", str(project)]) == 0
@@ -630,7 +630,7 @@ def test_alter_project_auto_registers_on_apply_and_work(tmp_path: Path, monkeypa
     proj2 = tmp_path / "proj2"
     proj2.mkdir()
     (proj2 / ".ego").mkdir()
-    (proj2 / ".ego/config.toml").write_text('memory = "alter"\n', encoding="utf-8")
+    (proj2 / ".ego/config.toml").write_text('knowledge = "alter"\n', encoding="utf-8")
     wres = work.execute(proj2, {"goal": "g", "nodes": [{"id": "n1", "kind": "agent", "prompt": "[[MOCK:ok]]", "write_allowlist": ["src/**"]}]}, host="mock")
     assert wres["final_status"] == "PASSED"
     calls = [json.loads(x) for x in log_path.read_text(encoding="utf-8").splitlines()]
@@ -705,3 +705,36 @@ def test_alter_project_root_follows_the_root_a_worker_was_pinned_to(tmp_path: Pa
     monkeypatch.setenv("EGO_ALTER_PROJECT_ROOT", str(tmp_path / "main"))
     # Act / Assert
     assert alter_project_root(copy) == tmp_path / "main"
+
+
+def test_submit_alter_session_review_fails_on_is_error(tmp_path: Path, monkeypatch):
+    # Arrange
+    from ego.adapters import memory
+
+    monkeypatch.setenv("EGO_ALTER_MCP_COMMAND", "alter-mcp")
+    monkeypatch.setattr(memory.MCPStdio, "call_tool", lambda *a, **kw: {"isError": True, "content": [{"text": "boom"}]})
+
+    # Act
+    res = memory.submit_alter_session_review(
+        tmp_path,
+        session_id="s1",
+        host="claude",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    # Assert
+    assert res["status"] == "error"
+
+
+def test_knowledge_health_returns_no_hint_when_resolved(tmp_path: Path, monkeypatch):
+    # Arrange
+    from ego.adapters import memory
+
+    monkeypatch.setenv("EGO_ALTER_MCP_COMMAND", "alter-mcp")
+
+    # Act
+    health = memory.knowledge_health(tmp_path, "alter")
+
+    # Assert
+    assert health["mcp_resolved"] is True
+    assert health["hint"] is None

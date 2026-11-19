@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import datetime as dt
-import fnmatch
 import functools
 import hashlib
 import json
@@ -91,10 +90,6 @@ def safe_path(root: Path, relative: str, *, allow_missing: bool = True) -> Path:
     return resolved
 
 
-def matches(path: str, patterns: list[str]) -> bool:
-    return any(fnmatch.fnmatch(path, p) for p in patterns)
-
-
 def redact(text: str) -> str:
     if not text: return text
     text = re.sub(r"(?i)(authorization:\s*bearer\s+)[^\s]+", r"\1[REDACTED]", text)
@@ -159,11 +154,6 @@ def git_branch_delete(root: Path, branch: str, *, force: bool = False) -> bool:
     flag = "-D" if force else "-d"
     res = subprocess.run(["git", "branch", flag, branch], cwd=root, capture_output=True, text=True, timeout=30)
     return res.returncode == 0
-
-
-def git_dirty(root: Path) -> bool:
-    r = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, timeout=5)
-    return r.returncode == 0 and bool(r.stdout.strip())
 
 
 def git_commit_paths(work: Path, paths: list[str], message: str) -> bool:
@@ -257,7 +247,10 @@ def is_locked(path: Path) -> bool:
     import fcntl
     if not path.exists():
         return False
-    fd = os.open(path, os.O_RDWR, 0o600)
+    try:
+        fd = os.open(path, os.O_RDWR, 0o600)
+    except FileNotFoundError:
+        return False
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -269,7 +262,7 @@ def is_locked(path: Path) -> bool:
         os.close(fd)
 
 
-def snapshot(root: Path, excludes: tuple[str, ...] = (".git", ".ego/state", ".ego/locks", ".ego/artifacts", "__pycache__", ".pytest_cache", ".venv", "node_modules")) -> dict[str, str]:
+def snapshot(root: Path, excludes: tuple[str, ...] = (".git", ".ego/state", ".ego/locks", ".ego/backups", ".ego/artifacts", "__pycache__", ".pytest_cache", ".venv", "node_modules")) -> dict[str, str]:
     def excluded(rel: str) -> bool:
         return any(rel == x or rel.startswith(x + "/") or ("/" not in x and x in rel.split("/")) for x in excludes)
 
@@ -310,7 +303,8 @@ def _clone_file(src: str, dst: str) -> str:
 
 def simple_copy_tree(src: Path, dst: Path) -> None:
     def ignore(path: str, names: list[str]) -> list[str]:
-        return [x for x in names if x in {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache"} or (x == "state" and Path(path).name == ".ego") or (x == "artifacts" and Path(path).name == ".ego")]
+        in_ego = Path(path).name == ".ego"
+        return [x for x in names if x in {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache"} or (in_ego and x in {"state", "locks", "backups", "artifacts"})]
     shutil.copytree(src, dst, ignore=ignore, dirs_exist_ok=True, symlinks=False, copy_function=_clone_file)
 
 
@@ -388,8 +382,8 @@ def detect_host() -> str | None:
 
 
 def _id(value: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", value):
-        raise EgoError("INVALID_TASK_ID", "Use an alphanumeric task ID (max 80 chars) with '-' or '_'", 2)
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", value):
+        raise EgoError("INVALID_TASK_ID", "Use an alphanumeric task ID (max 64 chars) with '-' or '_'", 2)
     return value
 
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
-from ..shared.util import EgoError, ident, write_json
+from ..shared.util import EgoError, ident
 from ..adapters.runner import run_agent
 from .work import validate_task
 from ..adapters.codeintel import search
@@ -46,7 +46,7 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
                 f"- Allowed write scope: {json.dumps(scope)}.\n"
                 f"- Goal: {goal}.\n"
                 f"- Available custom agents: {json.dumps([a['name'] for a in discover_agents(workdir)])}.\n"
-                + ("- Memory is 'alter': set mcp to [\"alter\"] for nodes that need domain knowledge or glossary terms.\n"
+                + ("- Knowledge is 'alter': set mcp to [\"alter\"] for nodes that need domain knowledge or glossary terms.\n"
                    if cfg.knowledge == "alter" else "")
                 + f"- Candidate files to inspect: {json.dumps(ctx)[:3000]}")
         if history:

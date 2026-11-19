@@ -350,7 +350,7 @@ _HOST_VARS = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_
 
 
 def test_saving_cli_is_detected_only_when_unambiguous(monkeypatch):
-    from ego.usecases.session import detect_host
+    from ego.shared.util import detect_host
     for name in _HOST_VARS: monkeypatch.delenv(name, raising=False)
     assert detect_host() is None
     for name, host in [("CLAUDECODE", "claude"), ("CODEX_THREAD_ID", "codex"), ("OPENCODE", "opencode"),
@@ -554,7 +554,8 @@ def test_hooks_are_generated_only_on_request_and_call_the_installed_command(proj
     assert hooks["Stop"][0]["hooks"][0]["command"] == 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'
     cfg.profile = "full"
     full = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
-    assert full["PreToolUse"][0]["hooks"][0]["command"] == "ego hook pre-tool --root ."
+    assert full["PreToolUse"][0]["matcher"] == "Bash|Write|Edit|MultiEdit"
+    assert full["PreToolUse"][0]["hooks"][0]["command"] == 'ego hook pre-tool --root "$CLAUDE_PROJECT_DIR"'
     (project / ".ego/config.toml").write_text("clear_suggest_tokens = 5\n")
     with pytest.raises(EgoError):
         load_config(project)
@@ -588,7 +589,7 @@ def test_hook_cli_never_fails_the_host_turn(tmp_path: Path, monkeypatch, capsys)
     assert main(["hook", "session-start", "--host", "agy", "--root", str(tmp_path)]) == 0
     step = json.loads(capsys.readouterr().out)["injectSteps"][0]["systemMessage"]["systemMessage"]
     assert "alter_bootstrap" in step and "checkpoint was loaded" not in step
-    (tmp_path / ".ego/config.toml").write_text('memory = "file"\n')
+    (tmp_path / ".ego/config.toml").write_text('knowledge = "file"\n')
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"source": "clear"})))
     assert main(["hook", "session-start", "--root", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out) == {}
@@ -1688,3 +1689,15 @@ def test_session_schema_limits_from_config_bound_checkpoint_and_resume_prompt(tm
     assert len(saved["completed"]) == 2
     assert all(len(x) <= 12 for x in saved["completed"])
     assert len(prompt) <= 260
+
+
+def test_save_checkpoint_does_not_carry_over_next_steps_from_completed(tmp_path: Path):
+    # Arrange
+    (tmp_path / ".ego").mkdir()
+    save_checkpoint(tmp_path, "done-task", goal="finish", status="COMPLETED", next_steps=["stale step"])
+
+    # Act
+    saved = save_checkpoint(tmp_path, "next-task", goal="start next")
+
+    # Assert
+    assert saved["next_steps"] == []

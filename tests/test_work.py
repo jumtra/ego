@@ -1812,3 +1812,16 @@ def test_dynamic_dag_scheduler_starts_dependent_node_before_slow_sibling_finishe
     # Assert
     assert res["final_status"] == "PASSED"
     assert events.index("after_fast:end") < events.index("slow:end")
+
+
+def test_worktree_without_branch_applies_edits(tmp_path: Path):
+    # Arrange
+    (tmp_path / "w.py").write_text("from pathlib import Path\nPath('note.txt').write_text('after')\n")
+    spec = {"goal": "g", "nodes": [{"id": "n1", "kind": "code", "argv": ["python3", "w.py"], "write_allowlist": ["note.txt"]}]}
+
+    # Act
+    res = execute(tmp_path, spec, worktree=True, apply=True, approve=True)
+
+    # Assert
+    assert res["final_status"] == "PASSED"
+    assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "after"
