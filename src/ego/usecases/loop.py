@@ -13,7 +13,6 @@ Context discipline is the point of this module:
   staging tree; edits of failed nodes were never merged there.
 """
 from __future__ import annotations
-import shutil
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -285,9 +284,6 @@ def run_loop(root: Path, goal: str, *, done_checks: list[list[str]], host: str =
             entry.update(status=result["final_status"], run_id=result["run_id"], failures=failures,
                          passed=[nid for nid, s in result.get("node_status", {}).items() if s == "PASSED"],
                          changed_files=result.get("changed_files", [])[:40], cost_usd=usage.get("cost_usd", 0.0))
-            if seed:
-                # The new run copied this tree; keep one staging copy per loop, not one per iteration.
-                shutil.rmtree(root / ".ego" / "state" / "runs" / seed / "staging", ignore_errors=True)
             seed = result["run_id"]
             seed_spec, seed_status = spec, dict(result.get("node_status", {}))
             signature = _signature(root, result, failures)

@@ -471,6 +471,14 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             if task_file:record["task_file"]=str(task_file)
             write_json(record_path,record)
             managed_checkpoint(root,record,state="IN_PROGRESS",task_file=record.get("task_file"))
+            if seed_dir:
+                # The new staging now holds the seed's verified work: keep one staging per rerun chain.
+                from ..domain.retention import remove_staging
+                try:
+                    with exclusive_lock(root/".ego"/"locks"/(seed_from+".lock"),blocking=False):
+                        remove_staging(root,seed_dir.parent)
+                except EgoError:
+                    pass  # the seed run is active elsewhere; retention removes it later
         # A resume is a fresh host invocation; carry only the most recent
         # durable, bounded summary, not the previous session transcript.
         handoff = load_checkpoint(root, run_id) if resume else None

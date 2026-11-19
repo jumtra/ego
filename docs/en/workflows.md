@@ -59,6 +59,8 @@ Or run and apply in one step with `ego work run ... --apply --approve`.
 5. Saves the staging files, `record.json` and a checkpoint under the run ID as each node finishes, even while other nodes are still running. A node that passed stays saved even if a sibling fails or the process dies.
 6. With `--apply --approve`, copies the changed files to the project, after confirming none of them changed since the run started (`STALE_BASE` otherwise).
 
+**Staging retention.** Ignored files are copied as copy-on-write clones where the filesystem supports it, so they take almost no extra space. Staging directories not updated for 3 days, and the oldest ones beyond 3 GB in total, are removed automatically (a running run and the newest staging are never removed for size). `record.json` and progress stay. The staging of a run used with `--from` is removed as soon as the new run is created. A run whose staging was removed cannot be resumed, applied or used with `--from` (`STAGING_MISSING` / `SEED_MISSING`).
+
 ### Flags of `ego work run` / `ego work resume`
 
 | Flag | Meaning |

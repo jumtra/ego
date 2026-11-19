@@ -3,10 +3,12 @@
 Every category keeps only its newest entries. Pruning is fail-open: an error in one
 category is recorded and never stops a run. Unfinished work is never removed: a run
 whose record is still RUNNING (resumable) and a run whose lock is held are both kept.
+Staging copies are additionally bounded by age and total size; their run's record and progress always stay.
 """
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -16,6 +18,8 @@ from typing import Any
 from ..shared.util import EgoError, exclusive_lock, read_json, write_json
 
 RUNS_KEEP = 30               # run directories (including their staging copies)
+STAGING_MAX_AGE_DAYS = 3     # staging copies not updated for this long are removed
+STAGING_MAX_BYTES = 3 * 1024**3  # total staging size budget; oldest copies beyond it are removed
 ALTER_SESSIONS_KEEP = 200    # per-session ALTER submission digests
 ALTER_TURNS_KEEP = 50        # per-session persisted ALTER turn files (analyzer input)
 ALTER_TURNS_MAX_AGE_DAYS = 7
@@ -27,13 +31,36 @@ def _newest_first(paths: list[Path]) -> list[Path]:
     return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def _remove_run(root: Path, runroot: Path) -> None:
+def remove_staging(root: Path, runroot: Path) -> None:
+    """Remove a run's staging copy (and its worktree registration); record.json and progress stay."""
     staging = runroot / "staging"
     if (staging / ".git").exists():
         # A worktree-backed staging is registered in the repository; deregister it first.
         subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(staging)],
                        capture_output=True, text=True, timeout=60, check=False)
+    shutil.rmtree(staging, ignore_errors=True)
+
+
+def _remove_run(root: Path, runroot: Path) -> None:
+    remove_staging(root, runroot)
     shutil.rmtree(runroot, ignore_errors=True)
+
+
+def _worktree_prune(root: Path) -> None:
+    subprocess.run(["git", "-C", str(root), "worktree", "prune"],
+                   capture_output=True, text=True, timeout=60, check=False)
+
+
+def _dir_bytes(path: Path) -> int:
+    # Clones count at full logical size, so the budget errs on the safe side.
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for name in filenames:
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_size
+            except OSError:
+                continue
+    return total
 
 
 def _prune_runs(root: Path) -> int:
@@ -53,8 +80,36 @@ def _prune_runs(root: Path) -> int:
         except EgoError:
             continue  # the run is active in another process
     if removed:
-        subprocess.run(["git", "-C", str(root), "worktree", "prune"],
-                       capture_output=True, text=True, timeout=60, check=False)
+        _worktree_prune(root)
+    return removed
+
+
+def _prune_stagings(root: Path) -> int:
+    """Bound staging copies by age and total size. The newest staging is always kept for size, so an
+    immediate resume survives; a held run lock protects its staging, but still counts against the budget.
+    Removed staging cannot be resumed, applied or used with --from; records and progress stay."""
+    base = root / ".ego" / "state" / "runs"
+    if not base.is_dir():
+        return 0
+    cutoff = time.time() - STAGING_MAX_AGE_DAYS * 86400
+    runs = _newest_first([p for p in base.iterdir() if (p / "staging").is_dir()])
+    total = 0
+    removed = 0
+    for i, runroot in enumerate(runs):
+        try:
+            with exclusive_lock(root / ".ego" / "locks" / (runroot.name + ".lock"), blocking=False):
+                size = _dir_bytes(runroot / "staging")
+                expired = runroot.stat().st_mtime < cutoff
+                over = i > 0 and total + size > STAGING_MAX_BYTES
+                if expired or over:
+                    remove_staging(root, runroot)
+                    removed += 1
+                    continue
+                total += size
+        except EgoError:
+            total += _dir_bytes(runroot / "staging")  # active elsewhere: kept, but still uses budget
+    if removed:
+        _worktree_prune(root)
     return removed
 
 
@@ -149,7 +204,7 @@ def prune_state(root: Path) -> dict[str, Any]:
     """Enforce every retention limit once. Returns the number removed per category."""
     root = Path(root).resolve()
     report: dict[str, Any] = {}
-    for name, step in (("runs", _prune_runs), ("run_locks", _prune_run_locks),
+    for name, step in (("runs", _prune_runs), ("stagings", _prune_stagings), ("run_locks", _prune_run_locks),
                        ("alter_sessions", _prune_alter_sessions), ("alter_turns", _prune_alter_turns),
                        ("alter_segments", _prune_alter_segments), ("events", _prune_events),
                        ("backups", _prune_backups)):

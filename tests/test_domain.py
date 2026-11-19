@@ -62,6 +62,25 @@ def test_held_run_lock_protects_run(tmp_path):
     assert (tmp_path / ".ego" / "state" / "runs" / oldest).exists()
 
 
+def test_expired_staging_removed_but_record_kept(tmp_path):
+    old = _make_run(tmp_path, "run-old", "FAILED", age=4 * 86400)
+    new = _make_run(tmp_path, "run-new", "FAILED", age=10)
+    retention.prune_state(tmp_path)
+    assert not (old / "staging").exists() and (old / "record.json").exists()
+    assert (new / "staging").exists()
+
+
+def test_staging_budget_keeps_newest_and_removes_older(tmp_path, monkeypatch):
+    monkeypatch.setattr(retention, "STAGING_MAX_BYTES", 10)
+    for i in range(3):
+        run = _make_run(tmp_path, f"run-{i}", "FAILED", age=100 + i)
+        (run / "staging" / "f.bin").write_bytes(b"x" * 8)
+        _touch_old(run, 100 + i)
+    retention.prune_state(tmp_path)
+    kept = {p.parent.name for p in (tmp_path / ".ego" / "state" / "runs").glob("*/staging")}
+    assert kept == {"run-0"}
+
+
 def test_orphan_run_lock_removed(tmp_path):
     locks = tmp_path / ".ego" / "locks"
     locks.mkdir(parents=True)
