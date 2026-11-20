@@ -28,7 +28,7 @@ Bring planning, task routing, tests, and memory to Claude Code, Codex, OpenCode,
 | ⚡ | Fix code in your usual AI CLI | `/work` inspects, implements and tests. Small fixes get no planning documents |
 | 🧩 | Split work across AI CLIs | Host and model per task node; dependencies respected, independent nodes run in parallel |
 | ✅ | Verify before applying | Changes are made and tested in a staging copy or Git worktree, then applied only with approval |
-| 🔁 | Work until a command passes | Goal loop: plan → execute → evaluate → replan, bounded by iterations, budget and time |
+| 🔁 | Failures loop inside the plan | Reviewer rounds and replans, bounded by config caps and a run token cap |
 | 💾 | Continue later, or in another CLI | Memory, checkpoints, and handoff between Claude Code / Codex / OpenCode / AGY |
 | ♻️ | Keep long sessions small | `ego run <cli>` checkpoints, clears and resumes the session at a context threshold |
 
@@ -95,7 +95,7 @@ ego run claude     # also: codex, opencode, agy
 |---|---|---|
 | Install, apply, update, uninstall | [Setup](docs/en/setup.md) | [セットアップ](docs/ja/setup.md) |
 | `.ego/config.toml`, environment variables | [Configuration](docs/en/configuration.md) | [設定](docs/ja/configuration.md) |
-| `/work`, managed runs, Task JSON, goal loop | [Workflows](docs/en/workflows.md) | [ワークフロー](docs/ja/workflows.md) |
+| `/work`, managed runs, Task JSON, reviewer loops | [Workflows](docs/en/workflows.md) | [ワークフロー](docs/ja/workflows.md) |
 | Checkpoints, CLI handoff, `ego run` | [Sessions](docs/en/sessions.md) | [セッション](docs/ja/sessions.md) |
 | Every command and flag | [Command reference](docs/en/commands.md) | [コマンドリファレンス](docs/ja/commands.md) |
 | Trust boundaries and limits | [Security](docs/en/security.md) | [セキュリティ](docs/ja/security.md) |

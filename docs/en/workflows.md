@@ -8,7 +8,6 @@ There are three ways to get work done, from lightest to heaviest. Start with `/w
 |---|---|---|
 | [`/work`](#work) | Everyday changes | You, in your AI CLI |
 | [Managed run](#managed-runs) | Large, cross-component, risky or multi-host changes | `ego work run` (usually started by `/work`) |
-| [Goal loop](#goal-loop) | A goal that a command can prove, likely to need several attempts | `ego work loop` |
 
 ## `/work`
 
@@ -23,7 +22,6 @@ There are three ways to get work done, from lightest to heaviest. Start with `/w
 | Small, low-risk | Read the relevant files → edit → focused tests → check the diff → report | Requirements, design or plan documents |
 | Medium | The same, with a short inline checklist if useful | Full specification documents |
 | Large, risky or multi-host | A managed run starting with `ego work plan` | Documents nobody asked for |
-| Goal with a proving command | A goal loop | |
 
 Behaviors to expect:
 
@@ -87,9 +85,9 @@ Output is a compact JSON summary: `run_id`, `final_status`, `applied`, per-node 
 | `COMPARISON_READY` | A compare node produced candidates for you to review; nothing is applied | 0 |
 | `FAILED` | A node still failed after its attempts | 5 |
 | `BLOCKED_DEPENDENCY`, `MERGE_CONFLICT` | A dependency failed, or parallel nodes edited the same file incompatibly | 5 |
-| `TIMEOUT`, `BUDGET_EXHAUSTED`, `CANCELLED` | A limit was reached or `ego work cancel <run_id>` was used | 5 |
+| `BUDGET_EXHAUSTED`, `CANCELLED` | The run token cap (`max_run_tokens`) was reached, or `ego work cancel <run_id>` was used | 5 |
 
-**Continuing a failed run.** Correct only the failed nodes in the task file and run `ego work run --task <file> --from <run_id>`: only the corrected nodes and their dependents run. `ego work resume <run_id>` with the unchanged task reruns failed nodes with their last failure as feedback (for a judge REJECT, the reviewed coder gets the findings). An unfinished run keeps its worktree so it can be continued.
+**Continuing a failed run.** Correct only the failed nodes in the task file and run `ego work run --task <file> --from <run_id>`: only the corrected nodes and their dependents run. `ego work resume <run_id>` with the unchanged task reruns failed nodes with their last failure as feedback (for a reviewer REJECT, the reviewed coder gets the findings). An unfinished run keeps its worktree so it can be continued.
 
 `ego work status <run_id>` shows a run again. The usage line (for example `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`) counts input + output + cache read + cache creation tokens. Costs are the host CLI's own estimates; `cost_known: false` means a host reported none.
 
@@ -111,8 +109,8 @@ While a run is going, ego appends one JSON line per event to `.ego/state/runs/<r
 | `node_started` | `node`, `kind`, `role` |
 | `attempt_finished` | `node`, `attempt`, `host`, `model`, `status`, `checks` (argv + status), clipped `feedback`, `changed`, `tokens`, `segments`, `rotations` |
 | `worker_segment` | `node`, `attempt`, `segment`, `tokens`, `action` (`continue` or `rotate`) |
-| `node_finished` | `node`, `status`, `attempts`, `changed`, and for a judge `verdict` and `findings` |
-| `judge_retry` | `judge`, `reviews`, `retry` |
+| `node_finished` | `node`, `status`, `attempts`, `changed`, and for a reviewer `verdict` and `findings` |
+| `review_round` | `reviewer`, `reviews`, `round`, `cause` (`reject` or `gate`). A stall emits `loop_stalled` |
 | `run_finished` / `run_error` | `final_status`, `applied`, `changed_files`, `message` / `code`, `message` |
 
 The summary adds `nodes` (status, attempts and check results per node) and, for a PASSED unapplied run, `next_action`: the exact command that applies it.
@@ -152,7 +150,7 @@ Task-level fields:
 |---|---|
 | `goal`, `instructions` | Passed to every agent node as user instructions |
 | `instructions_file` | Project-relative file with further shared instructions |
-| `defaults` | `host` / `hosts`, `strategy`, `model`, `models`, `fallback_on`, and `roles` (a per-role route, e.g. `{"judge": {"host": "codex"}}`; node beats role beats defaults) for nodes that do not set their own |
+| `defaults` | `host` / `hosts`, `strategy`, `model`, `models`, `fallback_on`, and `roles` (a per-role route, e.g. `{"reviewer": {"host": "codex"}}`; node beats role beats defaults) for nodes that do not set their own |
 | `nodes` | Non-empty list of nodes |
 
 Node fields:
@@ -166,22 +164,28 @@ Node fields:
 | `write_allowlist` | agent, code | Glob patterns of files the node may change. Required for agent and code nodes |
 | `checks` | all | Commands (argv arrays) that must exit 0 |
 | `argv` | code, gate | The command to run (`argv` or `checks` is required) |
-| `role` | agent | `coder`, `tester` or `judge`, enforced. A `tester` may only write under `tests/` (its `write_allowlist` must start with `tests/`). A `judge` is read-only and has no `write_allowlist` |
+| `role` | agent | `coder`, `tester` or `reviewer`, enforced. A `tester` may only write under `tests/` (its `write_allowlist` must start with `tests/`). A `reviewer` is read-only and has no `write_allowlist` |
 | `inputs`, `outputs` | agent | The I/O contract: existing files to read (up to 6) and the files or `path::function` to change. Each output must match `write_allowlist`. Dependent nodes see the prior node's `outputs` |
-| `reviews`, `max_retries` | judge | `reviews` (required) is the `coder` node to send back on a rejection; `max_retries` is 0-2 (default 1) |
-| `intent`, `done_when`, `non_goals`, `assumptions`, `provides` | agent | Why the stage exists, acceptance criteria, what not to do, facts relied on, what later stages depend on. Short strings (`intent`) or lists of up to 6 strings of up to 400 characters. The limits are defaults; `plan_schema` in [Configuration](configuration.md) overrides them |
+| `reviews`, `max_rounds`, `on_exhausted` | reviewer | `reviews` (required) is the `coder` node to send back; `max_rounds` is 0-5 (default: the config `max_rounds`, 2); `on_exhausted` is `fail` (default) or `replan` |
+| `intent`, `done_when`, `non_goals`, `assumptions`, `provides` | agent | Why the stage exists, acceptance criteria, what not to do, facts relied on, what later stages depend on. Short strings (`intent`) or lists of up to 6 strings of up to 400 characters. The limits come from `[tuning.plan_schema]` in `.ego/defaults.toml` ([Configuration](configuration.md)) |
 | `requirement`, `steps` | agent | 5W1H (`who` `what` `when` `where` `why` `how`, strings up to 400 characters) and 1-10 ordered steps the worker follows exactly as written |
 | `host` / `hosts`, `strategy`, `model` / `models`, `fallback_on` | agent | Routing, see below |
 | `agent` | agent | Optional custom agent name (from `.claude/agents/*.md`, `.agents/agents/*.md`, `.opencode/agents/*.md`, or `.codex/agents/*.toml`); its definition is embedded into the node prompt |
 | `mcp` | agent | List of 1–8 required MCP server names (e.g. `["alter"]`). Keeps host MCP servers available even when `worker_context = "lean"`, and adds domain/glossary retrieval instructions. With `knowledge = "alter"` they use only alter (`alter_task_context` / `alter_search` / `alter_get_note`); with file knowledge they read `.ego/knowledge/index.md` (`ego knowledge`). Automatically enabled for `knowledge = "alter"` |
 | `instructions_file`, `context_files` | agent | Extra instructions; up to 24 reference files |
-| `max_attempts`, `max_turns`, `timeout_seconds` | all | Per-node limits, capped by the config |
+| `max_attempts`, `max_turns`, `timeout_seconds` | all | Per-node limits. A value above the config cap is rejected with `INVALID_TASK` (never clamped) |
 
 Commands are argv arrays, never shell strings, and must start with a name in `allow_commands`.
 
-### Judge gate
+### Reviewer and loops
 
-A `judge` node must depend on at least one `gate` or `code` node, so it runs only after the deterministic checks pass. It ends with `VERDICT: APPROVE` or `VERDICT: REJECT`; each finding must be `- path:line: issue`, and a finding without that evidence is discarded (a rejection left with no evidence counts as approval). On a rejection with evidence, only the reviewed `coder` node and the nodes the judge waits on are rerun, with the findings as feedback, up to `max_retries` times. The rest of the plan is not replanned. After that the judge node fails.
+A `reviewer` node must depend on at least one `gate` or `code` node, so it runs only after the deterministic checks pass. It ends with `VERDICT: APPROVE` or `VERDICT: REJECT`; each finding must be `- path:line: issue`, and a finding without that evidence is discarded (a rejection left with no evidence counts as approval).
+
+A rejection with evidence, or a gate/code failure inside the reviewer's loop, reruns only the reviewed `coder` node and the nodes the reviewer waits on, with the findings as feedback. This repeats up to `max_rounds` times per node (default 2).
+
+- `on_exhausted = "fail"` (default): when the rounds are used up, the reviewer node fails.
+- `on_exhausted = "replan"`: when the rounds are used up, the plan is revised ([Replans](#replans-max_replans)).
+- Stall: if a retry would leave the staging tree and the feedback unchanged, the loop stops even if rounds remain, emits `loop_stalled`, and the reviewer fails. No replan happens in this case.
 
 ### Choosing host and model
 
@@ -199,47 +203,13 @@ A node with several hosts must name its strategy, so that extra vendors are neve
 ego work run --task task.json --hosts claude,codex --strategy fallback --models '{"claude":"sonnet","codex":"auto"}' --trust-cli
 ```
 
-## Goal loop
+## Replans (`max_replans`)
 
-Use it when a command can prove the goal (tests pass, build succeeds). Without such a command, do not loop.
+The task's `max_replans` is the number of times the whole plan may be revised (default 1, capped by the config `max_replans`). When a reviewer with `on_exhausted = "replan"` uses up its rounds, verified nodes are kept and the rest is replanned. A planned node with the same id as a verified one replaces it. `on_exhausted = "replan"` requires `max_replans >= 1`. A value above the config cap is rejected with `INVALID_TASK`.
 
-```bash
-ego work loop --goal "Reject negative timeouts in the API" --done-check "pytest -q tests/api" \
-  --host claude --scope 'src/**,tests/**' --max-iterations 3 --max-budget-usd 5 --execute --trust-cli
-ego work loop-status <loop_id>
-ego work loop-apply <loop_id> --approve      # apply a VERIFIED loop after review
-ego work cancel <loop_id>                    # stops before the next iteration
-```
+## Token cap
 
-| Flag | Meaning |
-|---|---|
-| `--goal` | What to achieve (required) |
-| `--done-check` | Command that exits 0 when the goal holds (required, repeatable). A command line or a JSON argv array |
-| `--host` | `mock` (default), `claude`, `codex` or `opencode` |
-| `--scope` | Comma-separated glob patterns the loop may change (default `src/**,tests/**`) |
-| `--max-iterations` | Default 3; 1–10 |
-| `--max-budget-usd`, `--max-wall-seconds` | Optional limits |
-| `--execute` | Allow planner model calls |
-| `--plan-first` | Call the planner before the first iteration |
-| `--task <file>` | Run an approved task JSON as the first iteration; `--goal` defaults to its goal. Not combined with `--plan-first` |
-| `--trust-cli`, `--autonomy`, `--attest-external-sandbox`, `--apply --approve` | As for managed runs |
-
-How it works:
-
-- The first iteration skips the planner: one worker is run and repaired against the done-checks. The planner is called only after a failed iteration, or up front with `--plan-first`. With `--task`, the approved task replaces that first attempt, and a failure is replanned like any other iteration.
-- Every iteration plans and executes in new CLI sessions. State lives in `.ego/state/loops/<loop_id>/ledger.json`, not in a conversation.
-- Replanning receives a bounded record only: failed nodes, clipped check output and changed paths.
-- Verified changes carry over to the next iteration; edits of failed nodes do not.
-- Verified agent nodes are kept verbatim in the next task and are not executed again while their fingerprint (own definition, ancestors and shared task settings) is unchanged. A planned node with the same id replaces one and reruns it and its dependents. Gate and code nodes always run again as a cheap re-verification.
-
-| End state | Meaning |
-|---|---|
-| `VERIFIED` | Goal holds in the staged copy; nothing applied yet |
-| `COMPLETED` | Goal holds and the result was applied |
-| `STALLED` | Two iterations ended with identical content and failure |
-| `MAX_ITERATIONS`, `BUDGET_EXHAUSTED`, `TIMEOUT`, `CANCELLED` | A limit was reached |
-
-For a small goal that fits in one interactive Claude Code session, the CLI's own `/goal` is enough.
+`max_run_tokens` (default 500000) caps the billable tokens of the whole run; `cache_read` tokens are not counted. When the cap is reached, the run stops between steps and `final_status` is `BUDGET_EXHAUSTED`. There is no whole-run time limit.
 
 ## Supporting commands
 

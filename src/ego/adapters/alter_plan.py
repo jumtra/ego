@@ -7,7 +7,7 @@ from ..shared.util import EgoError, alter_project_root
 from ..domain.task_schema import PlanSchemaLimits, validate_alter_plan_spec
 from .memory import MCPStdio, _alter_mcp_spec, ALTER_HOST_HINT
 
-NODE_EXTRA_KEYS=('kind','role','reviews','host','hosts','model','models','agent','mcp','max_retries','strategy','fallback_on','argv','outputs','notes','timeout_seconds')
+NODE_EXTRA_KEYS=('kind','role','reviews','host','hosts','model','models','agent','mcp','max_rounds','on_exhausted','max_turns','strategy','fallback_on','argv','outputs','notes','timeout_seconds')
 TASK_EXTRA_KEYS=('defaults','instructions_file')
 
 def task_to_spec(task: dict, slug: str, *, limits: PlanSchemaLimits | None = None) -> dict:

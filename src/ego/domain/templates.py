@@ -44,7 +44,6 @@ Choose the **smallest useful workflow** and keep context small: read only the fi
 | Small, low-risk change | Inspect relevant files, edit, run focused tests, inspect the diff, report. Do NOT automatically write a requirements document, design document or implementation plan. |
 | Medium change | The same, with a brief inline checklist only if useful. |
 | Large, cross-component, risky or multi-host | Managed run, starting with `ego work plan`. Read `references/managed.md` first. |
-| A goal with a command that proves it, likely to take several attempts | Goal loop. Read `references/loop.md` first. |
 
 Prefer direct user instructions over ceremonial workflow. Write formal documents only when requested or needed for a decision.
 
@@ -99,14 +98,14 @@ When `knowledge = "alter"`: do not ask for inline approval. Write the plan as th
 
 ## 3. Execute (after approval): always through ego's managed engine
 
-Do not edit project files yourself. The engine runs each node in an isolated copy and enforces roles, `write_allowlist` and the judge gate. Your job is to start the run, relay events and report.
+Do not edit project files yourself. The engine runs each node in an isolated copy and enforces roles, `write_allowlist` and the reviewer gate. Your job is to start the run, relay events and report.
 
 1. Write the approved plan as the task JSON in `.ego/state/tasks/<slug>.json`; do not plan it again with `ego work plan`. One node per graph node: `depends_on` from When, `write_allowlist` from Where, 5W1H into `requirement`, How into `steps`, Why into `intent`, Done when into `done_when` (commands as argv arrays in `checks`), Non-goals, Assumptions and Provides into `non_goals`, `assumptions` and `provides`. Intake answers go into task-level `instructions`. Then save an interactive checkpoint: `ego session checkpoint --task-id <slug> --goal "<goal>" --completed "plan approved" --next "run-<slug>" --decision "<decision or none>" --blocker "<blocker or none>" --status IN_PROGRESS --kind plan_ready --root .`.
 
    alter flow: Run `ego work alter-plan pull <plan_id> --root . --out .ego/state/tasks/<slug>.json --run-id run-<slug>` (add a numeric suffix to the run id on every repeat). It validates and claims the plan (ALTER_PLAN_NOT_READY means the button was not pressed). If it prints `from_run`, start step 2 with `--from <from_run>` so verified nodes are not run again. The run reports node results to alter by itself; after INTERRUPTED or when `alter_sync.json` shows pending, run `ego work alter-plan sync <run_id> --root . --task <file>`. After a FAILED run tell the user to fix the failed nodes in alter and press the re-run button, then wait and pull again; never edit the plan yourself in this flow.
 2. Start the run: `ego work run --root . --task <task-file> --host <host> --trust-cli --run-id run-<slug>`. In Claude Code use Bash `run_in_background`, elsewhere the foreground (`managed.md` has the flags). Each node is saved as it finishes, also inside a parallel wave, so a crash loses only the nodes still running.
 3. Receive progress. In Claude Code start Monitor with `ego work watch run-<slug> --root .` and `timeout_ms` 1800000; if it expires before `run_finished`, `run_error` or `run_stopped`, restart it with `--after <last seq>`. Elsewhere read `progress` from `ego work status run-<slug> --root .`.
-4. Tell the user each event in one line as it happens: node started, attempt passed or failed (with the failed check), judge verdict, `worker_segment` rotate.
+4. Tell the user each event in one line as it happens: node started, attempt passed or failed (with the failed check), reviewer verdict, `worker_segment` rotate.
 5. After `run_finished`, read `ego work status run-<slug> --root .` once (`nodes`, `failures`, `changed_files`, `next_action`).
 6. `INTERRUPTED` (in `ego work status`, or a `run_stopped` event) means the process died while the run was RUNNING. Completed nodes stay saved. Report it as interrupted and resumable, then run `ego work resume run-<slug> --root . --task .ego/state/tasks/<slug>.json --host <host> --trust-cli`; PASSED nodes are skipped. Never start a new run under the same ID.
 7. `RUN_ACTIVE` means another live process holds `.ego/locks/run-<slug>.lock`. Do not delete the lock or start a second run, and do not resume or hand off its checkpoint until that process finishes or the run reports `INTERRUPTED`.
@@ -114,7 +113,7 @@ Do not edit project files yourself. The engine runs each node in an isolated cop
 9. If a node fails, a step cannot be done as written, needs a file outside its Where, or one of the node's assumptions turns out false, stop and ask instead of improvising: explain, and get approval before changing the plan or rerunning.
 10. After approval, correct only the failed nodes in the task file, keep the others unchanged, and rerun step 2's command with `--run-id run-<slug>-2 --from run-<slug>`: unchanged verified nodes are not run again.
 
-Use `ego work loop --task` (`../work/references/loop.md`) only when a command proves the whole goal and the user agrees to replanning.
+Failures loop inside the plan: set reviewer `max_rounds`/`on_exhausted` and task `max_replans` within the config caps.
 
 ## 4. Report
 
@@ -141,27 +140,6 @@ Starting or resuming a run whose lock is held fails with `RUN_ACTIVE` and leaves
 
 Managed worker prompts describe only their assigned implementation and tests. Do not recursively invoke /work or start another managed run from a worker. Workers start in fresh sessions and, by default, without the user's MCP servers (`worker_context = "lean"` in `.ego/config.toml`).
 """,
-"loop": """# Goal loop
-
-For a goal whose completion a command can prove (tests pass, a build succeeds, a check script exits 0). Without such a command, do not loop: do the work directly and report.
-
-**Inside one interactive Claude Code session:** offer the user a ready-to-paste host goal instead of building your own loop: `/goal <one measurable end state>; verify with <command>; stop after 20 turns`. The host's checker does not run tools, so run the command and state its result each turn.
-
-**Across fresh sessions (larger goals, any host):**
-
-`ego work loop --root . --goal "<what and why>" --done-check "<command>" --host <host> --scope '<paths>' --max-iterations 3 --max-budget-usd <n> --execute --trust-cli`
-
-With a plan the user approved, add `--task <task-file>` (the goal defaults to the task's): that plan runs as the first iteration, and the planner is called only after it fails. A replan departs from the approved plan, so get the user's agreement first, or use `ego work run --task` instead.
-
-The first iteration is one direct worker repaired against the done-checks; the planner is called only after that fails (`--plan-first` plans up front for goals that clearly need decomposition). Every iteration runs the done-checks in a staged copy. A failed iteration replans from a bounded record (failed node, clipped check output, changed paths), never from a transcript, and verified work carries into the next iteration. Repeat `--done-check` for several commands.
-
-Read `status` in the compact output:
-- `VERIFIED`: the goal holds in the staged copy; nothing is applied. After authorization run `ego work loop-apply <loop_id> --root . --approve`.
-- `COMPLETED`: applied (only when the loop was started with `--apply --approve`, which needs authorization up front).
-- `STALLED`, `MAX_ITERATIONS`, `BUDGET_EXHAUSTED`, `TIMEOUT`: report 未完了 with the last failure. Do not relaunch the same loop unchanged; change the goal, scope or checks, or ask the user.
-
-`ego work loop-status <loop_id>` re-reads the result; `ego work cancel <loop_id>` stops before the next iteration.
-""",
 "checkpoint": """# Checkpoint and fresh start
 
 Write a compact factual handoff:
@@ -174,7 +152,7 @@ Choose `--kind` to match the session phase (it adjusts field priority and resume
 - `plan_resume`: planning paused mid-way. Focus on `--blocker` (open questions), `--next` (remaining design points) and `--decision`.
 - `completed`: work finished and validated (auto-selected when `--status COMPLETED`). Focus on `--completed`, `--evidence` and `--decision`.
 
-Bounds (`max_goal_chars`, `max_item_chars`, `max_notes`, `max_prompt_chars`) are configurable via `session_schema` in `.ego/config.toml`.
+Bounds (`max_goal_chars`, `max_item_chars`, `max_notes`, `max_prompt_chars`) are configurable via `[tuning.session_schema]` in `.ego/defaults.toml`.
 
 Status is IN_PROGRESS while work remains, BLOCKED on a blocker, VERIFIED for verified but unapplied work, COMPLETED only after successful validation and application. Include decisions, known failures and uncommitted changes, not raw transcripts or secrets. Confirm that the checkpoint succeeded.
 
@@ -184,7 +162,7 @@ When `ego session resume` returns `auto_resume_after_clear: true` (Claude Code w
 
 Checkpoints are shared by every CLI in the project (Claude Code, Codex, OpenCode, AGY) and record which one saved them. To pick up another CLI's work in this session, run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt` (no clear needed); `ego session list --root .` shows all open checkpoints. To send work the other way, checkpoint, then give the user the `launch_command` from `ego session handoff <id> --to <cli> --root .`; you cannot open the other CLI yourself.
 
-Managed runs and goal loops checkpoint automatically under their run or loop ID, with a new CLI session per node.
+Managed runs checkpoint automatically under their run ID, with a new CLI session per node.
 
 A managed run's checkpoint is rewritten as each node finishes (also inside a parallel wave), so it is current after any node. While the run's lock (`.ego/locks/<run_id>.lock`) is held, `ego session resume --from`, `ego session handoff` and the context-clear instructions refuse that checkpoint with `RUN_ACTIVE`; without a task ID, locked managed checkpoints are skipped. A run whose process died shows as `INTERRUPTED` in `ego work status`: resume it with `ego work resume` (see `managed`), not by continuing its checkpoint by hand.
 """,

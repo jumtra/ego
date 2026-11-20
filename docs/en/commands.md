@@ -47,14 +47,11 @@ Details: [Workflows](workflows.md).
 | `ego work run --task <file> [flags]` | Execute a Task JSON in isolation |
 | `ego work resume <run_id> --task <file> [flags]` | Continue a run, or apply a verified one with `--apply --approve` |
 | `ego work status <run_id> [--verbose]` | Show a run |
-| `ego work cancel <run_id\|loop_id>` | Request cancellation |
-| `ego work loop --goal <text> --done-check <cmd> [flags]` | Goal loop |
-| `ego work loop-status <loop_id>` / `loop-apply <loop_id> --approve` | Inspect or apply a loop |
+| `ego work cancel <run_id>` | Request cancellation |
 | `ego work native` | Reports that native mode means using `/work` in the CLI; makes no model call |
 
 `run` / `resume` flags: `--host`, `--trust-cli`, `--apply`, `--approve`, `--hosts`, `--strategy`, `--model`, `--models`, `--autonomy`, `--attest-external-sandbox`, `--worktree`, `--keep-worktree`, `--verbose`.
 
-`loop` flags: `--host`, `--scope`, `--max-iterations`, `--max-budget-usd`, `--max-wall-seconds`, `--execute`, `--plan-first`, `--trust-cli`, `--apply`, `--approve`, `--autonomy`, `--attest-external-sandbox`.
 
 ## Sessions
 

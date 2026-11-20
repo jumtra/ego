@@ -5,12 +5,9 @@ from functools import lru_cache
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from ..shared.util import EgoError
+from .defaults import package_defaults
 
 SCHEMA = 1
-MAX_ITEM_CHARS = 350
-MAX_GOAL_CHARS = 800
-MAX_NOTES = 8
-MAX_PROMPT_CHARS = 1600
 CHECKPOINT_KINDS = ("ongoing", "plan_ready", "plan_resume", "completed")
 CheckpointKindLiteral = Literal["ongoing", "plan_ready", "plan_resume", "completed"]
 
@@ -18,13 +15,13 @@ CheckpointKindLiteral = Literal["ongoing", "plan_ready", "plan_resume", "complet
 @dataclass(frozen=True)
 class SessionSchemaLimits:
     """Configurable character and item limits for session checkpoints and resume prompts."""
-    max_goal_chars: int = MAX_GOAL_CHARS
-    max_item_chars: int = MAX_ITEM_CHARS
-    max_notes: int = MAX_NOTES
-    max_prompt_chars: int = MAX_PROMPT_CHARS
+    max_goal_chars: int
+    max_item_chars: int
+    max_notes: int
+    max_prompt_chars: int
 
 
-DEFAULT_SESSION_SCHEMA_LIMITS = SessionSchemaLimits()
+DEFAULT_SESSION_SCHEMA_LIMITS = SessionSchemaLimits(**package_defaults()['tuning']['session_schema'])
 
 
 @lru_cache(maxsize=16)

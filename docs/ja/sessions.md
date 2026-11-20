@@ -38,7 +38,7 @@ ego session checkpoint --task-id bug-142 \
 - `.ego/memory/handoffs/<task-id>.json` に保存されます。タスクごとに最新のリビジョンだけを保持し、会話の全文や生のログは保存しません。長すぎる入力は切り詰められます。
 - コマンドは `task_id`、`status`、`revision`、`path` のみを返します。
 - `ego session list` はすべての CLI のオープンなチェックポイントを表示します（`--all` で完了済みも含む）。`ego session status <task-id>` は 1 件を表示します。
-- 管理実行とゴールループは、run ID または loop ID の下に自動でチェックポイントを保存します。
+- 管理実行は、run ID の下に自動でチェックポイントを保存します。
 - チェックポイントに認証情報を含めないでください。秘匿化はベストエフォートです。
 
 ## クリアと再開

@@ -1,5 +1,6 @@
 """Session flows: checkpoint save/resume/handoff, context measurement, hooks, usage advice, and the ego run PTY wrapper."""
 from __future__ import annotations
+from dataclasses import replace
 from pathlib import Path
 import io
 import json
@@ -13,8 +14,8 @@ import time
 
 from ego.adapters.runner import RunResult
 from ego.cli import main
-from ego.domain.config import Config
-from ego.domain.config import Config, load_config
+from ego.domain.config import default_config
+from ego.domain.config import default_config, load_config
 from ego.domain.task_routing import build_task_prompt
 from ego.domain.templates import generated_files
 from ego.domain.templates import skill_md, instruction_block
@@ -26,7 +27,6 @@ from ego.usecases import planner
 from ego.usecases import ptyrun
 from ego.usecases import work
 from ego.usecases.install import apply_install
-from ego.usecases.loop import run_loop
 from ego.usecases.ptyrun import InputState, Reading, Rotator, _paste, ctx_label, measure, record_context, run
 from ego.usecases.session import arm_auto_resume, save_checkpoint
 from ego.usecases.session import clear_advice, clear_resume, context_tokens, rotation_instructions, save_checkpoint
@@ -182,7 +182,7 @@ def test_templates_progressively_load_short_rules_and_skip_docs():
     assert 'references/checkpoint.md' in work
     assert 'ego session checkpoint' in checkpoint and 'ego session resume' in checkpoint
     assert '完了' in work and '未完了' in work
-    basic=instruction_block(Config())
+    basic=instruction_block(default_config())
     assert 'Self-Evolve' not in basic and 'do NOT create requirements' not in basic
     assert 'Knowledge: alter' in basic and 'Policy mode' in basic
     assert len(basic)<600
@@ -397,7 +397,7 @@ def test_continue_another_clis_work_inside_the_open_cli(tmp_path: Path, monkeypa
     # Plain resume (clearing this CLI) uses the detected host's own instructions.
     assert main(["session", "resume", "feat-7", "--root", root]) == 0
     assert json.loads(capsys.readouterr().out)["clear_command"] == "/clear"
-    assert "session resume --from" not in instruction_block(Config())
+    assert "session resume --from" not in instruction_block(default_config())
 
 
 def _managed(root: Path, run_id: str) -> None:
@@ -537,7 +537,7 @@ def test_session_resume_arms_auto_resume_only_when_the_hook_is_installed(tmp_pat
     manual = rotation_instructions(tmp_path, "t1", "claude")
     assert manual["auto_resume_after_clear"] is False and "then send resume_prompt" in manual["instructions"]
     assert not (tmp_path / ".ego/state/clear_pending.json").exists()
-    cfg = Config(); cfg.clear_suggest_tokens = 120000
+    cfg = default_config(); cfg.clear_suggest_tokens = 120000
     apply_install(tmp_path, cfg)
     armed = rotation_instructions(tmp_path, "t1", "claude")
     assert armed["auto_resume_after_clear"] is True and "injected automatically" in armed["instructions"]
@@ -547,8 +547,8 @@ def test_session_resume_arms_auto_resume_only_when_the_hook_is_installed(tmp_pat
 
 
 def test_hooks_are_generated_only_on_request_and_call_the_installed_command(project: Path):
-    assert ".claude/settings.json" not in generated_files(Config(clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0, knowledge="file"))
-    cfg = Config(knowledge="file"); cfg.clear_suggest_tokens = 120000
+    assert ".claude/settings.json" not in generated_files(replace(default_config(), clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0, knowledge="file"))
+    cfg = replace(default_config(), knowledge="file"); cfg.clear_suggest_tokens = 120000
     hooks = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
     assert set(hooks) == {"Stop", "SessionStart"} and hooks["SessionStart"][0]["matcher"] == "startup|resume|clear"
     assert hooks["Stop"][0]["hooks"][0]["command"] == 'ego hook stop --root "$CLAUDE_PROJECT_DIR"'
@@ -562,8 +562,8 @@ def test_hooks_are_generated_only_on_request_and_call_the_installed_command(proj
 
 
 def test_auto_resume_is_on_by_default_without_clear_threshold(project: Path):
-    assert Config().auto_resume is True
-    cfg = Config(clear_suggest_tokens=0)  # SessionStart(clear) must not depend on the context threshold
+    assert default_config().auto_resume is True
+    cfg = replace(default_config(), clear_suggest_tokens=0)  # SessionStart(clear) must not depend on the context threshold
     hooks = json.loads(generated_files(cfg)[".claude/settings.json"])["hooks"]
     assert hooks["SessionStart"][0]["hooks"][0]["command"] == 'ego hook session-start --root "$CLAUDE_PROJECT_DIR"'
     assert "session-start" in generated_files(cfg)[".codex/hooks.json"]
@@ -614,16 +614,6 @@ def test_record_keeps_bounded_worker_output(tmp_path: Path, monkeypatch):
     assert len(stored["output"]) <= 20000 and stored["output"].endswith("END")
     assert len(stored["attempts"][0]["execution"]["output"]) <= 20000
     assert (tmp_path / ".ego/state/runs/run-big/record.json").stat().st_size < 120000
-
-
-def test_direct_loop_iteration_runs_the_done_check_once(tmp_path: Path, monkeypatch):
-    counter = tmp_path.parent / (tmp_path.name + "-count.txt")
-    (tmp_path / "check.py").write_text(f"open({str(counter)!r}, 'a').write('x')\n")
-    monkeypatch.setattr(work, "run_agent", lambda host, prompt, cwd, timeout=180, **kw:
-                        RunResult("PASS", "ok", "", 0, 0.0, host, cost_usd=0.0))
-    result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], host="claude", trust_cli=True)
-    assert result["status"] == "VERIFIED"
-    assert counter.read_text() == "x"
 
 
 def test_parallel_sessions_never_receive_each_others_checkpoint(tmp_path: Path, monkeypatch):
@@ -717,7 +707,7 @@ def test_near_usage_limit_asks_for_a_checkpoint_and_proposes_installed_clis_once
 
 
 def test_usage_switch_hooks_and_statusline_cli(tmp_path: Path, monkeypatch, capsys):
-    cfg = Config(clear_suggest_tokens=0, auto_resume=False, knowledge="file"); cfg.usage_switch_percent = 85
+    cfg = replace(default_config(), clear_suggest_tokens=0, auto_resume=False, knowledge="file"); cfg.usage_switch_percent = 85
     settings = json.loads(generated_files(cfg)[".claude/settings.json"])
     assert set(settings["hooks"]) == {"Stop"}  # no SessionStart(clear) hook when auto_resume is off
     assert settings["statusLine"] == {"type": "command", "command": "ego hook statusline"}
@@ -838,8 +828,8 @@ def test_session_start_injects_the_pending_checkpoint_in_each_hosts_format(tmp_p
 
 
 def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path: Path):
-    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(Config(clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0, knowledge="file")))
-    cfg = Config(knowledge="file"); cfg.clear_suggest_tokens = 120000
+    assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(replace(default_config(), clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0, knowledge="file")))
+    cfg = replace(default_config(), knowledge="file"); cfg.clear_suggest_tokens = 120000
     files = generated_files(cfg)
     codex = json.loads(files[".codex/hooks.json"])["hooks"]
     assert codex["Stop"][0]["hooks"][0]["command"] == "ego hook stop --host codex --root ."
@@ -847,7 +837,7 @@ def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path
     agy = json.loads(files[".agents/hooks.json"])["ego"]
     assert agy["Stop"][0]["command"] == "ego hook stop --host agy --root ." and agy["Stop"][0]["type"] == "command"
     assert "session.idle" in files[".opencode/plugins/ego.ts"] and "ego" in files[".opencode/plugins/ego.ts"]
-    usage_only = Config(clear_suggest_tokens=0, auto_resume=False, knowledge="file"); usage_only.usage_switch_percent = 85
+    usage_only = replace(default_config(), clear_suggest_tokens=0, auto_resume=False, knowledge="file"); usage_only.usage_switch_percent = 85
     only = generated_files(usage_only)
     assert set(json.loads(only[".codex/hooks.json"])["hooks"]) == {"Stop"}  # Codex reports its limits
     assert ".agents/hooks.json" not in only and ".opencode/plugins/ego.ts" not in only  # AGY / OpenCode do not
@@ -858,11 +848,11 @@ def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path
 def test_opencode_plugin_pins_the_ego_binary_and_reports_failures(monkeypatch):
     import ego.domain.templates as templates
     monkeypatch.setattr(templates.shutil, "which", lambda name: "/opt/tools/bin/ego" if name == "ego" else None)
-    plugin = generated_files(Config(clear_suggest_tokens=200000))[".opencode/plugins/ego.ts"]
+    plugin = generated_files(replace(default_config(), clear_suggest_tokens=200000))[".opencode/plugins/ego.ts"]
     assert 'const EGO_BIN = "/opt/tools/bin/ego"' in plugin and "__EGO_BIN__" not in plugin
     assert 'spawnSync(EGO_BIN, ["hook"' in plugin and "systemMessage" in plugin
     monkeypatch.setattr(templates.shutil, "which", lambda name: None)
-    assert 'const EGO_BIN = "ego"' in generated_files(Config(clear_suggest_tokens=200000))[".opencode/plugins/ego.ts"]
+    assert 'const EGO_BIN = "ego"' in generated_files(replace(default_config(), clear_suggest_tokens=200000))[".opencode/plugins/ego.ts"]
 
 
 def test_a_hook_under_ego_run_records_its_session(tmp_path: Path, monkeypatch, capsys):
@@ -1007,20 +997,20 @@ def test_alter_knowledge_uses_the_host_configured_server(tmp_path: Path, monkeyp
 
 
 def test_alter_memory_installs_the_user_prompt_hook(tmp_path: Path):
-    from ego.domain.config import Config
+    from ego.domain.config import default_config
     from ego.domain.templates import generated_files as render_files
 
-    files = render_files(Config(knowledge="alter", hosts=["claude", "codex"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    files = render_files(replace(default_config(), knowledge="alter", hosts=["claude", "codex"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
     assert "ego hook user-prompt" in files[".claude/settings.json"] and "ego hook user-prompt" in files[".codex/hooks.json"]
-    plain = render_files(Config(knowledge="file", hosts=["claude"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    plain = render_files(replace(default_config(), knowledge="file", hosts=["claude"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
     assert ".claude/settings.json" not in plain
 
 
 def test_alter_memory_installs_the_same_hooks_on_every_host(tmp_path: Path):
-    from ego.domain.config import Config
+    from ego.domain.config import default_config
     from ego.domain.templates import generated_files as render_files
 
-    files = render_files(Config(knowledge="alter", hosts=["claude", "codex", "opencode", "agy"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    files = render_files(replace(default_config(), knowledge="alter", hosts=["claude", "codex", "opencode", "agy"], auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
     claude = json.loads(files[".claude/settings.json"])["hooks"]
     codex = json.loads(files[".codex/hooks.json"])["hooks"]
     agy = json.loads(files[".agents/hooks.json"])["ego"]
@@ -1031,25 +1021,25 @@ def test_alter_memory_installs_the_same_hooks_on_every_host(tmp_path: Path):
     assert agy["PreInvocation"][0]["command"] == "ego hook user-prompt --host agy --root ."
     plugin = files[".opencode/plugins/ego.ts"]
     assert "const ALTER = true" in plugin and '"chat.message"' in plugin and '"user-prompt"' in plugin
-    off = render_files(Config(knowledge="file", hosts=["opencode"], auto_resume=True, clear_suggest_tokens=0, usage_switch_percent=0))
+    off = render_files(replace(default_config(), knowledge="file", hosts=["opencode"], auto_resume=True, clear_suggest_tokens=0, usage_switch_percent=0))
     assert "const ALTER = false" in off[".opencode/plugins/ego.ts"]
-    assert "PreInvocation" not in render_files(Config(knowledge="file", hosts=["agy"], auto_resume=True))[".agents/hooks.json"]
+    assert "PreInvocation" not in render_files(replace(default_config(), knowledge="file", hosts=["agy"], auto_resume=True))[".agents/hooks.json"]
 
 
 def test_opencode_plugin_is_valid_typescript_text():
-    from ego.domain.config import Config
+    from ego.domain.config import default_config
     from ego.domain.templates import generated_files as render_files
 
-    plugin = render_files(Config(knowledge="alter", hosts=["opencode"]))[".opencode/plugins/ego.ts"]
+    plugin = render_files(replace(default_config(), knowledge="alter", hosts=["opencode"]))[".opencode/plugins/ego.ts"]
     for line in plugin.splitlines():  # a string literal must never be split across lines
         assert line.count('"') % 2 == 0, line
 
 
 def test_opencode_plugin_covers_resumed_sessions_and_hides_injected_context():
-    from ego.domain.config import Config
+    from ego.domain.config import default_config
     from ego.domain.templates import generated_files as render_files
 
-    plugin = render_files(Config(knowledge="alter", hosts=["opencode"]))[".opencode/plugins/ego.ts"]
+    plugin = render_files(replace(default_config(), knowledge="alter", hosts=["opencode"]))[".opencode/plugins/ego.ts"]
     # A resumed session fires no session.created: chat.message injects the requirement (not a checkpoint resume).
     assert 'started.has(sessionID)' in plugin and 'source: "startup"' in plugin
     # Injected context is synthetic, so it is hidden and never looked up as a user prompt again.
@@ -1059,7 +1049,7 @@ def test_opencode_plugin_covers_resumed_sessions_and_hides_injected_context():
 def test_session_start_for_alter_alone_does_not_resume_a_checkpoint(tmp_path: Path, monkeypatch, capsys):
     from ego.usecases import session
 
-    apply_install(tmp_path, Config(knowledge="alter", auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
+    apply_install(tmp_path, replace(default_config(), knowledge="alter", auto_resume=False, clear_suggest_tokens=0, usage_switch_percent=0))
     monkeypatch.setattr(session, "clear_resume", lambda root, obj: (_ for _ in ()).throw(AssertionError("resume must stay off")))
     out = _hook(monkeypatch, capsys, tmp_path, "session-start", "claude", {"source": "clear", "cwd": str(tmp_path)})
     assert "alter_bootstrap" in out["hookSpecificOutput"]["additionalContext"]
@@ -1090,7 +1080,7 @@ def test_agy_prompt_is_handed_out_once_per_user_message(tmp_path: Path):
 
 
 def test_agy_user_prompt_hook_injects_alter_evidence_as_a_system_message(tmp_path: Path, monkeypatch, capsys):
-    apply_install(tmp_path, Config(knowledge="alter", clear_suggest_tokens=0, usage_switch_percent=0))
+    apply_install(tmp_path, replace(default_config(), knowledge="alter", clear_suggest_tokens=0, usage_switch_percent=0))
     transcript = tmp_path / "t.jsonl"
     _agy_prompts(transcript, "過去の決定を探したい")
     _fake_alter_context(monkeypatch, {"evidence": [{"title": "決定A", "excerpt": "理由", "source_ref": "note:1@r1"}]})
@@ -1570,24 +1560,6 @@ def test_cli_plan_writes_planning_cost_into_the_task_file(tmp_path: Path, monkey
     assert json.loads(out_file.read_text())["planner_usage"]["output_tokens"] == 200
 
 
-def test_loop_ledger_totals_plan_and_work_tokens_across_iterations(tmp_path: Path):
-    (tmp_path / "make_all.py").write_text("from pathlib import Path\nPath('a.txt').write_text('A')\n")
-    (tmp_path / "check.py").write_text("from pathlib import Path\nimport sys\nsys.exit(0 if Path('a.txt').exists() else 1)\n")
-    calls = []
-
-    def planner_stub(goal, history, workdir):
-        calls.append(history)
-        return {"task": {"goal": goal, "nodes": [{"id": "make", "kind": "code", "argv": ["python3", "make_all.py"],
-                                                  "write_allowlist": ["*.txt"]}]},
-                "planner_usage": {"input_tokens": 1000, "output_tokens": 200, "cost_usd": 0.01}}
-
-    result = run_loop(tmp_path, "make a", done_checks=[["python3", "check.py"]], planner=planner_stub,
-                      scope=["*.txt"], plan_first=True)
-    assert result["status"] == "VERIFIED" and len(calls) == 1
-    assert result["usage"]["plan_tokens"] == 1200 and result["usage"]["planned"] is True
-    assert result["usage_text"] == "plan 1.2k tokens · work 0 tokens · total 1.2k tokens"
-
-
 def test_resume_of_a_run_whose_task_file_carries_plan_usage_does_not_mismatch(tmp_path: Path, capsys):
     (tmp_path / "gen.py").write_text("from pathlib import Path\nPath('result.txt').write_text('OK')\n")
     task = tmp_path / "task.json"
@@ -1606,21 +1578,6 @@ def test_codex_cached_tokens_are_not_counted_twice():
     usage = parse_host_usage("codex", raw)
     assert usage["input_tokens"] == 100 and usage["cache_read_tokens"] == 900
     assert tokens_of(usage) == 1010
-
-
-def test_loop_accounts_for_a_planner_call_whose_plan_was_rejected(tmp_path: Path, monkeypatch):
-    (tmp_path / "check.py").write_text("import sys\nsys.exit(1)\n")
-
-    def fake_agent(host, prompt, cwd, timeout=180, **kw):
-        return RunResult("PASS", "[1, 2]", "", 0, 0.0, host, cost_usd=0.25,
-                         usage={"input_tokens": 1000, "output_tokens": 200})
-
-    monkeypatch.setattr(planner, "run_agent", fake_agent)
-    result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], host="claude", execute_planner=True,
-                      plan_first=True, max_iterations=3)
-    assert result["iterations"][0]["status"] == "PLAN_REJECTED"
-    assert "PLAN_INVALID_JSON" in result["iterations"][0]["failures"][0]["feedback"]
-    assert result["cost_usd"] == 0.5 and result["usage"]["plan_tokens"] == 2400  # two calls, then STALLED
 
 
 def test_checkpoint_kind_changes_resume_prompt_priority_and_framing(tmp_path: Path, capsys):
@@ -1687,14 +1644,8 @@ def test_checkpoint_kind_inferred_from_task_file_and_runs(tmp_path: Path):
 
 def test_session_schema_limits_from_config_bound_checkpoint_and_resume_prompt(tmp_path: Path):
     # Arrange
-    from ego.domain.config import save_config
     (tmp_path / ".ego").mkdir()
-    save_config(tmp_path, Config(session_schema={
-        "max_goal_chars": 25,
-        "max_item_chars": 12,
-        "max_notes": 2,
-        "max_prompt_chars": 260,
-    }))
+    (tmp_path / ".ego" / "defaults.toml").write_text("[tuning.session_schema]\nmax_goal_chars = 25\nmax_item_chars = 12\nmax_notes = 2\nmax_prompt_chars = 260\n", encoding="utf-8")
 
     # Act
     saved = save_checkpoint(

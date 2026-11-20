@@ -140,7 +140,7 @@ agent は `implementer`、`reviewer`（読み取り専用）、`fixer`、`evolve
 
 `CLAUDE.md` / `AGENTS.md` は `ego apply` では変更しません。`ego run` は起動時に `EGO:BEGIN` / `EGO:END` の管理ブロックを先頭に入れ、終了時にそのブロックだけを取り除いて元の内容に戻します（異常終了した場合は次回の `ego run` で戻します）。ファイルが無かった場合は作成し、終了時に削除します。ブロック以外の部分はユーザーのものです。その他の生成ファイルはハッシュで追跡され、ego が書いた内容のままの場合にのみ置き換えます。変更されていれば衝突（`BLOCKED`）として報告します。
 
-実行時の状態も `.ego/` 配下にあります。`state/`（run、loop、イベント）、`memory/`（メモリ項目と、`handoffs/` のチェックポイント）、`backups/`（適用時のスナップショット）、`locks/` です。`.ego/state/`、`.ego/backups/`、`.ego/locks/`、`.ego/memory/handoffs/` は Git に含めないでください。
+実行時の状態も `.ego/` 配下にあります。`state/`（run、イベント）、`memory/`（メモリ項目と、`handoffs/` のチェックポイント）、`backups/`（適用時のスナップショット）、`locks/` です。`.ego/state/`、`.ego/backups/`、`.ego/locks/`、`.ego/memory/handoffs/` は Git に含めないでください。
 
 ## 設定を後から変更する
 

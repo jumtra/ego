@@ -1,5 +1,6 @@
 """Install and CLI business flows: apply/status/rollback/uninstall/init/sync, projects, hosts, models, self-update, and core-command smoke."""
 from __future__ import annotations
+from dataclasses import replace
 from pathlib import Path
 import hashlib
 import io
@@ -23,9 +24,9 @@ from ego.adapters.memory import MCPStdio
 from ego.adapters.runner import parse_host_response
 from ego.cli import _project_target
 from ego.cli import main
-from ego.domain.config import Config
-from ego.domain.config import Config, load_config
-from ego.domain.config import Config, load_config, save_config
+from ego.domain.config import default_config
+from ego.domain.config import default_config, load_config
+from ego.domain.config import default_config, load_config, save_config
 from ego.domain.config import load_config
 from ego.domain.config import load_config, save_config
 from ego.domain.task_routing import resolve_routes, build_task_prompt
@@ -46,7 +47,7 @@ from ego.usecases.work import execute, validate_task
 def test_apply_leaves_existing_instruction_files_untouched(tmp_path):
     root=tmp_path
     (root/"CLAUDE.md").write_text("# My notes\n",encoding="utf8")
-    result=apply_install(root,Config())
+    result=apply_install(root,default_config())
     assert (root/"CLAUDE.md").read_text()=="# My notes\n"
     rollback(root,result["snapshot_id"])
     assert (root/"CLAUDE.md").read_text()=="# My notes\n"
@@ -55,9 +56,9 @@ def test_apply_leaves_existing_instruction_files_untouched(tmp_path):
 
 def test_apply_strips_block_persisted_by_an_earlier_version(tmp_path):
     from ego.domain.templates import instruction_block
-    (tmp_path/"CLAUDE.md").write_text("# My notes\n\n"+instruction_block(Config()),encoding="utf8")
-    (tmp_path/"AGENTS.md").write_text(instruction_block(Config(hosts=["codex"])),encoding="utf8")
-    apply_install(tmp_path,Config())
+    (tmp_path/"CLAUDE.md").write_text("# My notes\n\n"+instruction_block(default_config()),encoding="utf8")
+    (tmp_path/"AGENTS.md").write_text(instruction_block(replace(default_config(), hosts=["codex"])),encoding="utf8")
+    apply_install(tmp_path,default_config())
     assert (tmp_path/"CLAUDE.md").read_text(encoding="utf8")=="# My notes\n"
     assert not (tmp_path/"AGENTS.md").exists()
 
@@ -71,18 +72,18 @@ def test_owned_edit_conflict(project):
 
 
 def test_config_policy_mode(project):
-    cfg = Config(policy_mode="relaxed")
+    cfg = replace(default_config(), policy_mode="relaxed")
     save_config(project, cfg)
     loaded = load_config(project)
     assert loaded.policy_mode == "relaxed"
     content = (project / ".ego/config.toml").read_text()
     assert 'policy_mode = "relaxed"' in content
     with pytest.raises(EgoError):
-        save_config(project, Config(policy_mode="invalid"))
+        save_config(project, replace(default_config(), policy_mode="invalid"))
 
 
 def test_config_models_support(project):
-    cfg = Config(models={"claude": "sonnet-3.5", "codex": "gpt-5-codex", "opencode": "auto"})
+    cfg = replace(default_config(), models={"claude": "sonnet-3.5", "codex": "gpt-5-codex", "opencode": "auto"})
     save_config(project, cfg)
     loaded = load_config(project)
     assert loaded.models == {"claude": "sonnet-3.5", "codex": "gpt-5-codex", "opencode": "auto"}
@@ -92,13 +93,13 @@ def test_config_models_support(project):
 
     # Validation failure on invalid host or model type
     with pytest.raises(EgoError):
-        save_config(project, Config(models={"invalid_host": "sonnet"}))
+        save_config(project, replace(default_config(), models={"invalid_host": "sonnet"}))
     with pytest.raises(EgoError):
-        save_config(project, Config(models={"claude": ""}))
+        save_config(project, replace(default_config(), models={"claude": ""}))
 
 
 def test_config_validate(project):
-    bad=Config(max_parallel=99)
+    bad=replace(default_config(), max_parallel=99)
     with pytest.raises(EgoError):save_config(project,bad)
     path=project/".ego/config.toml"
     path.write_text("bogus = true\n")
@@ -109,18 +110,18 @@ def test_recommended_defaults_and_sync_fallback(tmp_path):
     from ego.cli import main
     root = tmp_path / "fresh"
     root.mkdir()
-    apply_install(root, Config())
+    apply_install(root, default_config())
     loaded = load_config(root)
     assert loaded.usage_switch_percent == 99
     assert loaded.run_yolo is True
     assert set(loaded.models) == {"claude", "codex", "opencode", "agy"}
-    for role in ("coder", "tester", "judge"):
+    for role in ("coder", "tester", "reviewer"):
         assert set(loaded.roles[role]) == {"claude", "codex", "agy", "opencode"}
 
     # Existing config.toml without those keys inherits the recommended defaults on sync
     partial = tmp_path / "partial"
     partial.mkdir()
-    apply_install(partial, Config())
+    apply_install(partial, default_config())
     (partial / ".ego" / "config.toml").write_text('schema_version = 1\nprofile = "balanced"\n', encoding="utf-8")
     assert main(["sync", "--root", str(partial), "--apply"]) == 0
     synced = load_config(partial)
@@ -201,7 +202,7 @@ def test_apply_protects_home_and_root(tmp_path: Path):
 
 def _apply(root: Path, **settings) -> Path:
     root.mkdir(parents=True)
-    cfg = Config()
+    cfg = default_config()
     for key, value in settings.items():
         setattr(cfg, key, value)
     apply_install(root, cfg)
@@ -939,7 +940,7 @@ def test_requirement_and_steps_reach_prompt(tmp_path):
 
 
 def test_uninstall_project_cleans_owned_files(tmp_path):
-    cfg = Config(hosts=["claude"])
+    cfg = replace(default_config(), hosts=["claude"])
     apply_install(tmp_path, cfg)
     
     assert (tmp_path / ".ego").exists()
@@ -1014,8 +1015,8 @@ def test_project_detection(tmp_path):
 
 
 def test_cli_root_after_action(project):
-    from ego.domain.config import Config, save_config
-    save_config(project, Config(knowledge="file"))
+    from ego.domain.config import default_config, save_config
+    save_config(project, replace(default_config(), knowledge="file"))
     cmd=[sys.executable,"-m","ego","memory","add","some note","--root",str(project)]
     env={**os.environ,"PYTHONPATH":str(Path(__file__).resolve().parents[1]/"src")}
     res=subprocess.run(cmd,capture_output=True,text=True,env=env,timeout=20)

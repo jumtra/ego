@@ -28,7 +28,7 @@ max_parallel = 4
 max_attempts = 3
 timeout_seconds = 7200
 models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "gemini-4-hydrogen-medium", effort = "auto"}}
-roles = {coder = {claude = {model = "haiku", effort = ["low", "medium"]}, codex = {model = "auto", effort = "medium"}, agy = {model = "gemini-4-hydrogen-medium", effort = "medium"}, opencode = {model = "auto", effort = "medium"}}, tester = {claude = {model = "haiku", effort = "low"}, codex = {model = "auto", effort = "low"}, agy = {model = "gemini-4-hydrogen-low", effort = "low"}, opencode = {model = "auto", effort = "low"}}, judge = {claude = {model = "haiku", effort = "high"}, codex = {model = "auto", effort = "high"}, agy = {model = "gemini-4-hydrogen-medium", effort = "high"}, opencode = {model = "auto", effort = "high"}}}
+roles = {coder = {claude = {model = "haiku", effort = ["low", "medium"]}, codex = {model = "auto", effort = "medium"}, agy = {model = "gemini-4-hydrogen-medium", effort = "medium"}, opencode = {model = "auto", effort = "medium"}}, tester = {claude = {model = "haiku", effort = "low"}, codex = {model = "auto", effort = "low"}, agy = {model = "gemini-4-hydrogen-low", effort = "low"}, opencode = {model = "auto", effort = "low"}}, reviewer = {claude = {model = "haiku", effort = "high"}, codex = {model = "auto", effort = "high"}, agy = {model = "gemini-4-hydrogen-medium", effort = "high"}, opencode = {model = "auto", effort = "high"}}}
 isolation = "worktree"
 cleanup_worktree = true
 tests = []

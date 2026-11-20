@@ -33,8 +33,6 @@ def should_prompt(args) -> bool:
                 "policy",
                 "models",
                 "roles",
-                "plan_schema",
-                "session_schema",
                 "clear_suggest_tokens",
             )
         )

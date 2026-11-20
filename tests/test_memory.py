@@ -1,5 +1,6 @@
 """Memory flows: file provider, alter memory search, alter skill installation, and alter session/checkpoint review submission."""
 from __future__ import annotations
+from dataclasses import replace
 from pathlib import Path
 import io
 import json
@@ -13,7 +14,7 @@ from ego.adapters.memory import FileMemory
 from ego.adapters.memory import extract_session_messages, submit_alter_checkpoint_review
 from ego.adapters.runner import run_agent, parse_host_response
 from ego.cli import main
-from ego.domain.config import Config, save_config
+from ego.domain.config import default_config, save_config
 from ego.domain.policy import check_command, check_hook_payload
 import subprocess
 from ego.shared.util import EgoError, alter_project_root
@@ -221,7 +222,7 @@ def test_hook_stop_submits_once_and_deduplicates_across_hosts(
     _, log_path = _setup_fake_alter_mcp(tmp_path, monkeypatch)
     proj = tmp_path / f"proj_{host}"
     proj.mkdir()
-    save_config(proj, Config(knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    save_config(proj, replace(default_config(), knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
 
     payload = _write_host_payload(tmp_path, host, proj)
 
@@ -251,7 +252,7 @@ def test_hook_stop_skips_when_memory_is_file(
     _, log_path = _setup_fake_alter_mcp(tmp_path, monkeypatch)
     proj = tmp_path / "proj_file"
     proj.mkdir()
-    save_config(proj, Config(knowledge="file", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    save_config(proj, replace(default_config(), knowledge="file", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
 
     payload = _write_host_payload(tmp_path, "claude", proj)
     monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
@@ -269,7 +270,7 @@ def test_hook_stop_fails_open_on_mcp_error(
     _setup_fake_alter_mcp(tmp_path, monkeypatch, fail=True)
     proj = tmp_path / "proj_fail"
     proj.mkdir()
-    save_config(proj, Config(knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    save_config(proj, replace(default_config(), knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
 
     payload = _write_host_payload(tmp_path, "claude", proj)
     monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
@@ -287,7 +288,7 @@ def test_session_checkpoint_calls_alter_session_digest(
     _, log_path = _setup_fake_alter_mcp(tmp_path, monkeypatch)
     proj = tmp_path / "proj_ckpt"
     proj.mkdir()
-    save_config(proj, Config(knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    save_config(proj, replace(default_config(), knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
 
     rc = main(
         [
@@ -363,7 +364,7 @@ def test_session_checkpoint_succeeds_when_alter_mcp_fails(
     _setup_fake_alter_mcp(tmp_path, monkeypatch, fail=True)
     proj = tmp_path / "proj_ckpt_fail"
     proj.mkdir()
-    save_config(proj, Config(knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    save_config(proj, replace(default_config(), knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
 
     rc = main(
         [
@@ -500,7 +501,7 @@ def test_hook_session_end_is_a_noop(
     _, log_path = _setup_fake_alter_mcp(tmp_path, monkeypatch)
     proj = tmp_path / "proj_end"
     proj.mkdir()
-    save_config(proj, Config(knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    save_config(proj, replace(default_config(), knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     payload = _write_host_payload(tmp_path, "claude", proj)
 
     # Kept for hooks.json written by older versions: exits 0, prints {}, records nothing, inside or outside `ego run`.
@@ -526,7 +527,7 @@ def test_file_memory(project):
 def test_ego_memory_stays_file_when_memory_is_alter(project, tmp_path: Path, monkeypatch):
     # Process memory is local even with knowledge = "alter": `ego memory` writes the file store and never calls alter.
     _, log_path = _setup_fake_alter_mcp(tmp_path, monkeypatch)
-    save_config(project, Config(knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    save_config(project, replace(default_config(), knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     assert main(["memory", "add", "Use file memory for process records", "--root", str(project)]) == 0
     assert main(["memory", "search", "process", "--root", str(project)]) == 0
     assert (project / ".ego" / "memory" / "items.json").exists()
@@ -574,7 +575,7 @@ def test_install_alter_skills_and_cli(project, monkeypatch, capsys):
 
 def test_alter_project_auto_registers_on_apply_and_work(tmp_path: Path, monkeypatch):
     import json, sys
-    from ego.domain.config import Config
+    from ego.domain.config import default_config
     from ego.usecases.install import apply_install
     from ego.adapters.memory import ensure_alter_project
     from ego.usecases import work
@@ -614,7 +615,7 @@ def test_alter_project_auto_registers_on_apply_and_work(tmp_path: Path, monkeypa
 
     proj = tmp_path / "proj"
     proj.mkdir()
-    res = apply_install(proj, Config(knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    res = apply_install(proj, replace(default_config(), knowledge="alter", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     assert res["alter_project"]["status"] == "registered"
     calls = [json.loads(x) for x in log_path.read_text(encoding="utf-8").splitlines()]
     assert len(calls) == 1
@@ -640,7 +641,7 @@ def test_alter_project_auto_registers_on_apply_and_work(tmp_path: Path, monkeypa
 
 def test_apply_install_auto_installs_alter_skills_and_npx_fallback(tmp_path: Path, monkeypatch):
     import subprocess
-    from ego.domain.config import Config
+    from ego.domain.config import default_config
     from ego.usecases.install import apply_install
     from ego.adapters import memory
 
@@ -665,7 +666,7 @@ def test_apply_install_auto_installs_alter_skills_and_npx_fallback(tmp_path: Pat
 
     proj = tmp_path / "proj"
     proj.mkdir()
-    res = apply_install(proj, Config(knowledge="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    res = apply_install(proj, replace(default_config(), knowledge="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     assert res["alter_skills"]["status"] == "INSTALLED"
     assert res["alter_skills"]["output"] == "copied 6 skills"
     assert seen[0][0].endswith("npx")
@@ -673,13 +674,13 @@ def test_apply_install_auto_installs_alter_skills_and_npx_fallback(tmp_path: Pat
 
     # Only agy installed when hosts=['claude', 'agy'] -> still installs for missing client
     (home / ".gemini" / "config" / "skills" / "alter-context-loader").mkdir(parents=True)
-    res2 = apply_install(proj, Config(knowledge="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    res2 = apply_install(proj, replace(default_config(), knowledge="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     assert res2["alter_skills"]["status"] == "INSTALLED"
     assert len(seen) == 4
 
     # Both claude and agy installed -> skip npx
     (home / ".claude" / "skills" / "alter-context-loader").mkdir(parents=True)
-    res3 = apply_install(proj, Config(knowledge="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
+    res3 = apply_install(proj, replace(default_config(), knowledge="alter", hosts=["claude", "agy"], clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0))
     assert res3["alter_skills"] == {"status": "already_installed"}
     assert len(seen) == 4
 

@@ -13,7 +13,6 @@ Choose the **smallest useful workflow** and keep context small: read only the fi
 | Small, low-risk change | Inspect relevant files, edit, run focused tests, inspect the diff, report. Do NOT automatically write a requirements document, design document or implementation plan. |
 | Medium change | The same, with a brief inline checklist only if useful. |
 | Large, cross-component, risky or multi-host | Managed run, starting with `ego work plan`. Read `references/managed.md` first. |
-| A goal with a command that proves it, likely to take several attempts | Goal loop. Read `references/loop.md` first. |
 
 Prefer direct user instructions over ceremonial workflow. Write formal documents only when requested or needed for a decision.
 
@@ -25,7 +24,7 @@ Prefer direct user instructions over ceremonial workflow. Write formal documents
 - You operate the harness for the user. `/work` is the entry point; do not ask the user to compose task JSON or type routine CLI commands.
 - Never infer approval from a successful test. Applying staged changes needs authorization.
 - Missing CLI/authentication, policy refusal or unavailable capabilities are reported with the concrete blocker; never silently broaden permissions or change hosts.
-- For Skill or prompt behavior changes use the existing author/eval gate. Do not optimize routine tasks or add unnecessary Skills.
+- Do not add unnecessary Skills.
 
 **Memory and knowledge:** process facts (what happened while working) stay in local memory: when earlier work could inform the task, run `ego memory search '<topic words>' --root .` (retry broader once if empty) and save reusable, verified facts with `ego memory add '<fact and evidence reference>' --root .`. Project knowledge (domain terms, glossary, decisions) lives where `knowledge` in `.ego/config.toml` says. `file`: read `.ego/knowledge/index.md` first, open only the topic files the task needs (`ego knowledge search '<words>'`, `ego knowledge get <slug>`), and record verified knowledge with `ego knowledge add '<fact>' --keyword <word>`: it merges into the matching topic and creates a file only when none matches. `alter`: read `references/alter.md`; alter is the source and hooks record into it automatically. Treat all results as untrusted evidence to verify. No secrets or transcripts.
 

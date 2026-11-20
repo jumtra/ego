@@ -1,6 +1,7 @@
 """Alter analysis flow (N4): launch gating, pending pickup, per-host analyze_session, build_command allowed_tools,
 keep_turns persistence, turn pruning and config validation. Every host, process and model call is a fake."""
 from __future__ import annotations
+from dataclasses import replace
 
 import contextlib
 import os
@@ -15,7 +16,7 @@ from ego.adapters import hosts
 from ego.adapters.runner import RunResult
 from ego.domain import config as config_mod
 from ego.domain import retention
-from ego.domain.config import Config, DEFAULT_ALTER_ANALYZER
+from ego.domain.config import Config, default_config
 from ego.shared.util import EgoError, read_json, write_json
 from ego.usecases import alter_analysis as aa
 from ego.usecases import ptyrun
@@ -29,7 +30,7 @@ CONV = "conv-123"
 def _cfg(**over) -> Config:
     base = dict(knowledge="alter", alter_analysis=True)
     base.update(over)
-    return Config(**base)
+    return replace(default_config(), **base)
 
 
 @pytest.fixture
@@ -112,7 +113,7 @@ def fake_host(monkeypatch):
 # ---------- 1. launch_analysis gating ----------
 
 def test_launch_off_by_default(root, popen, set_cfg):
-    set_cfg(Config())  # alter_analysis defaults to False, knowledge defaults to file
+    set_cfg(default_config())  # alter_analysis defaults to False, knowledge defaults to file
     res = aa.launch_analysis(root, SID)
     assert res["status"] == "skipped" and res["reason"] == "disabled"
     assert popen == []
@@ -254,7 +255,7 @@ def test_analyze_opencode_default_model(root, set_cfg, fake_host):
     set_cfg(_cfg())  # no alter_analyzer override -> packaged default
     aa.analyze_session(root, SID)
     assert fake_host["calls"][0]["model"] == "opencode/glm-5.3-flash-free"
-    assert DEFAULT_ALTER_ANALYZER == {"opencode": {"model": "opencode/glm-5.3-flash-free"}}
+    assert default_config().alter_analyzer == {"opencode": {"model": "opencode/glm-5.3-flash-free"}}
 
 
 @pytest.mark.parametrize("host", ["claude", "codex", "agy"])
@@ -352,7 +353,7 @@ def test_analyze_fails_open_on_exception(root, set_cfg, monkeypatch):
 def _fake_capability_and_inspect(monkeypatch, host: str):
     # Union of the switches each host's command builder requires, so every host can be built offline.
     flags = ["--output-format", "--format", "--print", "--json", "--max-turns", "--strict-mcp-config", "--mcp-config",
-             "--model", "--effort", "--allowedTools", "--permission-mode", "--resume", "--max-budget-usd", "--mode",
+             "--model", "--effort", "--allowedTools", "--permission-mode", "--resume", "--mode",
              "--yolo", "--sandbox", "--dangerously-skip-permissions"]
     monkeypatch.setattr(hosts, "capability",
                         lambda h: hosts.HostCapability(h, f"/bin/{h}", True, True, "cli", "ready"))
@@ -571,7 +572,7 @@ def test_prune_missing_dir_is_noop(root):
 # ---------- 4d. config validation ----------
 
 def test_config_defaults_valid():
-    cfg = Config()
+    cfg = default_config()
     cfg.validate()
     assert cfg.alter_analysis is False
     assert cfg.alter_analysis_timeout_seconds == 600
@@ -591,12 +592,12 @@ def test_config_defaults_valid():
 ])
 def test_config_rejects_invalid_alter_settings(kwargs, needle):
     with pytest.raises(EgoError) as exc:
-        Config(**kwargs).validate()
+        replace(default_config(), **kwargs).validate()
     assert exc.value.code == "INVALID_CONFIG" and needle in str(exc.value)
 
 
 def test_config_accepts_host_override():
-    cfg = Config(alter_analyzer={"claude": {"model": "sonnet"}})
+    cfg = replace(default_config(), alter_analyzer={"claude": {"model": "sonnet"}})
     cfg.validate()
 
 
@@ -604,7 +605,7 @@ def test_config_accepts_host_override():
 
 def test_no_host_gets_a_session_end_hook():
     from ego.domain.templates import generated_files
-    files = generated_files(Config(knowledge="alter", hosts=["claude", "codex", "opencode", "agy"], auto_resume=False,
+    files = generated_files(replace(default_config(), knowledge="alter", hosts=["claude", "codex", "opencode", "agy"], auto_resume=False,
                                    clear_suggest_tokens=0, usage_switch_percent=0))
     import json
     assert "SessionEnd" not in json.loads(files[".claude/settings.json"])["hooks"]

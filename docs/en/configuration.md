@@ -57,21 +57,23 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `runtime_mode` | `"native"` | `native`, `managed` | Recorded default working style. It does not change command behavior: `/work` in the CLI is native, `ego work run` is always managed |
 | `tests` | `[]` | list of argv arrays | Test commands recorded by `--detect-tests`, e.g. `[["pytest", "-q"]]` |
 
-### Managed runs (`ego work run`, `ego work loop`)
+### Managed runs (`ego work run`)
 
 | Key | Default | Range | Effect |
 |---|---|---|---|
 | `models` | `{claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}` | host → model | Default model per host. See [Models](#models) |
 | `max_parallel` | `2` | 1–8 | Independent nodes run at the same time |
 | `max_attempts` | `3` | 1–5 | Upper bound on attempts (first try + repairs) per node |
-| `timeout_seconds` | `3600` | 5–7200 | Upper bound per node; a whole run is limited to this × number of nodes |
+| `timeout_seconds` | `3600` | 5–7200 | Upper bound per node. There is no whole-run time limit |
+| `max_rounds` | `2` | 0–5 | Reviewer rejections allowed per node before `on_exhausted` applies |
+| `max_replans` | `1` | 0–5 | Plan revisions allowed per task |
+| `max_run_tokens` | `500000` | integer ≥ 1000 | Whole-run billable token cap (`cache_read` excluded) |
 | `max_turns` | `30` | 1–200 | Agent turns per worker invocation |
 | `worker_context` | `"lean"` | `lean`, `inherit` | `lean` starts Claude workers without your MCP servers; `inherit` keeps them |
 | `worker_segment_turns` | `10` | 1–200 | Claude workers run this many turns per segment; between segments the context is measured against `clear_suggest_tokens` and, at the limit, the worker checkpoints and continues in a fresh session |
 | `isolation` | `"copy"` | `copy`, `worktree` | Where a run works: a staging copy, or a Git worktree. `--worktree` overrides per run |
 | `cleanup_worktree` | `true` | bool | Remove the worktree after the run. `--keep-worktree` overrides per run |
 | `allow_commands` | common toolchains | list of command names | Executables that `checks` and `--done-check` may start. Shells and `python -c` are always refused |
-| `plan_schema` | `{}` | table of `>= 1` ints | Overrides for task/plan schema limits (`max_goal_chars`, `max_instructions_chars`, `max_instructions_file_chars`, `max_note_chars`, `max_note_items`, `max_step_items`, `max_agent_chars`, `max_mcp_items`, `max_mcp_chars`, `max_context_files`, `max_node_id_chars`, `max_prompt_chars`) |
 
 ### Sessions
 
@@ -80,9 +82,24 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `clear_suggest_tokens` | `200000` | `0` or 20000–2000000 | Context size at which a session is checkpointed and cleared. Used by the generated hooks of every CLI (see [Sessions](sessions.md)) and by `ego run` |
 | `usage_switch_percent` | `99` | `0` or 50–99 | Claude Code and Codex (the CLIs that report their usage limit): at this percentage of the 5-hour or 7-day usage limit, save a checkpoint and propose continuing in another CLI (`0` disables) |
 | `run_yolo` | `true` | bool | `ego run` starts the CLI with its skip-permissions switch. `--yolo` / `--no-yolo` override per run |
-| `session_schema` | `{}` | table of `>= 1` ints | Overrides for checkpoint and resume-prompt limits (`max_goal_chars`, `max_item_chars`, `max_notes`, `max_prompt_chars`). Defaults: 800, 350, 8, 1600 |
 
 Details: [Sessions](sessions.md).
+
+## Fine-grained parameters (`.ego/defaults.toml`)
+
+Most limits and defaults are read from the packaged `src/ego/defaults.toml`. To change them for one project, add a `[tuning]` table to `.ego/defaults.toml`. Only `[tuning]` keys can be overridden there. No CLI flag overrides these. A `.ego/config.toml` without the new keys still works; the package defaults fill them in.
+
+| Key | Default | Used for |
+|---|---|---|
+| `max_feedback_chars` | `4000` | Characters of check output and reviewer findings fed back into a retry |
+| `max_summary_chars` | `800` | Characters of summaries in events, checkpoints and the replan history |
+| `max_record_chars` | `20000` | Characters of output kept per attempt in `record.json` |
+| `max_context_hits` | `8` | Code-search hits given to the planner |
+| `max_save_turns` | `3` | Turns allowed for the checkpoint-save call |
+| `max_handoff_chars` | `1000` | Characters of handoff text passed between nodes |
+| `max_role_candidates` | `8` | Cap on role routing candidates |
+| `[tuning.plan_schema]` | see the packaged `defaults.toml` | Task and plan schema limits (12 keys, e.g. `max_goal_chars` 6000) |
+| `[tuning.session_schema]` | `max_goal_chars` 800, `max_item_chars` 350, `max_notes` 8, `max_prompt_chars` 1600 | Checkpoint and resume-prompt limits |
 
 ## Policy mode
 
@@ -110,12 +127,12 @@ These are defaults for managed runs and the planner. A Task JSON or `--model` / 
 ### Per-role routing (`roles`)
 
 ```toml
-roles = {judge = {host = "agy", model = "gemini-2.5-pro", effort = "high"}, coder = {host = "claude", model = "sonnet"}}
+roles = {reviewer = {host = "agy", model = "gemini-2.5-pro", effort = "high"}, coder = {host = "claude", model = "sonnet"}}
 ```
 
-- Keys are `coder`, `tester`, `judge`; each table takes optional `host`, `model`, `effort` (same vocabulary as `hosts` / `models`).
+- Keys are `coder`, `tester`, `reviewer`; each table takes optional `host`, `model`, `effort` (same vocabulary as `hosts` / `models`).
 - Omitted fields fall back to `models` / `hosts`. An effort-only entry keeps the host and model and just sets effort.
-- Precedence: node > Task `defaults.roles` > `roles` > Task `defaults` > `models`. Set with `ego apply --roles '{"judge":{"host":"agy"}}'`.
+- Precedence: node > Task `defaults.roles` > `roles` > Task `defaults` > `models`. Set with `ego apply --roles '{"reviewer":{"host":"agy"}}'`.
 
 Per-host and multiple specs: a host name may be a key inside a role. `host` picks the active one (otherwise the run's default host is used).
 

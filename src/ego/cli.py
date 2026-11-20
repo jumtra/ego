@@ -46,20 +46,6 @@ def _cmd_apply(args):
             cfg.roles = parsed
         except Exception as exc:
             raise EgoError("INVALID_CONFIG", f"roles must be a valid JSON object: {exc}", 2)
-    if getattr(args, "plan_schema", None) is not None:
-        try:
-            parsed = json.loads(args.plan_schema)
-            if not isinstance(parsed, dict): raise ValueError("must be JSON object")
-            cfg.plan_schema = parsed
-        except Exception as exc:
-            raise EgoError("INVALID_CONFIG", f"plan_schema must be a valid JSON object: {exc}", 2)
-    if getattr(args, "session_schema", None) is not None:
-        try:
-            parsed = json.loads(args.session_schema)
-            if not isinstance(parsed, dict): raise ValueError("must be JSON object")
-            cfg.session_schema = parsed
-        except Exception as exc:
-            raise EgoError("INVALID_CONFIG", f"session_schema must be a valid JSON object: {exc}", 2)
     # No extra import or stdin inspection on scripted apply/check/dry-run.
     from .usecases.apply_wizard import should_prompt, select_options, confirm_apply, WizardCancelled
     interactive = should_prompt(args)
@@ -242,44 +228,16 @@ def _cmd_doctor(args):
 
 
 def _cmd_work(args):
-    from .usecases.work import execute,status,cancel,compact_result,watch
+    from .usecases.work import status,cancel,compact_result,watch
     root=_root(args)
     # Default output is a compact summary: the full record holds a per-file
     # snapshot and raw worker output, which would land in the caller's context.
-    shape=(lambda r:r) if getattr(args,"verbose",False) else (lambda r:compact_result(r,task_file=getattr(args,"task",None) or "<task-file>"))
+    from .domain.config import load_config
+    summary_limit=load_config(root).tuning.max_summary_chars
+    shape=(lambda r:r) if getattr(args,"verbose",False) else (lambda r:compact_result(r,summary_limit=summary_limit,task_file=getattr(args,"task",None) or "<task-file>"))
     if args.action=="status":_print(shape(status(root,args.run_id)));return 0
     if args.action=="watch":watch(root,args.run_id,after=args.after);return 0
-    if args.action=="cancel":
-        from .usecases.loop import ledger_path,cancel_loop
-        _print(cancel_loop(root,args.run_id) if ledger_path(root,args.run_id).exists() else cancel(root,args.run_id));return 0
-    if args.action=="loop-status":
-        from .usecases.loop import loop_status
-        _print(loop_status(root,args.loop_id));return 0
-    if args.action=="loop-apply":
-        from .usecases.loop import apply_loop
-        result=apply_loop(root,args.loop_id,approve=args.approve)
-        _print(result);return 0 if result["status"]=="COMPLETED" else 5
-    if args.action=="loop":
-        from .usecases.loop import run_loop,SUCCESS
-        checks=[]
-        for raw in args.done_check:
-            try:argv=json.loads(raw) if raw.lstrip().startswith("[") else __import__("shlex").split(raw)
-            except ValueError as exc:raise EgoError("INVALID_DONE_CHECK",str(exc),2) from exc
-            if not isinstance(argv,list) or not argv or not all(isinstance(x,str) for x in argv):
-                raise EgoError("INVALID_DONE_CHECK","Each --done-check is a command or a JSON argv array",2)
-            checks.append(argv)
-        task=None
-        if args.task:
-            task=read_json(Path(args.task))
-            if not task:raise EgoError("TASK_MISSING",str(args.task),3)
-        goal=args.goal or (task or {}).get("goal")
-        if not goal:raise EgoError("INVALID_GOAL","--goal is required unless --task carries a goal",2)
-        result=run_loop(root,goal,done_checks=checks,host=args.host,
-                        scope=[s.strip() for s in args.scope.split(",") if s.strip()] if args.scope else None,max_iterations=args.max_iterations,
-                        max_budget_usd=args.max_budget_usd,max_wall_seconds=args.max_wall_seconds,
-                        trust_cli=args.trust_cli,execute_planner=args.execute,apply=args.apply,approve=args.approve,
-                        autonomy=args.autonomy,isolated=args.attest_external_sandbox,plan_first=args.plan_first,task=task)
-        _print(result);return 0 if result["status"] in SUCCESS else 5
+    if args.action=="cancel":_print(cancel(root,args.run_id));return 0
     if args.action=="alter-plan":
         from .usecases.alter_plan import push,wait,pull,sync
         if args.plan_action=="push":result=push(root,args.task,args.slug)
@@ -313,7 +271,8 @@ def _cmd_work(args):
             try:defaults["models"]=json.loads(args.models)
             except json.JSONDecodeError as exc:raise EgoError("INVALID_MODEL",str(exc),2) from exc
         task["defaults"]=defaults
-    result=execute(root,task,host=args.host,apply=args.apply,approve=args.approve,trust_cli=args.trust_cli,
+    from .usecases.replan import run_with_replans
+    result=run_with_replans(root,task,host=args.host,apply=args.apply,approve=args.approve,trust_cli=args.trust_cli,
                    run_id=args.run_id,resume=args.action=="resume",progress_stderr=True,
                    autonomy=args.autonomy,isolated=args.attest_external_sandbox,
                    worktree=args.worktree,cleanup_worktree=args.cleanup_worktree,planner_usage=planner_usage,
@@ -647,9 +606,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.add_argument("--runtime",choices=["native","managed"],help="Default runtime; per-task runtime remains configurable")
     sp.add_argument("--policy",choices=["strict","relaxed"],help="Policy mode (strict: safe; relaxed: default, loose mode allowing git push and edits)")
     sp.add_argument("--models",help="Default models JSON mapping, e.g. '{\"claude\":\"sonnet\"}'")
-    sp.add_argument("--roles",help="Per-role host/model/effort JSON, e.g. '{\"judge\":{\"host\":\"agy\",\"effort\":\"high\"}}'")
-    sp.add_argument("--plan-schema",help="Task/plan schema limit overrides JSON, e.g. '{\"max_note_chars\":800,\"max_step_items\":15}'")
-    sp.add_argument("--session-schema",help="Session checkpoint/prompt limit overrides JSON, e.g. '{\"max_item_chars\":500,\"max_prompt_chars\":2400}'")
+    sp.add_argument("--roles",help="Per-role host/model/effort JSON, e.g. '{\"reviewer\":{\"host\":\"agy\",\"effort\":\"high\"}}'")
     sp.add_argument("--clear-suggest-tokens",type=int,metavar="N",help="At N context tokens the Stop hook (Claude Code, Codex, AGY, OpenCode plugin) has the session checkpoint and suggests /clear (0 = off)")
     mode = sp.add_mutually_exclusive_group()
     mode.add_argument("--interactive",action="store_true",help="Always ask for choices, even when stdin is redirected")
@@ -704,19 +661,7 @@ def build_parser()->argparse.ArgumentParser:
     sp.set_defaults(func=_cmd_update)
     sp=sub.add_parser("work");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("native");r=s.add_parser("status");r.add_argument("run_id");r.add_argument("--verbose",action="store_true",help="Print the full run record")
-    r=s.add_parser("cancel");r.add_argument("run_id",help="Run ID or loop ID")
-    r=s.add_parser("loop",help="Plan, execute, evaluate and replan until the done-checks pass or a limit is hit")
-    r.add_argument("--goal",help="Defaults to the goal of --task")
-    r.add_argument("--task",help="Approved task JSON run as the first iteration instead of a direct attempt or a new plan")
-    r.add_argument("--done-check",action="append",required=True,help="Command that exits 0 when the goal holds; repeatable. A command line or a JSON argv array")
-    r.add_argument("--host",choices=["mock","claude","codex","opencode","agy"],default="mock");r.add_argument("--scope")
-    r.add_argument("--max-iterations",type=int,default=3);r.add_argument("--max-budget-usd",type=float);r.add_argument("--max-wall-seconds",type=int)
-    r.add_argument("--execute",action="store_true",help="Allow the planning model call");r.add_argument("--trust-cli",action="store_true")
-    r.add_argument("--plan-first",action="store_true",help="Call the planner before the first iteration instead of only after a failed direct attempt")
-    r.add_argument("--apply",action="store_true");r.add_argument("--approve",action="store_true")
-    r.add_argument("--autonomy",choices=["auto","safe","bypass"],default="auto");r.add_argument("--attest-external-sandbox",action="store_true")
-    r=s.add_parser("loop-status");r.add_argument("loop_id")
-    r=s.add_parser("loop-apply",help="Apply the staged result of a VERIFIED loop");r.add_argument("loop_id");r.add_argument("--approve",action="store_true")
+    r=s.add_parser("cancel");r.add_argument("run_id",help="Run ID")
     r=s.add_parser("plan");r.add_argument("--goal",required=True);r.add_argument("--host",default="mock");r.add_argument("--scope");r.add_argument("--out");r.add_argument("--execute",action="store_true")
     r=s.add_parser("alter-plan",help="Hand a plan to alter for node editing, then pull the approved plan");ap=r.add_subparsers(dest="plan_action",required=True)
     ac=ap.add_parser("push");ac.add_argument("--task",required=True);ac.add_argument("--slug")

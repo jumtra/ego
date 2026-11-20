@@ -8,7 +8,6 @@
 |---|---|---|
 | [`/work`](#work) | 日常的な変更 | あなた（AI CLI 内で） |
 | [管理実行](#管理実行) | 大規模、複数コンポーネントにまたがる、リスクの高い、複数ホストにまたがる変更 | `ego work run`（通常は `/work` が起動） |
-| [ゴールループ](#ゴールループ) | コマンドで達成を証明できるゴールで、複数回の試行が見込まれるもの | `ego work loop` |
 
 ## `/work`
 
@@ -23,7 +22,6 @@
 | 小さく低リスク | 関連ファイルを読む → 編集 → 対象を絞ったテスト → 差分の確認 → 報告 | 要件書、設計書、計画書 |
 | 中規模 | 同じ流れ。必要なら短いインラインのチェックリスト | 完全な仕様書 |
 | 大規模、リスクが高い、複数ホスト | `ego work plan` で始まる管理実行 | 誰も求めていないドキュメント |
-| 達成を証明するコマンドがあるゴール | ゴールループ | |
 
 期待される振る舞い:
 
@@ -87,9 +85,9 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `COMPARISON_READY` | compare ノードが比較用の候補を生成。何も適用されない | 0 |
 | `FAILED` | ノードが試行回数を使い切っても失敗した | 5 |
 | `BLOCKED_DEPENDENCY`、`MERGE_CONFLICT` | 依存するノードが失敗した、または並列ノードが同じファイルを矛盾して編集した | 5 |
-| `TIMEOUT`、`BUDGET_EXHAUSTED`、`CANCELLED` | 上限に達した、または `ego work cancel <run_id>` を実行した | 5 |
+| `BUDGET_EXHAUSTED`、`CANCELLED` | run のトークン上限（`max_run_tokens`）に達した、または `ego work cancel <run_id>` を実行した | 5 |
 
-**失敗した run の続け方。** 失敗したノードだけをタスクファイルで直し、`ego work run --task <file> --from <run_id>` で実行すると、直したノードとその下流だけが動きます。タスクを変えずに `ego work resume <run_id>` すると、失敗したノードが前回の失敗内容をフィードバックとして受け取って再実行されます（judge の REJECT なら対象の coder に指摘を渡します）。未完了の run の worktree は、続けられるように削除しません。
+**失敗した run の続け方。** 失敗したノードだけをタスクファイルで直し、`ego work run --task <file> --from <run_id>` で実行すると、直したノードとその下流だけが動きます。タスクを変えずに `ego work resume <run_id>` すると、失敗したノードが前回の失敗内容をフィードバックとして受け取って再実行されます（reviewer の REJECT なら対象の coder に指摘を渡します）。未完了の run の worktree は、続けられるように削除しません。
 
 `ego work status <run_id>` で run を再表示できます。使用量の行（例: `plan 1.2k tokens · work 45.6k tokens (task A 9.0k) · total 46.8k tokens`）は、入力 + 出力 + キャッシュ読み取り + キャッシュ作成のトークン数です。コストはホスト CLI 自身の見積もりです。`cost_known: false` はホストがコストを報告しなかったことを意味します。
 
@@ -111,8 +109,8 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `node_started` | `node`, `kind`, `role` |
 | `attempt_finished` | `node`, `attempt`, `host`, `model`, `status`, `checks`（argv と結果）, 切り詰めた `feedback`, `changed`, `tokens`, `segments`, `rotations` |
 | `worker_segment` | `node`, `attempt`, `segment`, `tokens`, `action`（`continue` か `rotate`） |
-| `node_finished` | `node`, `status`, `attempts`, `changed`。judge は `verdict` と `findings` も |
-| `judge_retry` | `judge`, `reviews`, `retry` |
+| `node_finished` | `node`, `status`, `attempts`, `changed`。reviewer は `verdict` と `findings` も |
+| `review_round` | `reviewer`, `reviews`, `round`, `cause`（`reject` か `gate`）。停滞した場合は `loop_stalled` |
 | `run_finished` / `run_error` | `final_status`, `applied`, `changed_files`, `message` / `code`, `message` |
 
 要約には、ノードごとの状態・試行回数・check 結果を持つ `nodes` と、検証済みで未適用の run の適用コマンド `next_action` が加わります。
@@ -152,7 +150,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 |---|---|
 | `goal`、`instructions` | すべての agent ノードにユーザー指示として渡される |
 | `instructions_file` | プロジェクト相対のパス。共有指示を追加で記述したファイル |
-| `defaults` | `host` / `hosts`、`strategy`、`model`、`models`、`fallback_on`、`roles`（役割ごとの経路。例 `{"judge": {"host": "codex"}}`。優先順位は node、role、defaults）。ノードが独自に設定しない場合の既定値 |
+| `defaults` | `host` / `hosts`、`strategy`、`model`、`models`、`fallback_on`、`roles`（役割ごとの経路。例 `{"reviewer": {"host": "codex"}}`。優先順位は node、role、defaults）。ノードが独自に設定しない場合の既定値 |
 | `nodes` | 空でないノードのリスト |
 
 ノードのフィールド:
@@ -166,22 +164,28 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `write_allowlist` | agent、code | ノードが変更してよいファイルの glob パターン。agent と code では必須 |
 | `checks` | すべて | 終了コード 0 で成功すべきコマンド（argv 配列） |
 | `argv` | code、gate | 実行するコマンド（`argv` か `checks` のどちらかが必要） |
-| `role` | agent | `coder` / `tester` / `judge`（権限を強制）。`tester` は `tests/` 配下のみ書き込める（`write_allowlist` は `tests/` で始まる必要がある）。`judge` は読み取り専用で `write_allowlist` を持たない |
+| `role` | agent | `coder` / `tester` / `reviewer`（権限を強制）。`tester` は `tests/` 配下のみ書き込める（`write_allowlist` は `tests/` で始まる必要がある）。`reviewer` は読み取り専用で `write_allowlist` を持たない |
 | `inputs`、`outputs` | agent | I/O 契約。読むべき既存ファイル（最大 6 件）と、変更するファイルまたは `path::関数名`。各 output は `write_allowlist` に一致する必要がある。依存先ノードには前段の `outputs` が渡る |
-| `reviews`、`max_retries` | judge | `reviews`（必須）は却下時に差し戻す `coder` ノード。`max_retries` は 0〜2（既定 1） |
-| `intent`、`done_when`、`non_goals`、`assumptions`、`provides` | agent | そのステージの理由、受け入れ基準、やらないこと、依拠する事実、後続が必要とするもの。短い文字列（`intent`）か、各 400 文字以内の文字列を最大 6 件含むリスト。上限は既定値で、[設定](configuration.md) の `plan_schema` で上書きできます |
+| `reviews`、`max_rounds`、`on_exhausted` | reviewer | `reviews`（必須）は差し戻す `coder` ノード。`max_rounds` は 0〜5（既定は config の `max_rounds`、2）。`on_exhausted` は `fail`（既定）か `replan` |
+| `intent`、`done_when`、`non_goals`、`assumptions`、`provides` | agent | そのステージの理由、受け入れ基準、やらないこと、依拠する事実、後続が必要とするもの。短い文字列（`intent`）か、各 400 文字以内の文字列を最大 6 件含むリスト。上限は [設定](configuration.md) の `[tuning.plan_schema]`（`.ego/defaults.toml`）から取ります |
 | `requirement`、`steps` | agent | 5W1H（`who` `what` `when` `where` `why` `how`、各 400 文字以内）と、ワーカーが書かれたとおりに実行する 1〜10 件の手順 |
 | `host` / `hosts`、`strategy`、`model` / `models`、`fallback_on` | agent | ルーティング。下記参照 |
 | `agent` | agent | 任意のカスタムエージェント名（`.claude/agents/*.md`、`.agents/agents/*.md`、`.opencode/agents/*.md`、`.codex/agents/*.toml` から検出）。定義内容がノードのプロンプトに埋め込まれる |
 | `mcp` | agent | 必要な MCP サーバー名のリスト（1〜8 件、例: `["alter"]`）。`worker_context = "lean"` でもホストの MCP サーバーを有効のままにし、ドメイン知識・用語集の取得指示を付与する。`knowledge = "alter"` のときは alter（`alter_task_context` / `alter_search` / `alter_get_note`）だけから取得し、file ナレッジのときは `.ego/knowledge/index.md`（`ego knowledge`）を読む。`knowledge = "alter"` 時は自動適用 |
 | `instructions_file`、`context_files` | agent | 追加の指示。参照ファイルは最大 24 件 |
-| `max_attempts`、`max_turns`、`timeout_seconds` | すべて | ノードごとの上限。設定値で頭打ちになる |
+| `max_attempts`、`max_turns`、`timeout_seconds` | すべて | ノードごとの上限。config の上限を超える値は `INVALID_TASK` で拒否される（黙って丸めない） |
 
 コマンドは argv 配列で指定します。シェル文字列は使えません。また、必ず `allow_commands` にある名前で始まる必要があります。
 
-### Judge ゲート
+### Reviewer とループ
 
-`judge` ノードは `gate` または `code` ノードに最低 1 つ依存する必要があり、決定論的チェックが通った後にだけ実行されます。出力の最後は `VERDICT: APPROVE` か `VERDICT: REJECT` です。指摘は `- path:line: 内容` の形式で、証拠（パスと行）のない指摘は破棄されます（証拠が残らない REJECT は APPROVE 扱い）。証拠付きの REJECT では、対象の `coder` ノードと judge が待つノードだけを、指摘をフィードバックにして最大 `max_retries` 回やり直します。計画全体は再計画しません。上限を超えると judge ノードが失敗します。
+`reviewer` ノードは `gate` または `code` ノードに最低 1 つ依存する必要があり、決定論的チェックが通った後にだけ実行されます。出力の最後は `VERDICT: APPROVE` か `VERDICT: REJECT` です。指摘は `- path:line: 内容` の形式で、証拠（パスと行）のない指摘は破棄されます（証拠が残らない REJECT は APPROVE 扱い）。
+
+証拠付きの REJECT、またはループ内の gate / code の失敗では、対象の `coder` ノードと reviewer が待つノードだけを、指摘をフィードバックにして再実行します。これを 1 ノードあたり最大 `max_rounds` 回まで繰り返します（既定 2）。
+
+- `on_exhausted = "fail"`（既定）: 回数を使い切ると reviewer ノードが失敗します。
+- `on_exhausted = "replan"`: 回数を使い切ると、計画を作り直します（[再計画](#再計画max_replans)）。
+- 停滞: 再試行で差分とフィードバックが前回と同じになる場合は、回数が残っていてもループを止め、reviewer を失敗させます（`loop_stalled` イベント）。この場合は再計画しません。
 
 ### ホストとモデルの選び方
 
@@ -199,47 +203,13 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 ego work run --task task.json --hosts claude,codex --strategy fallback --models '{"claude":"sonnet","codex":"auto"}' --trust-cli
 ```
 
-## ゴールループ
+## 再計画（max_replans）
 
-コマンドでゴールを証明できる場合（テストが通る、ビルドが成功する）に使います。そのようなコマンドがなければ、ループは使わないでください。
+task の `max_replans` は、計画全体を作り直せる回数です（既定 1、上限は config の `max_replans`）。`on_exhausted = "replan"` の reviewer が回数を使い切ると、検証済みのノードを残し、残りを作り直します。作り直した計画で同じ id のノードは、検証済みのノードを置き換えます。`on_exhausted = "replan"` には `max_replans >= 1` が必要です。config の上限を超える値は `INVALID_TASK` で拒否されます。
 
-```bash
-ego work loop --goal "Reject negative timeouts in the API" --done-check "pytest -q tests/api" \
-  --host claude --scope 'src/**,tests/**' --max-iterations 3 --max-budget-usd 5 --execute --trust-cli
-ego work loop-status <loop_id>
-ego work loop-apply <loop_id> --approve      # 確認後、検証済みのループを適用
-ego work cancel <loop_id>                    # 次のイテレーションの前に停止
-```
+## トークン上限
 
-| フラグ | 意味 |
-|---|---|
-| `--goal` | 達成すること（必須） |
-| `--done-check` | ゴールが成立したときに終了コード 0 となるコマンド（必須、繰り返し指定可）。コマンド行または JSON の argv 配列 |
-| `--host` | `mock`（既定）、`claude`、`codex`、`opencode` |
-| `--scope` | ループが変更してよいファイルのカンマ区切り glob（既定 `src/**,tests/**`） |
-| `--max-iterations` | 既定 3、1〜10 |
-| `--max-budget-usd`、`--max-wall-seconds` | 任意の上限 |
-| `--execute` | プランナーのモデル呼び出しを許可 |
-| `--plan-first` | 最初のイテレーションの前にプランナーを呼ぶ |
-| `--task <file>` | 承認済みのタスク JSON を最初のイテレーションとして実行する。`--goal` は省略するとタスクの goal を使う。`--plan-first` とは併用不可 |
-| `--trust-cli`、`--autonomy`、`--attest-external-sandbox`、`--apply --approve` | 管理実行と同じ |
-
-仕組み:
-
-- 最初のイテレーションではプランナーを省略します。ワーカーを 1 つ実行し、done-check に対して修正します。プランナーは、イテレーションが失敗した後、または `--plan-first` を指定したときに呼ばれます。`--task` を指定すると、最初の試行の代わりに承認済みのタスクを実行し、失敗した場合は通常どおり再計画します。
-- 各イテレーションは、新しい CLI セッションで計画と実行を行います。状態は会話ではなく `.ego/state/loops/<loop_id>/ledger.json` に保存されます。
-- 再計画に渡されるのは、上限付きの記録だけです。失敗したノード、切り詰めたチェック出力、変更されたパスです。
-- 検証済みの変更は次のイテレーションに引き継がれます。失敗したノードの編集は引き継がれません。
-- 検証済みの agent ノードは、定義をそのまま次のタスクに残します。自ノード・祖先・共有設定から求めたフィンガープリントが一致すれば再実行しません。プランナーが同じ id のノードを出した場合は置き換え、そのノードと下流だけを再実行します。gate/code ノードは安価な再検証として毎回実行します。
-
-| 終了状態 | 意味 |
-|---|---|
-| `VERIFIED` | ステージング用コピーでゴールが成立。まだ何も適用されていない |
-| `COMPLETED` | ゴールが成立し、結果が適用された |
-| `STALLED` | 2 回のイテレーションが同じ内容と同じ失敗で終わった |
-| `MAX_ITERATIONS`、`BUDGET_EXHAUSTED`、`TIMEOUT`、`CANCELLED` | 上限に達した |
-
-1 回の対話的な Claude Code セッションに収まる小さなゴールなら、CLI 自身の `/goal` で十分です。
+`max_run_tokens`（既定 500000）は run 全体の使用トークンの上限です。`cache_read` トークンは数えません。上限に達すると、run はステップの区切りで止まり、`final_status` は `BUDGET_EXHAUSTED` になります。run 全体の時間制限はありません。
 
 ## 補助コマンド
 

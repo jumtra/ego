@@ -60,6 +60,6 @@
 <rect x="588" y="650" width="4" height="30" rx="2" fill="url(#accent)" stroke="none"/>
 <text x="606" y="675" font-size="23" fill="#f8fafc" font-weight="700">Plan before you edit.</text>
 <text x="590" y="713" font-size="15" fill="#cbd5e1" font-weight="400">AI CLI: /work-plan → Node graph → Approve</text>
-<text x="590" y="746" font-size="13" fill="#7dd3fc" font-weight="400">Or ego work loop · Bounded &amp; reversible</text>
+<text x="590" y="746" font-size="13" fill="#7dd3fc" font-weight="400">Retry · review · replan, all bounded &amp; reversible</text>
 <text x="32" y="811" font-size="14" fill="#9cb1ca" font-weight="400">Works beyond Python · Local memory · Code search</text>
 </g></svg>

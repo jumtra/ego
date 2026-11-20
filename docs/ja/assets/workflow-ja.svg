@@ -60,6 +60,6 @@
 <rect x="588" y="650" width="4" height="30" rx="2" fill="url(#accent)" stroke="none"/>
 <text x="606" y="675" font-size="23" fill="#f8fafc" font-weight="700">計画してから、安全に進める。</text>
 <text x="590" y="713" font-size="15" fill="#cbd5e1" font-weight="400">AI CLIで /work-plan → ノード計画 → 承認</text>
-<text x="590" y="746" font-size="13" fill="#7dd3fc" font-weight="400">または ego work loop · 回数制限・取り消し可</text>
+<text x="590" y="746" font-size="13" fill="#7dd3fc" font-weight="400">再試行・レビュー・再計画は回数制限つき・取り消し可</text>
 <text x="32" y="811" font-size="14" fill="#9cb1ca" font-weight="400">Python以外のプロジェクトも対応 · ローカルメモリ · コード検索</text>
 </g></svg>

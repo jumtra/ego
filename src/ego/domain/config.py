@@ -1,6 +1,6 @@
 """Strict configuration, with a tiny TOML writer for the supported primitives."""
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, fields
 import copy
 import json
 from pathlib import Path
@@ -8,64 +8,15 @@ import tomllib
 from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from ..shared.util import EgoError, atomic_text
-from .task_schema import (
-    MAX_AGENT_CHARS,
-    MAX_CONTEXT_FILES,
-    MAX_GOAL_CHARS,
-    MAX_INSTRUCTIONS_CHARS,
-    MAX_INSTRUCTIONS_FILE_CHARS,
-    MAX_MCP_CHARS,
-    MAX_MCP_ITEMS,
-    MAX_NODE_ID_CHARS,
-    MAX_NOTE_CHARS,
-    MAX_NOTE_ITEMS,
-    MAX_PROMPT_CHARS,
-    MAX_STEP_ITEMS,
-    PlanSchemaLimits,
-)
-from .session_schema import (
-    MAX_GOAL_CHARS as SESSION_MAX_GOAL_CHARS,
-    MAX_ITEM_CHARS as SESSION_MAX_ITEM_CHARS,
-    MAX_NOTES as SESSION_MAX_NOTES,
-    MAX_PROMPT_CHARS as SESSION_MAX_PROMPT_CHARS,
-    SessionSchemaLimits,
-)
+from .defaults import package_defaults, tuning_values
+from .session_schema import SessionSchemaLimits
+from .task_schema import PlanSchemaLimits
 
 HOSTS = ("claude", "codex", "opencode", "agy")
 PROVIDERS = ("codegraph", "graphify", "none")
 KNOWLEDGE = ("file", "alter")  # where project knowledge (terms, glossary, decisions) lives
 VALID_EFFORTS = {"auto", "low", "medium", "high", "xhigh", "max"}
 EFFORT_ALIASES = {"middle": "medium"}
-MAX_ROLE_CANDIDATES = 8
-# Host-neutral starting point: no `host` key, so the run's host decides which entry applies.
-DEFAULT_MODELS: dict[str, Any] = {
-    "claude": {"model": "sonnet", "effort": "auto"},
-    "codex": {"model": "auto", "effort": "medium"},
-    "opencode": "auto",
-    "agy": {"model": "gemini-4-hydrogen-medium", "effort": "auto"},
-}
-DEFAULT_ALTER_ANALYZER: dict[str, Any] = {"opencode": {"model": "opencode/glm-5.3-flash-free"}}
-DEFAULT_ROLES: dict[str, Any] = {
-    "coder": {
-        "claude": {"model": "haiku", "effort": ["medium", "high"]},
-        "codex": {"model": "auto", "effort": "medium"},
-        "agy": {"model": "gemini-4-hydrogen-medium", "effort": "medium"},
-        "opencode": {"model": "auto", "effort": "medium"},
-    },
-    "tester": {
-        "claude": {"model": "haiku", "effort": ["medium", "high"]},
-        "codex": {"model": "auto", "effort": "low"},
-        "agy": {"model": "gemini-4-hydrogen-low", "effort": "low"},
-        "opencode": {"model": "auto", "effort": "low"},
-    },
-    "judge": {
-        "claude": {"model": "haiku", "effort": "high"},
-        "codex": {"model": "auto", "effort": "high"},
-        "agy": {"model": "gemini-4-hydrogen-medium", "effort": "high"},
-        "opencode": {"model": "auto", "effort": "high"},
-    },
-}
-
 
 def parse_role_spec(value: Any, where: str = "role spec") -> list[tuple[str | None, str | None]]:
     """Expand a per-host role spec into ordered (model, effort) candidates; None means host default / auto.
@@ -100,13 +51,14 @@ def parse_role_spec(value: Any, where: str = "role spec") -> list[tuple[str | No
             out.extend(parse_role_spec(item, where))
     else:
         raise bad("must be a {model, effort} table or a non-empty list of them")
-    if len(out) > MAX_ROLE_CANDIDATES:
-        raise bad(f"at most {MAX_ROLE_CANDIDATES} candidates")
+    cap = package_defaults()['tuning']['max_role_candidates']
+    if len(out) > cap:
+        raise bad(f"at most {cap} candidates")
     return out
 
 NonEmptyModelStr = Annotated[str, Field(min_length=1, max_length=128, pattern=r"\S")]
 HostLiteral = Literal["claude", "codex", "opencode", "agy"]
-RoleLiteral = Literal["coder", "tester", "judge"]
+RoleLiteral = Literal["coder", "tester", "reviewer"]
 EffortLiteral = Literal["auto", "low", "medium", "high", "xhigh", "max"]
 
 
@@ -146,32 +98,6 @@ class RoleConfigSpec(BaseModel):
         return _normalize_effort(v)
 
 
-PositiveInt = Annotated[int, Field(ge=1)]
-
-
-class PlanSchemaConfigSpec(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    max_goal_chars: PositiveInt = MAX_GOAL_CHARS
-    max_instructions_chars: PositiveInt = MAX_INSTRUCTIONS_CHARS
-    max_instructions_file_chars: PositiveInt = MAX_INSTRUCTIONS_FILE_CHARS
-    max_note_chars: PositiveInt = MAX_NOTE_CHARS
-    max_note_items: PositiveInt = MAX_NOTE_ITEMS
-    max_step_items: PositiveInt = MAX_STEP_ITEMS
-    max_agent_chars: PositiveInt = MAX_AGENT_CHARS
-    max_mcp_items: PositiveInt = MAX_MCP_ITEMS
-    max_mcp_chars: PositiveInt = MAX_MCP_CHARS
-    max_context_files: PositiveInt = MAX_CONTEXT_FILES
-    max_node_id_chars: PositiveInt = MAX_NODE_ID_CHARS
-    max_prompt_chars: PositiveInt = MAX_PROMPT_CHARS
-
-
-class SessionSchemaConfigSpec(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    max_goal_chars: PositiveInt = SESSION_MAX_GOAL_CHARS
-    max_item_chars: PositiveInt = SESSION_MAX_ITEM_CHARS
-    max_notes: PositiveInt = SESSION_MAX_NOTES
-    max_prompt_chars: PositiveInt = SESSION_MAX_PROMPT_CHARS
-
 
 class ConfigSpec(BaseModel):
     """Pydantic schema for validating Config attributes mechanically."""
@@ -186,6 +112,9 @@ class ConfigSpec(BaseModel):
     runtime_mode: Literal["native", "managed"]
     max_parallel: Annotated[int, Field(ge=1, le=8)]
     max_attempts: Annotated[int, Field(ge=1, le=5)]
+    max_rounds: Annotated[int, Field(ge=0, le=5)]
+    max_replans: Annotated[int, Field(ge=0, le=5)]
+    max_run_tokens: Annotated[int, Field(ge=1000)]
     timeout_seconds: Annotated[int, Field(ge=5, le=7200)]
     max_turns: Annotated[int, Field(ge=1, le=200)]
     worker_context: Literal["lean", "inherit"]
@@ -203,8 +132,6 @@ class ConfigSpec(BaseModel):
     cleanup_worktree: bool
     tests: list[Annotated[list[str], Field(min_length=1)]]
     allow_commands: list[str]
-    plan_schema: PlanSchemaConfigSpec = Field(default_factory=PlanSchemaConfigSpec)
-    session_schema: SessionSchemaConfigSpec = Field(default_factory=SessionSchemaConfigSpec)
 
     @field_validator("hosts")
     @classmethod
@@ -263,48 +190,87 @@ def _format_config_error(err: ValidationError) -> str:
     return f"{path}: {msg}" if path else msg
 
 
+@dataclass(frozen=True)
+class Tuning:
+    max_feedback_chars: int
+    max_summary_chars: int
+    max_record_chars: int
+    max_context_hits: int
+    max_save_turns: int
+    max_handoff_chars: int
+    max_role_candidates: int
+    plan_schema: PlanSchemaLimits
+    session_schema: SessionSchemaLimits
+
+
+def load_tuning(root: Path | None) -> Tuning:
+    t = tuning_values(root)
+    return Tuning(
+        max_feedback_chars=t["max_feedback_chars"],
+        max_summary_chars=t["max_summary_chars"],
+        max_record_chars=t["max_record_chars"],
+        max_context_hits=t["max_context_hits"],
+        max_save_turns=t["max_save_turns"],
+        max_handoff_chars=t["max_handoff_chars"],
+        max_role_candidates=t["max_role_candidates"],
+        plan_schema=PlanSchemaLimits(**t["plan_schema"]),
+        session_schema=SessionSchemaLimits(**t["session_schema"]),
+    )
+
+
 @dataclass
 class Config:
-    schema_version: int = 1
-    profile: str = "balanced"
-    policy_mode: str = "relaxed"
-    hosts: list[str] = field(default_factory=lambda: ["claude", "codex", "opencode", "agy"])
-    code_intelligence: str = "codegraph"
-    knowledge: str = "alter"  # "file" (.ego/knowledge index + topic files) or "alter" (alter MCP); process memory (`ego memory`) is always local
-    runtime_mode: str = "native"
-    max_parallel: int = 4
-    max_attempts: int = 3
-    timeout_seconds: int = 7200
-    max_turns: int = 30  # agentic turns per managed worker invocation
-    worker_context: str = "lean"  # "lean" (no inherited MCP servers) or "inherit"
-    worker_segment_turns: int = 10  # managed Claude worker: turns per segment; context is measured between segments
-    clear_suggest_tokens: int = 150000  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
-    auto_resume: bool = True  # Claude Code/Codex/AGY: SessionStart(clear) hook injects the saved checkpoint after /clear (core; independent of clear_suggest_tokens)
-    usage_switch_percent: int = 99  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
-    run_yolo: bool = True  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
-    alter_analysis: bool = False  # opt-in: after a session ends, run the analyzer host headless to attach analysis to the recorded conversation (knowledge=alter only)
-    alter_analyzer: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_ALTER_ANALYZER))  # host -> {model} used for analysis; overrides the session host
-    alter_analysis_timeout_seconds: int = 600  # per-analysis wall-clock limit in seconds; must be > 0
-    models: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_MODELS))
-    roles: dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_ROLES))  # role (coder/tester/judge) -> {host, model, effort}; same vocabulary as hosts/models
-    isolation: str = "worktree"  # "copy" (staging directory) or "worktree" (git worktree)
-    cleanup_worktree: bool = True  # whether to remove the worktree after run
-    tests: list[list[str]] = field(default_factory=list)
-    allow_commands: list[str] = field(default_factory=lambda: ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"])
-    plan_schema: dict[str, int] = field(default_factory=dict)  # overrides for PlanSchemaLimits (max_goal_chars, max_note_chars, max_step_items, etc.)
-    session_schema: dict[str, int] = field(default_factory=dict)  # overrides for SessionSchemaLimits (max_goal_chars, max_item_chars, max_notes, max_prompt_chars)
+    schema_version: int
+    profile: str
+    policy_mode: str
+    hosts: list[str]
+    code_intelligence: str
+    knowledge: str  # "file" (.ego/knowledge index + topic files) or "alter" (alter MCP); process memory (`ego memory`) is always local
+    runtime_mode: str
+    max_parallel: int
+    max_attempts: int
+    max_rounds: int  # reviewer rejections allowed per node
+    max_replans: int  # plan revisions allowed per task
+    max_run_tokens: int  # whole-run token cap; cache_read tokens are excluded
+    timeout_seconds: int
+    max_turns: int  # agentic turns per managed worker invocation
+    worker_context: str  # "lean" (no inherited MCP servers) or "inherit"
+    worker_segment_turns: int  # managed Claude worker: turns per segment; context is measured between segments
+    clear_suggest_tokens: int  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
+    auto_resume: bool  # Claude Code/Codex/AGY: SessionStart(clear) hook injects the saved checkpoint after /clear (core; independent of clear_suggest_tokens)
+    usage_switch_percent: int  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
+    run_yolo: bool  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
+    alter_analysis: bool  # opt-in: after a session ends, run the analyzer host headless to attach analysis to the recorded conversation (knowledge=alter only)
+    alter_analyzer: dict[str, Any]  # host -> {model} used for analysis; overrides the session host
+    alter_analysis_timeout_seconds: int  # per-analysis wall-clock limit in seconds; must be > 0
+    models: dict[str, Any]
+    roles: dict[str, Any]  # role (coder/tester/reviewer) -> {host, model, effort}; same vocabulary as hosts/models
+    isolation: str  # "copy" (staging directory) or "worktree" (git worktree)
+    cleanup_worktree: bool  # whether to remove the worktree after run
+    tests: list[list[str]]
+    allow_commands: list[str]
+    tuning: Tuning
 
     def plan_schema_limits(self) -> PlanSchemaLimits:
-        return PlanSchemaLimits(**self.plan_schema)
+        return self.tuning.plan_schema
 
     def session_schema_limits(self) -> SessionSchemaLimits:
-        return SessionSchemaLimits(**self.session_schema)
+        return self.tuning.session_schema
 
     def validate(self) -> None:
         try:
-            ConfigSpec.model_validate(vars(self))
+            ConfigSpec.model_validate(_owned(self))
         except ValidationError as err:
             raise EgoError("INVALID_CONFIG", _format_config_error(err), 2) from err
+
+
+def _owned(cfg: Config) -> dict[str, Any]:
+    return {k: v for k, v in vars(cfg).items() if k != "tuning"}
+
+
+def default_config(root: Path | None = None) -> Config:
+    return Config(**copy.deepcopy(package_defaults()["config"]), tuning=load_tuning(root))
+
 
 def _tomlval(value: Any) -> str:
     if isinstance(value, bool): return "true" if value else "false"
@@ -332,7 +298,7 @@ def dump_config(cfg: Config) -> str:
         "#   agy:      \"auto\", \"gemini-2.5-pro\", etc.\n"
         "#\n"
         "# 役割別の host/model/effort (roles。models と同じ語彙。未指定の項目は models/hosts の設定に従う):\n"
-        "#   roles = {judge = {host = \"agy\", model = \"gemini-2.5-pro\", effort = \"high\"}, coder = {host = \"claude\", model = \"sonnet\"}}\n"
+        "#   roles = {reviewer = {host = \"agy\", model = \"gemini-2.5-pro\", effort = \"high\"}, coder = {host = \"claude\", model = \"sonnet\"}}\n"
         "#   ホスト別・複数指定: coder = {host = \"claude\", claude = [{model = \"haiku\", effort = [\"low\", \"middle\"]}, {model = \"sonnet\"}], codex = {model = \"gpt-5-codex\", effort = \"medium\"}}\n"
         "#     (リストは先頭から順に候補化。2つ以上なら UNAVAILABLE/TIMEOUT/RATE_LIMIT で次の候補へ fallback。middle は medium)\n"
         "#   優先順位: ノード > タスク defaults.roles > config roles > タスク defaults > config models\n"
@@ -364,13 +330,9 @@ def dump_config(cfg: Config) -> str:
         "#   alter_analyzer = {opencode = {model = \"opencode/glm-5.3-flash-free\"}}  # ホスト別の分析モデル。未指定はセッションのホストを使用\n"
         "#   alter_analysis_timeout_seconds = 600  # 1回あたりの制限時間 (秒, > 0)\n"
         "#\n"
-        "# 計画・タスクスキーマの文字数・項目数上限 (plan_schema, 未指定の項目は既定値を使用):\n"
-        "#   plan_schema = {max_goal_chars = 6000, max_instructions_chars = 65536, max_instructions_file_chars = 512, max_note_chars = 400, max_note_items = 6, max_step_items = 10, max_agent_chars = 128, max_mcp_items = 8, max_mcp_chars = 64, max_context_files = 24, max_node_id_chars = 64, max_prompt_chars = 200}\n"
-        "#\n"
-        "# セッションチェックポイント・再開プロンプトの文字数・項目数上限 (session_schema, 未指定の項目は既定値を使用):\n"
-        "#   session_schema = {max_goal_chars = 800, max_item_chars = 350, max_notes = 8, max_prompt_chars = 1600}\n"
+        "# 細かいパラメーターは .ego/defaults.toml の [tuning] で上書き\n"
     )
-    return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in vars(cfg).items()) + "\n"
+    return header + "\n".join(f"{k} = {_tomlval(v)}" for k, v in _owned(cfg).items()) + "\n"
 
 V2_SECTIONS = {"runtime", "sdk", "authoring", "evaluation", "evolution"}
 HOST_ALIASES = {"antigravity": "agy"}
@@ -416,13 +378,15 @@ def load_config(root: Path) -> Config:
         if legacy.exists():
             path = legacy
         else:
-            return Config()
+            return default_config(root)
     try: raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc: raise EgoError("INVALID_CONFIG", str(exc), 2) from exc
     data = _normalize_loaded_data(raw)
-    unknown = set(data) - set(vars(Config()))
+    for key in ("plan_schema", "session_schema"):
+        if key in data: raise EgoError("INVALID_CONFIG", f"{key} moved to .ego/defaults.toml [tuning.{key}]", 2)
+    unknown = set(data) - ({f.name for f in fields(Config)} - {"tuning"})
     if unknown: raise EgoError("INVALID_CONFIG", f"Unknown keys: {sorted(unknown)}", 2)
-    cfg = Config(**data)
+    cfg = Config(**{**package_defaults()["config"], **data}, tuning=load_tuning(root))
     cfg.validate()
     return cfg
 

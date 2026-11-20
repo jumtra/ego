@@ -1,6 +1,7 @@
+from dataclasses import replace
 from pathlib import Path
 import pytest
-from ego.domain.config import Config
+from ego.domain.config import default_config
 from ego.usecases.install import apply_install
 
 @pytest.fixture(autouse=True)
@@ -19,5 +20,5 @@ def _isolated_ego_home(tmp_path_factory, monkeypatch):
 def project(tmp_path):
     root=tmp_path/"project"
     root.mkdir()
-    apply_install(root,Config(clear_suggest_tokens=0,auto_resume=False,usage_switch_percent=0,knowledge="file"))  # no hooks unless a test asks for them
+    apply_install(root,replace(default_config(), clear_suggest_tokens=0,auto_resume=False,usage_switch_percent=0,knowledge="file"))  # no hooks unless a test asks for them
     return root

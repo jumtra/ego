@@ -1,14 +1,38 @@
+from dataclasses import replace
 """Tests for task schema definition, mechanical character validation, and planner prompt schema."""
 import pytest
 from ego.domain.task_schema import (
-    MAX_NOTE_CHARS,
-    MAX_STEP_ITEMS,
-    MAX_NOTE_ITEMS,
+    DEFAULT_PLAN_SCHEMA_LIMITS,
     validate_task_schema,
     get_plan_prompt_schema,
 )
+from ego.domain.config import default_config
 from ego.shared.util import EgoError
 from ego.usecases.work import validate_task
+
+
+def test_renamed_and_removed_node_fields_are_rejected():
+    # Arrange
+    base = {"id": "a", "kind": "agent", "prompt": "p", "write_allowlist": ["src/a.py"]}
+
+    # Act & Assert
+    with pytest.raises(EgoError, match="renamed to 'reviewer'"):
+        validate_task({"nodes": [{**base, "role": "judge"}]})
+    with pytest.raises(EgoError, match="max_rounds"):
+        validate_task({"nodes": [{**base, "max_retries": 1}]})
+
+
+def test_values_above_config_caps_are_rejected():
+    # Arrange
+    caps = default_config()
+    base = {"id": "a", "kind": "agent", "prompt": "p", "write_allowlist": ["src/a.py"]}
+
+    # Act & Assert
+    for key in ("max_attempts", "max_rounds", "max_turns"):
+        with pytest.raises(EgoError, match=f"exceeds config {key}"):
+            validate_task({"nodes": [{**base, key: getattr(caps, key) + 1}]}, caps=caps)
+    with pytest.raises(EgoError, match="exceeds config max_replans"):
+        validate_task({"nodes": [base], "max_replans": caps.max_replans + 1}, caps=caps)
 
 
 def test_valid_task_passes_schema_validation():
@@ -45,7 +69,7 @@ def test_valid_task_passes_schema_validation():
 
 def test_intent_exceeding_max_chars_is_detected_mechanically():
     # Arrange
-    too_long_intent = "a" * (MAX_NOTE_CHARS + 1)
+    too_long_intent = "a" * (DEFAULT_PLAN_SCHEMA_LIMITS.max_note_chars + 1)
     spec = {
         "nodes": [
             {
@@ -68,7 +92,7 @@ def test_intent_exceeding_max_chars_is_detected_mechanically():
 
 def test_requirement_field_exceeding_max_chars_is_detected_mechanically():
     # Arrange
-    too_long_text = "x" * (MAX_NOTE_CHARS + 1)
+    too_long_text = "x" * (DEFAULT_PLAN_SCHEMA_LIMITS.max_note_chars + 1)
     spec = {
         "nodes": [
             {
@@ -91,7 +115,7 @@ def test_requirement_field_exceeding_max_chars_is_detected_mechanically():
 
 def test_step_item_exceeding_max_chars_is_detected_mechanically():
     # Arrange
-    too_long_step = "s" * (MAX_NOTE_CHARS + 1)
+    too_long_step = "s" * (DEFAULT_PLAN_SCHEMA_LIMITS.max_note_chars + 1)
     spec = {
         "nodes": [
             {
@@ -114,7 +138,7 @@ def test_step_item_exceeding_max_chars_is_detected_mechanically():
 
 def test_steps_exceeding_max_items_is_detected_mechanically():
     # Arrange
-    too_many_steps = [f"Step {i}" for i in range(MAX_STEP_ITEMS + 1)]
+    too_many_steps = [f"Step {i}" for i in range(DEFAULT_PLAN_SCHEMA_LIMITS.max_step_items + 1)]
     spec = {
         "nodes": [
             {
@@ -132,7 +156,7 @@ def test_steps_exceeding_max_items_is_detected_mechanically():
         validate_task(spec)
 
     assert exc_info.value.code == "INVALID_TASK"
-    assert f"exceeds max items of {MAX_STEP_ITEMS}" in str(exc_info.value)
+    assert f"exceeds max items of {DEFAULT_PLAN_SCHEMA_LIMITS.max_step_items}" in str(exc_info.value)
 
 
 def test_plan_prompt_schema_contains_required_fields_and_limits():
@@ -146,9 +170,9 @@ def test_plan_prompt_schema_contains_required_fields_and_limits():
     intent_schema = node_props["intent"]["anyOf"][0]
     steps_schema = node_props["steps"]["anyOf"][0]
     done_when_schema = node_props["done_when"]["anyOf"][0]
-    assert intent_schema["maxLength"] == MAX_NOTE_CHARS
-    assert steps_schema["maxItems"] == MAX_STEP_ITEMS
-    assert done_when_schema["maxItems"] == MAX_NOTE_ITEMS
+    assert intent_schema["maxLength"] == DEFAULT_PLAN_SCHEMA_LIMITS.max_note_chars
+    assert steps_schema["maxItems"] == DEFAULT_PLAN_SCHEMA_LIMITS.max_step_items
+    assert done_when_schema["maxItems"] == DEFAULT_PLAN_SCHEMA_LIMITS.max_note_items
 
 
 def test_checkpoint_schema_validation_detects_invalid_fields():
@@ -215,11 +239,11 @@ def test_save_checkpoint_validates_against_checkpoint_schema(tmp_path):
 
 def test_alter_plan_spec_validates_prompt_length_and_structure():
     # Arrange
-    from ego.domain.task_schema import MAX_PROMPT_CHARS, validate_alter_plan_spec
+    from ego.domain.task_schema import validate_alter_plan_spec
     oversized_spec = {
         "slug": "demo",
         "goal": "g",
-        "nodes": [{"node_id": "impl", "prompt": "p" * (MAX_PROMPT_CHARS + 1)}],
+        "nodes": [{"node_id": "impl", "prompt": "p" * (DEFAULT_PLAN_SCHEMA_LIMITS.max_prompt_chars + 1)}],
     }
     empty_nodes_spec = {"slug": "demo", "goal": "g", "nodes": []}
 
@@ -227,7 +251,7 @@ def test_alter_plan_spec_validates_prompt_length_and_structure():
     with pytest.raises(EgoError) as exc_len:
         validate_alter_plan_spec(oversized_spec)
     assert exc_len.value.code == "INVALID_TASK"
-    assert str(MAX_PROMPT_CHARS) in str(exc_len.value)
+    assert str(DEFAULT_PLAN_SCHEMA_LIMITS.max_prompt_chars) in str(exc_len.value)
 
     with pytest.raises(EgoError) as exc_empty:
         validate_alter_plan_spec(empty_nodes_spec)
@@ -236,19 +260,13 @@ def test_alter_plan_spec_validates_prompt_length_and_structure():
 
 def test_config_pydantic_schema_rejects_out_of_range_and_wrong_types():
     # Arrange
-    from ego.domain.config import Config
+    from ego.domain.config import default_config
 
     # Act & Assert
     for bad_cfg in (
-        Config(max_turns=201),
-        Config(clear_suggest_tokens=500),
-        Config(cleanup_worktree="yes"),
-        Config(plan_schema={"unknown_limit": 10}),
-        Config(plan_schema={"max_note_chars": 0}),
-        Config(plan_schema={"max_note_chars": True}),
-        Config(session_schema={"unknown_limit": 10}),
-        Config(session_schema={"max_item_chars": 0}),
-        Config(session_schema={"max_prompt_chars": True}),
+        replace(default_config(), max_turns=201),
+        replace(default_config(), clear_suggest_tokens=500),
+        replace(default_config(), cleanup_worktree="yes"),
     ):
         with pytest.raises(EgoError) as exc_info:
             bad_cfg.validate()
@@ -257,11 +275,11 @@ def test_config_pydantic_schema_rejects_out_of_range_and_wrong_types():
 
 def test_plan_schema_limits_from_config_override_validation_and_prompt_schema(tmp_path):
     # Arrange
-    from ego.domain.config import Config, load_config, save_config
+    from ego.domain.config import load_config
     from ego.usecases.planner import plan_work
 
     (tmp_path / ".ego").mkdir()
-    save_config(tmp_path, Config(plan_schema={"max_note_chars": 600, "max_step_items": 2, "max_goal_chars": 20}))
+    (tmp_path / ".ego" / "defaults.toml").write_text("[tuning.plan_schema]\nmax_note_chars = 600\nmax_step_items = 2\nmax_goal_chars = 20\n", encoding="utf-8")
     cfg = load_config(tmp_path)
     limits = cfg.plan_schema_limits()
 

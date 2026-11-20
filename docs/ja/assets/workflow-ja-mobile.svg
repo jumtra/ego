@@ -55,6 +55,6 @@
 <text x="60" y="1154" font-size="24" fill="#f8fafc" font-weight="700">計画してから、安全に進める。</text>
 <text x="44" y="1188" font-size="15" fill="#cbd5e1" font-weight="400">AI CLIで /work-plan → ノード計画</text>
 <text x="44" y="1210" font-size="15" fill="#cbd5e1" font-weight="400">→ 承認して管理実行</text>
-<text x="44" y="1238" font-size="13" fill="#7dd3fc" font-weight="400">または ego work loop · 回数制限・取り消し可</text>
+<text x="44" y="1238" font-size="13" fill="#7dd3fc" font-weight="400">再試行・レビュー・再計画は回数制限つき・取り消し可</text>
 <text x="24" y="1298" font-size="12" fill="#9cb1ca" font-weight="400">Python以外のプロジェクトも対応 · ローカルメモリ · コード検索</text>
 </g></svg>

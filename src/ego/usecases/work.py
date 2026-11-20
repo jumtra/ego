@@ -9,7 +9,8 @@ import tempfile
 import threading
 import time
 import uuid
-from ..domain.config import load_config
+from ..domain.config import Config, load_config
+from ..domain.defaults import package_defaults
 from ..domain.policy import check_write, check_role_write
 from ..adapters.runner import run_agent, run_checked_command
 from .worker import run_worker
@@ -21,11 +22,27 @@ from ..domain.task_routing import validate_task_context, resolve_routes, build_t
 from ..domain.task_schema import PlanSchemaLimits, validate_task_schema
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 from ..shared.util import clip_output
-from ..domain.judge import parse_verdict, format_findings
-from ..domain.usage import TOKEN_KEYS, tokens_of, summary_line
+from ..domain.review import parse_verdict, format_findings
+from ..domain.usage import TOKEN_KEYS, billable_tokens, tokens_of, summary_line
 
 # Serializes copies out of and writes into a run's staging tree across parallel node threads.
 _STAGING_LOCK=threading.Lock()
+
+class TokenBudget:
+    """Run-wide billable token cap, shared by parallel node threads."""
+    def __init__(self,limit:int,spent:int=0):
+        self.limit,self.spent=limit,spent
+        self.lock=threading.Lock()
+
+    def charge(self,usage)->None:
+        count=billable_tokens(usage)
+        with self.lock:self.spent+=count
+
+    def remaining(self)->int:
+        with self.lock:return self.limit-self.spent
+
+    def exhausted(self)->bool:
+        return self.remaining()<=0
 
 class Progress:
     """Append-only per-run event log (`progress.jsonl`), optionally echoed to stderr.
@@ -53,11 +70,11 @@ class Progress:
             except Exception: pass
 
 
-def _brief_findings(findings)->list[str]:
-    return [clip_output(json.dumps(f,ensure_ascii=False) if not isinstance(f,str) else f,300) for f in (findings or [])[:5]]
+def _brief_findings(findings,limit:int)->list[str]:
+    return [clip_output(json.dumps(f,ensure_ascii=False) if not isinstance(f,str) else f,limit) for f in (findings or [])[:5]]
 
 
-def validate_task(spec: dict, *, limits: PlanSchemaLimits | None = None) -> list[dict]:
+def validate_task(spec: dict, *, limits: PlanSchemaLimits | None = None, caps: Config | None = None) -> list[dict]:
     validate_task_schema(spec, limits=limits)
     nodes=spec["nodes"]
     amap={n["id"]:n for n in nodes}
@@ -73,13 +90,29 @@ def validate_task(spec: dict, *, limits: PlanSchemaLimits | None = None) -> list
         temp.remove(nid);done.add(nid)
     for nid in amap:visit(nid)
     validate_task_context(spec, nodes, validated=True, limits=limits)
+    if caps is not None:
+        for n in nodes:
+            for key in ("max_attempts","max_rounds","max_turns"):
+                if n.get(key) is not None and n[key]>getattr(caps,key):
+                    raise EgoError("INVALID_TASK", f"{key} of {n['id']} exceeds config {key}={getattr(caps,key)}", 2)
+        if spec.get("max_replans") is not None and spec["max_replans"]>caps.max_replans:
+            raise EgoError("INVALID_TASK", f"max_replans exceeds config max_replans={caps.max_replans}", 2)
     for n in nodes:
-        if n.get("role")!="judge":continue
+        if n.get("role")!="reviewer":
+            if n.get("on_exhausted") is not None:raise EgoError("INVALID_TASK", f"on_exhausted of {n['id']} is only allowed on reviewer nodes", 2)
+            continue
         target=n.get("reviews")
         if target not in _ancestors(amap,n["id"]) or amap[target].get("role")!="coder" or amap[target].get("kind","agent") in ("code","gate"):
-            raise EgoError("INVALID_TASK", f"judge {n['id']} needs reviews: a coder node it depends on", 2)
+            raise EgoError("INVALID_TASK", f"reviewer {n['id']} needs reviews: a coder node it depends on", 2)
         if not any(amap[d].get("kind","agent") in ("gate","code") for d in (n.get("depends_on") or [])):
-            raise EgoError("INVALID_TASK", f"judge {n['id']} must depend on a gate or code node", 2)
+            raise EgoError("INVALID_TASK", f"reviewer {n['id']} must depend on a gate or code node", 2)
+        if n.get("on_exhausted")=="replan" and not spec.get("max_replans"):
+            raise EgoError("INVALID_TASK", f"on_exhausted replan of {n['id']} needs max_replans >= 1", 2)
+    reviewers=[n for n in nodes if n.get("role")=="reviewer"]
+    for i,a in enumerate(reviewers):
+        for b in reviewers[i+1:]:
+            if _between(amap,a["reviews"],a["id"]) & _between(amap,b["reviews"],b["id"]):
+                raise EgoError("INVALID_TASK", f"loops of {a['id']} and {b['id']} overlap", 2)
     return nodes
 
 
@@ -121,10 +154,22 @@ def _carry_verified(nodes:list[dict], fingerprints:dict[str,str], seed_record:di
             and status.get(n["id"])=="PASSED" and before.get(n["id"])==fingerprints[n["id"]]]
 
 
-def _between(amap:dict, target:str, judge:str)->set:
-    """Nodes to rerun after a rejection: the reviewed coder, everything downstream of it that the judge waits on, and the judge."""
-    above=_ancestors(amap,judge)
-    return {target,judge}|{x for x in above if target in _ancestors(amap,x)}
+def _between(amap:dict, target:str, reviewer:str)->set:
+    """Nodes to rerun after a rejection: the reviewed coder, everything downstream of it that the reviewer waits on, and the reviewer."""
+    above=_ancestors(amap,reviewer)
+    return {target,reviewer}|{x for x in above if target in _ancestors(amap,x)}
+
+
+def _loop_of(amap:dict, nid:str)->dict|None:
+    """The reviewer whose loop contains nid: the reviewer itself or a node between its coder and it."""
+    for r in amap.values():
+        if r.get("role")=="reviewer" and (nid==r["id"] or nid in _between(amap,r["reviews"],r["id"])):return r
+    return None
+
+
+def _failure_text(data:dict)->str:
+    last=(data.get("attempts") or [{}])[-1]
+    return str(last.get("feedback") or last.get("execution",{}).get("stderr") or data.get("output") or "")
 
 
 def _changed(before:dict[str,str],after:dict[str,str])->list[str]:
@@ -140,7 +185,7 @@ def _effective_status(root:Path, record:dict)->str:
 
 def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
               autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
-              budget_usd: float|None=None, progress:Progress|None=None, project_root:Path,
+              token_budget:TokenBudget|None=None, progress:Progress|None=None, project_root:Path,
               alter_rules:list[str]|None=None, use_worktree: bool = False, run_id: str = "run")->dict:
     """A task node sees a private copy; a same-host retry continues from the previous attempt's allowed edits, fallback never reuses failed edits.
 
@@ -154,8 +199,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     else:
         strategy,routes,fallback_on=resolve_routes(node,spec,default_host,default_models=cfg.models,default_roles=cfg.roles)
     attempts=[]
-    max_attempts=min(int(node.get("max_attempts",cfg.max_attempts)),cfg.max_attempts)
-    if node.get("role")=="judge":max_attempts=1  # one audit per run; the DAG decides about retries
+    max_attempts=int(node.get("max_attempts",cfg.max_attempts))
     verdict_info={}
     outputs=[]
     def attempt_one(chosen_host:str, chosen_model:str|None, chosen_effort:str|None, iteration:int, carry:dict|None=None) -> dict:
@@ -188,7 +232,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 if kind in ("code","gate"):
                     r=run_checked_command(node.get("argv") or node["checks"][0],work,timeout=timeout,allow=cfg.allow_commands)
                     # A failing command's own output is the evidence; without it a retry or replan is blind.
-                    if r.status!="PASS":feedback=clip_output((r.output+"\n"+r.stderr).strip() or f"exit {r.exit_code}",4000)
+                    if r.status!="PASS":feedback=clip_output((r.output+"\n"+r.stderr).strip() or f"exit {r.exit_code}",cfg.tuning.max_feedback_chars)
                 else:
                     if chosen_host!="mock" and not trust_cli:
                         raise EgoError("UNTRUSTED_AGENT_EXEC", "Real CLI agents require --trust-cli",3)
@@ -198,7 +242,8 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                         node_query = " ".join(x for x in (str(node.get("intent") or "").strip(), str(node.get("prompt") or "").strip()) if x)
                         alter_ctx = alter_prompt_context(project_root, node_query)
                     prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff,
-                                             project_root=project_root,alter_rules=alter_rules,alter_context=alter_ctx)
+                                             project_root=project_root,alter_rules=alter_rules,alter_context=alter_ctx,
+                                             feedback_limit=cfg.tuning.max_feedback_chars,handoff_limit=cfg.tuning.max_handoff_chars)
                     mcp_servers=list(node.get("mcp") or [])
                     if cfg.knowledge=="alter" and "alter" not in mcp_servers:
                         mcp_servers.append("alter")
@@ -209,25 +254,26 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                                          segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
                                          on_event=lambda **f:progress.emit("worker_segment",node=node["id"],attempt=iteration,**f),
                                          model=chosen_model,effort=chosen_effort,
-                                         read_only=kind=="splitter" or node.get("role")=="judge",autonomy=autonomy,isolated=isolated,
-                                         max_turns=max(1,min(int(node.get("max_turns",cfg.max_turns)),200)),
-                                         lean=cfg.worker_context=="lean",mcp_servers=mcp_servers or None,max_budget_usd=budget_usd)
+                                         read_only=kind=="splitter" or node.get("role")=="reviewer",autonomy=autonomy,isolated=isolated,
+                                         max_turns=int(node.get("max_turns",cfg.max_turns)),
+                                         lean=cfg.worker_context=="lean",mcp_servers=mcp_servers or None,token_budget=token_budget)
                         except EgoError as exc:
                             if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
                                 raise
                             from ..adapters.runner import RunResult
                             r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model,effort=chosen_effort)
+                if token_budget is not None:token_budget.charge(r.usage)
                 checks=[]
                 if r.status=="PASS":
                     for argv in node.get("checks",[]):
-                        cr=run_checked_command(argv,work,timeout=min(timeout,120),allow=cfg.allow_commands)
+                        cr=run_checked_command(argv,work,timeout=timeout,allow=cfg.allow_commands)
                         checks.append({**cr.as_dict(),"argv":argv})
-                        if cr.status!="PASS":feedback=clip_output(cr.output+"\n"+cr.stderr,4000);break
+                        if cr.status!="PASS":feedback=clip_output(cr.output+"\n"+cr.stderr,cfg.tuning.max_feedback_chars);break
                 ok=(r.status=="PASS" and all(c["status"]=="PASS" for c in checks))
-                if ok and node.get("role")=="judge":
+                if ok and node.get("role")=="reviewer":
                     verdict_info.update(parse_verdict(r.output))
-                    if verdict_info["verdict"]=="INVALID":ok=False;feedback="Judge output has no VERDICT line"
-                    elif verdict_info["verdict"]=="REJECT":ok=False;feedback=format_findings(verdict_info["findings"])
+                    if verdict_info["verdict"]=="INVALID":ok=False;feedback="Reviewer output has no VERDICT line"
+                    elif verdict_info["verdict"]=="REJECT":ok=False;feedback=format_findings(verdict_info["findings"],cfg.tuning.max_feedback_chars)
                 changed=_changed(before,snapshot(work))
                 writes_ok=True
                 try:
@@ -241,8 +287,8 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                         "effort":chosen_effort or "auto",
                         "status":"PASS" if ok else "FAIL",
                         # The record keeps bounded evidence, not up to 1 MB of raw output per attempt.
-                        "execution":{**r.as_dict(),"output":clip_output(r.output,20000),"stderr":clip_output(r.stderr,8000)},
-                        "checks":[{**c,"output":clip_output(c.get("output",""),8000),"stderr":clip_output(c.get("stderr",""),8000)} for c in checks],
+                        "execution":{**r.as_dict(),"output":clip_output(r.output,cfg.tuning.max_record_chars),"stderr":clip_output(r.stderr,cfg.tuning.max_record_chars)},
+                        "checks":[{**c,"output":clip_output(c.get("output",""),cfg.tuning.max_record_chars),"stderr":clip_output(c.get("stderr",""),cfg.tuning.max_record_chars)} for c in checks],
                         "changed":changed,"feedback":feedback}
                 edits={}
                 if writes_ok:
@@ -254,7 +300,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                         keep_branch=git_commit_paths(work,changed,f"ego node {node['id']} attempt {iteration}")
                 progress.emit("attempt_finished",node=node["id"],attempt=iteration,host=chosen_host,model=record["model"],
                               status=record["status"],checks=[{"argv":c["argv"],"status":c["status"]} for c in checks],
-                              feedback=clip_output(feedback or "",800),changed=changed[:20],
+                              feedback=clip_output(feedback or "",cfg.tuning.max_summary_chars),changed=changed[:20],
                               tokens=tokens_of(r.usage or {}),segments=getattr(r,"segments",1),rotations=getattr(r,"rotations",0))
                 return {"ok":ok,"record":record,"edits":edits,"output":r.output,"execution_status":r.status,
                         "branch":node_branch if keep_branch else None}
@@ -278,7 +324,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
 
     route_pos=0
     success=False;edits={};last_output="";winning_branch=None;carry={}
+    budget_exhausted=False
     for iteration in range(1,max_attempts+len(routes)+1):
+        if token_budget is not None and token_budget.exhausted():
+            budget_exhausted=True;break
         chosen=routes[route_pos] if routes else None
         r=attempt_one(chosen.host if chosen else "local",chosen.model if chosen else None,chosen.effort if chosen else None,iteration,carry)
         attempts.append(r["record"])
@@ -290,6 +339,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             carry={}
             feedback="Previous host was unavailable; start from the original task state."
             continue
+        if node.get("role")=="reviewer":
+            # A reviewer's verdict is final; only an unavailable or timed-out host is worth another attempt.
+            if r["execution_status"] not in ("UNAVAILABLE","TIMEOUT","RATE_LIMIT"):break
+            continue
         # A task evaluation failure must not silently switch vendors.
         if iteration>=max_attempts+route_pos:
             break
@@ -298,9 +351,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
         carry=r["edits"] if kind not in ("code","gate") else {}
         feedback=r["record"].get("feedback") or r["record"]["execution"].get("stderr") or "Verification failed"
     out={"id":node["id"],"status":"PASSED" if success else "FAILED", "attempts":attempts,
-         "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":clip_output(last_output,20000),
+         "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":clip_output(last_output,cfg.tuning.max_record_chars),
          "branch":winning_branch}
     if verdict_info:out["verdict"]=verdict_info["verdict"];out["findings"]=verdict_info["findings"]
+    if budget_exhausted:out["budget_exhausted"]=True
     return out
 
 
@@ -337,6 +391,11 @@ def usage_summary(record:dict)->dict:
     return total
 
 
+def _billable_spent(record:dict)->int:
+    return sum(billable_tokens((attempt.get("execution") or {}).get("usage"))
+               for data in record.get("results",{}).values() for attempt in data.get("attempts",[]))
+
+
 def next_action(result:dict, task_file:str="<task-file>")->str|None:
     if not result.get("run_id"):return None
     task_ref=(task_file if task_file!="<task-file>" else None) or result.get("task_file") or "<task-file>"
@@ -347,18 +406,19 @@ def next_action(result:dict, task_file:str="<task-file>")->str|None:
             "--trust-cli --apply --approve")
 
 
-def compact_result(result:dict, *, max_files:int=40, task_file:str="<task-file>")->dict:
+def compact_result(result:dict, *, summary_limit:int|None=None, max_files:int=40, task_file:str="<task-file>")->dict:
     """What a calling agent needs to decide its next step, without the record.
 
     The full record (per-file base snapshot, every attempt and raw worker
     output) stays on disk; printing it would put it in the caller's context.
     """
+    if summary_limit is None:summary_limit=package_defaults()["tuning"]["max_summary_chars"]
     failures=[]
     for nid,data in result.get("results",{}).items():
         if result.get("node_status",{}).get(nid)=="PASSED":continue
         last=(data.get("attempts") or [{}])[-1]
         text=last.get("feedback") or last.get("execution",{}).get("stderr") or data.get("output") or ""
-        failures.append({"node":nid,"attempts":len(data.get("attempts",[])),"feedback":clip_output(str(text),800)})
+        failures.append({"node":nid,"attempts":len(data.get("attempts",[])),"feedback":clip_output(str(text),summary_limit)})
     changed=result.get("changed_files",[])
     out={k:result[k] for k in ("run_id","final_status","applied","node_status","message","checkpoint_path","usage","progress") if k in result}
     nodes={}
@@ -366,7 +426,7 @@ def compact_result(result:dict, *, max_files:int=40, task_file:str="<task-file>"
         last=(data.get("attempts") or [{}])[-1]
         entry={"status":data.get("status"),"attempts":len(data.get("attempts",[])),
                "checks":[{"argv":c.get("argv"),"status":c.get("status")} for c in last.get("checks",[])]}
-        if data.get("verdict"):entry["verdict"]=data["verdict"];entry["findings"]=_brief_findings(data.get("findings"))
+        if data.get("verdict"):entry["verdict"]=data["verdict"];entry["findings"]=_brief_findings(data.get("findings"),summary_limit)
         nodes[nid]=entry
     if nodes:out["nodes"]=nodes
     action=next_action(result,task_file)
@@ -384,7 +444,7 @@ def compact_result(result:dict, *, max_files:int=40, task_file:str="<task-file>"
 def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:bool=False,approve:bool=False,
             trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False,
             worktree:bool|None=None,cleanup_worktree:bool|None=None,seed_from:str|None=None,
-            extra_allow:list[str]|None=None,budget_usd:float|None=None,planner_usage:dict|None=None,
+            extra_allow:list[str]|None=None,token_budget:TokenBudget|None=None,planner_usage:dict|None=None,
             task_file:str|None=None)->dict:
     root=root.resolve();cfg=load_config(root)
     from ..domain.retention import prune_state
@@ -403,7 +463,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         if not seed_dir.is_dir() or not seed_record:raise EgoError("SEED_MISSING",f"No staging for run {seed_from}",3)
         use_worktree = use_worktree and bool(seed_record.get("worktree")) and git_is_repo(seed_dir)
     should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
-    nodes=validate_task(spec, limits=cfg.plan_schema_limits())
+    nodes=validate_task(spec, limits=cfg.plan_schema_limits(), caps=cfg)
     if apply and not approve:raise EgoError("APPROVAL_REQUIRED", "--apply requires --approve")
     if autonomy=="bypass" and not isolated:
         raise EgoError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)
@@ -506,20 +566,26 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             # A failed node reruns with the evidence of its last failure instead of repeating the same attempt blind.
             for nid,data in record["results"].items():
                 if nid not in amap or record["node_status"].get(nid)=="PASSED":continue
-                last=(data.get("attempts") or [{}])[-1]
-                text=last.get("feedback") or last.get("execution",{}).get("stderr") or data.get("output")
+                text=_failure_text(data)
                 if not text:continue
                 node=amap[nid]
-                if node.get("role")=="judge":
+                loop=_loop_of(amap,nid)
+                if node.get("role")=="reviewer":
                     if data.get("verdict")!="REJECT":continue
-                    # Rerunning the judge alone would reject the same code: send the reviewed coder back with the findings.
-                    feedbacks[node["reviews"]]=clip_output(str(text),4000)
+                    # Rerunning the reviewer alone would reject the same code: send the reviewed coder back with the findings.
+                    feedbacks[node["reviews"]]=clip_output(str(text),cfg.tuning.max_feedback_chars)
                     for rid in _between(amap,node["reviews"],nid):record["node_status"].pop(rid,None)
+                elif loop is not None and nid!=loop["reviews"]:
+                    feedbacks[loop["reviews"]]=clip_output(str(text),cfg.tuning.max_feedback_chars)
+                    for rid in _between(amap,loop["reviews"],loop["id"]):record["node_status"].pop(rid,None)
                 else:
-                    feedbacks[nid]=clip_output(str(text),4000)
+                    feedbacks[nid]=clip_output(str(text),cfg.tuning.max_feedback_chars)
+        if token_budget is None:token_budget=TokenBudget(cfg.max_run_tokens,spent=_billable_spent(record))
         pending={n["id"]:n for n in nodes if record["node_status"].get(n["id"])!="PASSED"}
         failed=[]
-        retries=record.setdefault("judge_retries",{})
+        rounds=record.setdefault("rounds",{})
+        round_sig=record.setdefault("round_sig",{})
+        exhausted=record.setdefault("exhausted",{})
         # Prompt-only knowledge hint; record['spec'] stays the user's spec so resume comparisons are unchanged.
         prompt_spec=({**spec,'knowledge':cfg.knowledge} if 'knowledge' not in spec else spec)
         max_workers=max(1,cfg.max_parallel)
@@ -532,13 +598,8 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                 while pending or in_flight:
                     if (runroot/"cancel.flag").exists():
                         record["final_status"]="CANCELLED";break
-                    if time.monotonic()-start>cfg.timeout_seconds*len(nodes):
-                        record["final_status"]="TIMEOUT";break
-                    remaining_budget=None
-                    if budget_usd is not None:
-                        remaining_budget=budget_usd-usage_summary(record)["cost_usd"]
-                        if remaining_budget<=0:
-                            record["final_status"]="BUDGET_EXHAUSTED";break
+                    if token_budget.exhausted():
+                        record["final_status"]="BUDGET_EXHAUSTED";break
                     ready=[n for n in pending.values() if n["id"] not in running_ids and all(record["node_status"].get(dep)=="PASSED" for dep in n.get("depends_on",[]))]
                     if not ready and not in_flight:
                         record["final_status"]="FAILED" if failed else "BLOCKED_DEPENDENCY";break
@@ -554,7 +615,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                             nid=n["id"]
                             fut=pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),
                                             feedback=feedbacks.pop(nid,''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,
-                                            handoff=handoff,budget_usd=remaining_budget,progress=progress,project_root=root,
+                                            handoff=handoff,token_budget=token_budget,progress=progress,project_root=root,
                                             alter_rules=alter_rules,use_worktree=bool(record.get("worktree")),run_id=run_id)
                             in_flight[fut]=(nid,staging_seq)
                     done,_=wait(in_flight.keys(),return_when=FIRST_COMPLETED)
@@ -564,6 +625,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                         running_ids.discard(nid)
                         result=fut.result()
                         identifier=result["id"]
+                        if result.get("budget_exhausted"):record["final_status"]="BUDGET_EXHAUSTED"
                         if result["status"]=="PASSED":
                             branch=result.get("branch") if record.get("worktree") else None
                             if branch:
@@ -573,7 +635,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                                 if not merged:
                                     record["final_status"]="MERGE_CONFLICT";write_json(record_path,record)
                                     managed_checkpoint(root,record,state="BLOCKED",task_file=record.get("task_file"))
-                                    raise EgoError("MERGE_CONFLICT",f"Git merge conflict for {identifier}: {clip_output(merge_out,800)}")
+                                    raise EgoError("MERGE_CONFLICT",f"Git merge conflict for {identifier}: {clip_output(merge_out,cfg.tuning.max_summary_chars)}")
                                 staging_seq+=1
                             elif result["edits"]:
                                 for rel in result["edits"]:
@@ -595,23 +657,37 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                         record["results"][identifier]={k:v for k,v in result.items() if k!="edits"}
                         if result["status"]!="PASSED":failed.append(identifier)
                         pending.pop(identifier)
-                        # A rejection with evidence sends only the reviewed coder (and what the judge waits on) back.
-                        if result.get("verdict")=="REJECT" and identifier in failed and retries.get(identifier,0)<amap[identifier].get("max_retries",1):
-                            jnode=amap[identifier]
-                            failed.remove(identifier)
-                            retries[identifier]=retries.get(identifier,0)+1
-                            progress.emit("judge_retry",judge=identifier,reviews=jnode["reviews"],retry=retries[identifier])
-                            feedbacks[jnode["reviews"]]=format_findings(result["findings"])
-                            for rid in _between(amap,jnode["reviews"],identifier):
-                                record["node_status"].pop(rid,None)
-                                pending[rid]=amap[rid]
+                        # A rejection, or a gate/code failure inside a reviewer's loop, sends only the reviewed coder back.
+                        loop=_loop_of(amap,identifier)
+                        is_reject=identifier in failed and loop is not None and identifier==loop["id"] and result.get("verdict")=="REJECT"
+                        is_gate=identifier in failed and loop is not None and identifier not in (loop["id"],loop["reviews"])
+                        if is_reject or is_gate:
+                            coder=loop["reviews"]
+                            text=format_findings(result["findings"],cfg.tuning.max_feedback_chars) if is_reject else clip_output(_failure_text(result),cfg.tuning.max_feedback_chars)
+                            if rounds.get(loop["id"],0)<loop.get("max_rounds",cfg.max_rounds):
+                                # The staging tree after the coder's merge: a retry that leaves it and the feedback unchanged is a stall.
+                                sig=sha256(json_text({"files":snapshot(staging),"feedback":text[-400:]}))
+                                if round_sig.get(loop["id"])==sig:
+                                    exhausted[loop["id"]]="fail"
+                                    progress.emit("loop_stalled",reviewer=loop["id"])
+                                else:
+                                    round_sig[loop["id"]]=sig
+                                    failed.remove(identifier)
+                                    rounds[loop["id"]]=rounds.get(loop["id"],0)+1
+                                    progress.emit("review_round",reviewer=loop["id"],reviews=coder,round=rounds[loop["id"]],cause="reject" if is_reject else "gate")
+                                    feedbacks[coder]=text
+                                    for rid in _between(amap,coder,loop["id"]):
+                                        record["node_status"].pop(rid,None)
+                                        pending[rid]=amap[rid]
+                            else:
+                                exhausted[loop["id"]]=loop.get("on_exhausted") or "fail"
                         # Persist this node now: staging, record.json and the handoff checkpoint.
                         with _STAGING_LOCK:
                             record["changed_files"]=_changed(record["base_snapshot"],snapshot(staging))
                             record["usage"]=usage_summary(record)
                             write_json(record_path,record)
                             cp=managed_checkpoint(root,record,state="BLOCKED" if failed else "IN_PROGRESS",task_file=record.get("task_file"))
-                        extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"))} if result.get("verdict") else {}
+                        extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"),cfg.tuning.max_summary_chars)} if result.get("verdict") else {}
                         progress.emit("node_finished",node=identifier,status=result["status"],attempts=len(result["attempts"]),
                                       changed=sorted(result["edits"])[:20],checkpoint_revision=cp["revision"],**extra)
                     # A failure stops only its dependents: independent nodes still finish, so a
@@ -681,6 +757,7 @@ def _alter_reporter(root:Path,ref:dict,run_id:str,runroot:Path):
     """Build a progress callback that mirrors node results to the alter plan; alter outages never fail the run."""
     nodes:dict={}
     failures:dict={}
+    summary_limit=load_config(root).tuning.max_summary_chars
     client=None
     marker=runroot/"alter_sync.json"
     def callback(event:str,fields:dict)->None:
@@ -692,7 +769,7 @@ def _alter_reporter(root:Path,ref:dict,run_id:str,runroot:Path):
             failed=fields["status"]!="PASSED"
             nodes[node]={"status":fields["status"],"attempts":fields["attempts"],"failure":failures.get(node,"") if failed else ""}
         elif event=="attempt_finished" and fields.get("status")!="PASS":
-            failures[node]=clip_output(fields.get("feedback") or "",300)
+            failures[node]=clip_output(fields.get("feedback") or "",summary_limit)
         if event in ("run_started","node_started","node_finished","attempt_finished"):state="running"
         elif event=="run_finished":state="passed" if fields["final_status"]=="PASSED" else "failed"
         elif event=="run_error":state="failed"
@@ -724,7 +801,7 @@ def execute(root:Path, spec:dict, *, run_id:str|None=None, progress_stderr:bool=
         # A refused start (RUN_EXISTS, RUN_ACTIVE) must not write run_error into the log of the run that is live.
         if (runroot/"record.json").exists() and not (isinstance(exc,EgoError) and exc.code in ("RUN_EXISTS","RUN_ACTIVE")):
             code=exc.code if isinstance(exc,EgoError) else type(exc).__name__
-            progress.emit("run_error",run_id=run_id,code=code,message=clip_output(str(exc),400))
+            progress.emit("run_error",run_id=run_id,code=code,message=clip_output(str(exc),load_config(root.resolve()).tuning.max_summary_chars))
         raise
     progress.emit("run_finished",run_id=run_id,final_status=result["final_status"],applied=result.get("applied",False),
                   changed_files=len(result.get("changed_files",[])),message=result.get("message"))

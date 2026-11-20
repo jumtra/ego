@@ -138,7 +138,7 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
                   read_only: bool = True, max_turns: int = 4, use_stdin: bool = False,
                   autonomy: str = "auto", isolated: bool = False, lean: bool = False,
                   mcp_servers: list[str] | tuple[str, ...] | None = None, cwd: Path | None = None,
-                  max_budget_usd: float | None = None, resume_session: str | None = None,
+                  resume_session: str | None = None,
                   allowed_tools: list[str] | tuple[str, ...] | None = None,
                   project_root: Path | None = None) -> list[str]:
     cap=capability(host)
@@ -161,8 +161,6 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
                 selected = select_mcp_servers(cwd, mcp_servers, host="claude", project_root=project_root)
                 if selected:
                     argv += ["--mcp-config", json.dumps({"mcpServers": selected}, ensure_ascii=False)]
-        if max_budget_usd is not None and max_budget_usd > 0 and "--max-budget-usd" in info["flags"]:
-            argv += ["--max-budget-usd",f"{max_budget_usd:.2f}"]
         if model:
             require_flags(info,"--model")
             argv += ["--model",model]

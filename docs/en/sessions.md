@@ -38,7 +38,7 @@ ego session checkpoint --task-id bug-142 \
 - Stored at `.ego/memory/handoffs/<task-id>.json`. Only the latest revision per task is kept; no transcript or raw log is stored. Over-long input is truncated.
 - The command answers with `task_id`, `status`, `revision` and `path` only.
 - `ego session list` shows open checkpoints from every CLI (`--all` includes completed ones); `ego session status <task-id>` prints one.
-- Managed runs and goal loops save checkpoints automatically under their run or loop ID.
+- Managed runs save checkpoints automatically under their run ID.
 - Do not put credentials in a checkpoint. Redaction is best-effort.
 
 ## Clear and resume

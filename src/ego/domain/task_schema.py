@@ -6,20 +6,7 @@ from functools import lru_cache
 from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator, model_validator
 from ..shared.util import EgoError
-
-# Centralized character and item limits (Single Source of Truth)
-MAX_GOAL_CHARS = 6000
-MAX_INSTRUCTIONS_CHARS = 65536
-MAX_INSTRUCTIONS_FILE_CHARS = 512
-MAX_NOTE_CHARS = 400
-MAX_NOTE_ITEMS = 6
-MAX_STEP_ITEMS = 10
-MAX_AGENT_CHARS = 128
-MAX_MCP_ITEMS = 8
-MAX_MCP_CHARS = 64
-MAX_CONTEXT_FILES = 24
-MAX_NODE_ID_CHARS = 64
-MAX_PROMPT_CHARS = 200
+from .defaults import package_defaults
 
 REQUIREMENT_KEYS = ["who", "what", "when", "where", "why", "how"]
 
@@ -27,21 +14,21 @@ REQUIREMENT_KEYS = ["who", "what", "when", "where", "why", "how"]
 @dataclass(frozen=True)
 class PlanSchemaLimits:
     """Configurable character and item limits for task and plan schemas."""
-    max_goal_chars: int = MAX_GOAL_CHARS
-    max_instructions_chars: int = MAX_INSTRUCTIONS_CHARS
-    max_instructions_file_chars: int = MAX_INSTRUCTIONS_FILE_CHARS
-    max_note_chars: int = MAX_NOTE_CHARS
-    max_note_items: int = MAX_NOTE_ITEMS
-    max_step_items: int = MAX_STEP_ITEMS
-    max_agent_chars: int = MAX_AGENT_CHARS
-    max_mcp_items: int = MAX_MCP_ITEMS
-    max_mcp_chars: int = MAX_MCP_CHARS
-    max_context_files: int = MAX_CONTEXT_FILES
-    max_node_id_chars: int = MAX_NODE_ID_CHARS
-    max_prompt_chars: int = MAX_PROMPT_CHARS
+    max_goal_chars: int
+    max_instructions_chars: int
+    max_instructions_file_chars: int
+    max_note_chars: int
+    max_note_items: int
+    max_step_items: int
+    max_agent_chars: int
+    max_mcp_items: int
+    max_mcp_chars: int
+    max_context_files: int
+    max_node_id_chars: int
+    max_prompt_chars: int
 
 
-DEFAULT_PLAN_SCHEMA_LIMITS = PlanSchemaLimits()
+DEFAULT_PLAN_SCHEMA_LIMITS = PlanSchemaLimits(**package_defaults()['tuning']['plan_schema'])
 
 
 @dataclass(frozen=True)
@@ -108,8 +95,8 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
             Field(description="Node type: 'agent' for AI worker, 'code' or 'gate' for deterministic commands (every code/gate node MUST include argv or checks)"),
         ] = "agent"
         role: Annotated[
-            Literal["coder", "tester", "judge"] | None,
-            Field(default=None, description="Optional role for agent nodes: 'coder', 'tester' (writes under tests/ only), or 'judge' (read-only review gate; omit unless the change is risky)"),
+            Literal["coder", "tester", "reviewer"] | None,
+            Field(default=None, description="Optional role for agent nodes: 'coder', 'tester' (writes under tests/ only), or 'reviewer' (read-only review gate; omit unless the change is risky)"),
         ] = None
         depends_on: Annotated[
             list[str] | None,
@@ -197,10 +184,22 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
         model: Annotated[str | dict[str, Any] | None, Field(default=None)] = None
         models: Annotated[dict[str, Any] | None, Field(default=None)] = None
         fallback_on: Annotated[list[Literal["UNAVAILABLE", "TIMEOUT", "RATE_LIMIT"]] | None, Field(default=None)] = None
-        reviews: Annotated[str | None, Field(default=None, description="For role='judge': coder node ID to review (judge must also depend on a gate or code node)")] = None
-        max_retries: Annotated[StrictInt | None, Field(default=None, ge=0, le=2)] = None
+        reviews: Annotated[str | None, Field(default=None, description="For role='reviewer': coder node ID to review (reviewer must also depend on a gate or code node)")] = None
+        max_rounds: Annotated[StrictInt | None, Field(default=None, ge=0)] = None
+        on_exhausted: Annotated[Literal["fail", "replan"] | None, Field(default=None, description="For role='reviewer': action when max_rounds is used up")] = None
         max_attempts: Annotated[StrictInt | None, Field(default=None, ge=1)] = None
+        max_turns: Annotated[StrictInt | None, Field(default=None, ge=1)] = None
         source: Annotated[dict[str, Any] | None, Field(default=None)] = None
+
+        @model_validator(mode="before")
+        @classmethod
+        def _reject_renamed_fields(cls, data: Any) -> Any:
+            if isinstance(data, dict):
+                if data.get("role") == "judge":
+                    raise ValueError("role 'judge' was renamed to 'reviewer'")
+                if "max_retries" in data:
+                    raise ValueError("max_retries was replaced by max_rounds")
+            return data
 
         @field_validator("agent")
         @classmethod
@@ -227,6 +226,7 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
         instructions_file: Annotated[str | None, Field(default=None, max_length=limits.max_instructions_file_chars)] = None
         defaults: Annotated[dict[str, Any] | None, Field(default=None, description="Task defaults for host/models")] = None
         source: Annotated[dict[str, Any] | None, Field(default=None)] = None
+        max_replans: Annotated[StrictInt | None, Field(default=None, ge=0)] = None
         nodes: Annotated[list[NodeSpec], Field(min_length=1, description="Non-empty list of DAG execution nodes")]
 
         @model_validator(mode="after")
@@ -239,11 +239,11 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
                     raise ValueError("Code/gate nodes need argv or checks")
                 if n.kind not in ("code", "gate") and n.prompt is None:
                     raise ValueError("Agent nodes need prompt")
-                if n.role == "judge" and n.write_allowlist:
-                    raise ValueError(f"judge {n.id} is read-only: no write_allowlist")
+                if n.role == "reviewer" and n.write_allowlist:
+                    raise ValueError(f"reviewer {n.id} is read-only: no write_allowlist")
                 if n.role == "tester" and any(not str(p).startswith("tests/") for p in (n.write_allowlist or [])):
                     raise ValueError(f"tester {n.id} may only write under tests/")
-                if n.kind not in ("gate", "splitter") and n.role != "judge" and not n.write_allowlist:
+                if n.kind not in ("gate", "splitter") and n.role != "reviewer" and not n.write_allowlist:
                     raise ValueError(f"write_allowlist required for {n.id}")
                 if n.kind not in ("code", "gate"):
                     allow = n.write_allowlist or []
@@ -314,7 +314,7 @@ class AlterPushNodeSpec(BaseModel):
 
     id: str
     kind: Literal["worker", "agent", "code", "gate", "splitter"] = "agent"
-    role: Literal["coder", "tester", "judge"] | None = None
+    role: Literal["coder", "tester", "reviewer"] | None = None
     prompt: str | None = None
     steps: list[str] | None = None
     write_allowlist: list[str] | None = None
@@ -322,12 +322,12 @@ class AlterPushNodeSpec(BaseModel):
     @model_validator(mode="after")
     def _validate_push_requirements(self) -> AlterPushNodeSpec:
         errors: list[str] = []
-        is_judge = self.role == "judge"
+        is_reviewer = self.role == "reviewer"
         if not str(self.prompt or "").strip():
             errors.append(f"{self.id}: prompt (title) is empty")
         if self.kind not in ("code", "gate") and not self.steps:
             errors.append(f"{self.id}: steps are empty")
-        if self.kind != "gate" and not is_judge and not self.write_allowlist:
+        if self.kind != "gate" and not is_reviewer and not self.write_allowlist:
             errors.append(f"{self.id}: write_allowlist (where) is empty")
         if errors:
             raise ValueError("; ".join(errors))
