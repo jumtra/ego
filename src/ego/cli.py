@@ -770,7 +770,7 @@ def build_parser()->argparse.ArgumentParser:
     r.add_argument("--evidence",action="append")
     r.add_argument("--status",choices=["IN_PROGRESS","VERIFIED","COMPLETED","BLOCKED"],default="IN_PROGRESS")
     r.add_argument("--kind",choices=["ongoing","plan_ready","plan_resume","completed"],default=None,
-                   help="Checkpoint profile: ongoing (in-progress work), plan_ready (plan finished), plan_resume (planning paused), completed")
+                   help="Checkpoint profile: ongoing (in-progress work), plan_ready (plan finished), plan_resume (planning paused), completed. Omitted: auto-detected (completed from status; plan_ready when the task JSON exists and no run has started; plan_resume when planning paused; else previous kind or ongoing)")
     r.add_argument("--host",choices=["claude","codex","opencode","agy"],help="CLI saving this checkpoint (default: detected from the environment)")
     r=s.add_parser("list",help="List saved checkpoints, newest first (open ones unless --all)");r.add_argument("--all",action="store_true")
     r=s.add_parser("status");r.add_argument("task_id")

@@ -1664,6 +1664,27 @@ def test_checkpoint_kind_changes_resume_prompt_priority_and_framing(tmp_path: Pa
     assert done_prompt.index("Done:") < done_prompt.index("Evidence:")
 
 
+def test_checkpoint_kind_inferred_from_task_file_and_runs(tmp_path: Path):
+    # Arrange: a task JSON without a run is a plan awaiting work
+    task_dir = tmp_path / ".ego" / "state" / "tasks"
+    task_dir.mkdir(parents=True)
+    (task_dir / "t1.json").write_text("{}", encoding="utf-8")
+
+    # Act & Assert: the run directory appearing flips plan_ready to ongoing
+    assert save_checkpoint(tmp_path, "t1", goal="g")["kind"] == "plan_ready"
+    (tmp_path / ".ego" / "state" / "runs" / "run-t1").mkdir(parents=True)
+    assert save_checkpoint(tmp_path, "t1", goal="g")["kind"] == "ongoing"
+
+    # Act & Assert: a BLOCKED plan without a task file resumes as plan_resume
+    save_checkpoint(tmp_path, "t2", goal="g", kind="plan_resume", status="BLOCKED", blockers=["b"])
+    assert save_checkpoint(tmp_path, "t2", goal="g", status="BLOCKED", blockers=["b"])["kind"] == "plan_resume"
+
+    # Act & Assert: an explicit kind wins over inference, and COMPLETED overrides the task file
+    (task_dir / "t3.json").write_text("{}", encoding="utf-8")
+    assert save_checkpoint(tmp_path, "t3", goal="g", kind="ongoing")["kind"] == "ongoing"
+    assert save_checkpoint(tmp_path, "t3", goal="g", status="COMPLETED")["kind"] == "completed"
+
+
 def test_session_schema_limits_from_config_bound_checkpoint_and_resume_prompt(tmp_path: Path):
     # Arrange
     from ego.domain.config import save_config
