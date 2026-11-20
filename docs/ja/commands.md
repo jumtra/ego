@@ -47,14 +47,11 @@
 | `ego work run --task <file> [flags]` | タスク JSON を隔離環境で実行 |
 | `ego work resume <run_id> --task <file> [flags]` | run を続行、または検証済みの run を `--apply --approve` で適用 |
 | `ego work status <run_id> [--verbose]` | run を表示 |
-| `ego work cancel <run_id\|loop_id>` | 中止を要求 |
-| `ego work loop --goal <text> --done-check <cmd> [flags]` | ゴールループ |
-| `ego work loop-status <loop_id>` / `loop-apply <loop_id> --approve` | ループを確認、または適用 |
+| `ego work cancel <run_id>` | 中止を要求 |
 | `ego work native` | native モードとは CLI 内で `/work` を使うことだと報告する。モデル呼び出しは行わない |
 
 `run` / `resume` のフラグ: `--host`、`--trust-cli`、`--apply`、`--approve`、`--hosts`、`--strategy`、`--model`、`--models`、`--autonomy`、`--attest-external-sandbox`、`--worktree`、`--keep-worktree`、`--verbose`。
 
-`loop` のフラグ: `--host`、`--scope`、`--max-iterations`、`--max-budget-usd`、`--max-wall-seconds`、`--execute`、`--plan-first`、`--trust-cli`、`--apply`、`--approve`、`--autonomy`、`--attest-external-sandbox`。
 
 ## セッション
 

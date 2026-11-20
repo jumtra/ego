@@ -28,7 +28,7 @@ Claude Code・Codex・OpenCode・Antigravity に、計画・タスク分担・�
 | ⚡ | いつもの AI CLI ですぐ直す | `/work` が調査・実装・テストを行う。小さな修正に計画書は不要 |
 | 🧩 | 複数の AI CLI に分担する | ノードごとにホストとモデルを指定。依存関係を守り、独立したノードは並列実行 |
 | ✅ | 確かめてから反映する | ステージング用コピーか Git worktree で変更とテストを行い、承認後にのみ適用 |
-| 🔁 | コマンドが通るまで作業する | ゴールループ: 計画 → 実行 → 評価 → 再計画。イテレーション、予算、時間で上限を設定 |
+| 🔁 | 失敗を計画の中で繰り返す | reviewer の差し戻しと再計画。回数とトークン上限は設定で制限 |
 | 💾 | 後で、または別の CLI で続ける | Claude Code / Codex / OpenCode / AGY の間でメモリ、チェックポイント、引き継ぎ |
 | ♻️ | 長いセッションを小さく保つ | `ego run <cli>` がコンテキストのしきい値でチェックポイント、クリア、再開を行う |
 
@@ -95,7 +95,7 @@ ego run claude     # codex、opencode、agy も可
 |---|---|---|
 | インストール、適用、更新、アンインストール | [Setup](../en/setup.md) | [セットアップ](setup.md) |
 | `.ego/config.toml`、環境変数 | [Configuration](../en/configuration.md) | [設定](configuration.md) |
-| `/work`、管理実行、タスク JSON、ゴールループ | [Workflows](../en/workflows.md) | [ワークフロー](workflows.md) |
+| `/work`、管理実行、タスク JSON、reviewer のループ | [Workflows](../en/workflows.md) | [ワークフロー](workflows.md) |
 | チェックポイント、CLI 間の引き継ぎ、`ego run` | [Sessions](../en/sessions.md) | [セッション](sessions.md) |
 | 全コマンドとフラグ | [Command reference](../en/commands.md) | [コマンドリファレンス](commands.md) |
 | 信頼の境界と制限 | [Security](../en/security.md) | [セキュリティ](security.md) |

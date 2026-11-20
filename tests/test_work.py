@@ -1,4 +1,5 @@
-"""Work flows: run/resume/--from rerun, watch/cancel, parallel staging, worktree isolation, judge gate, worker rotation, loop/planner."""
+from dataclasses import replace
+"""Work flows: run/resume/--from rerun, watch/cancel, parallel staging, worktree isolation, reviewer gate, worker rotation, loop/planner."""
 from pathlib import Path
 import json
 import os
@@ -13,10 +14,10 @@ from ego.adapters.codeintel import text_fallback
 from ego.adapters.runner import RunResult
 from ego.adapters.runner import RunResult, parse_host_usage
 from ego.cli import main
-from ego.domain.config import Config
-from ego.domain.config import Config, load_config
-from ego.domain.config import Config, load_config, save_config
-from ego.domain.judge import parse_verdict
+from ego.domain.config import default_config
+from ego.domain.config import default_config, load_config
+from ego.domain.config import default_config, load_config, save_config
+from ego.domain.review import parse_verdict
 from ego.domain.policy import check_command, check_write
 from ego.domain.task_routing import build_task_prompt, resolve_routes
 from ego.domain.templates import skill_md
@@ -28,7 +29,6 @@ from ego.usecases import planner
 from ego.usecases import work
 from ego.usecases import worker
 from ego.usecases.install import apply_install
-from ego.usecases.loop import DONE_NODE, history_text, run_loop
 from ego.usecases.session import load_checkpoint
 from ego.usecases.session import save_checkpoint
 from ego.usecases.work import compact_result, execute, status, watch
@@ -61,7 +61,7 @@ def test_work_plan_skill_is_graph_format(tmp_path: Path):
     for name in ('work', 'work-plan'):
         body = skill_md(name)
         assert 'implemented exactly as written' in body and 'drift in a different direction' in body
-    apply_install(tmp_path, Config())
+    apply_install(tmp_path, default_config())
     assert (tmp_path / '.claude/skills/work-plan/SKILL.md').read_text() == plan
 
 
@@ -78,9 +78,8 @@ def test_approved_plan_is_handed_to_the_engine_not_replanned():
     from ego.domain.templates import WORK_REFERENCES
     plan = skill_md('work-plan')
     assert 'do not plan it again with `ego work plan`' in plan
-    assert 'ego work run --root . --task' in plan and '`ego work loop --task`' in plan
+    assert 'ego work run --root . --task' in plan and 'max_replans' in plan
     assert 'approved a `work-plan` graph' in WORK_REFERENCES['managed']
-    assert '--task <task-file>' in WORK_REFERENCES['loop'] and 'departs from the approved plan' in WORK_REFERENCES['loop']
 
 
 def test_work_plan_executes_through_managed_with_progress():
@@ -111,7 +110,7 @@ def test_v0012_work_skill_refreshes():
 
 
 def test_owned_custom_work_skill_is_preserved(tmp_path: Path):
-    cfg = Config()
+    cfg = default_config()
     apply_install(tmp_path, cfg)
     canonical = tmp_path / '.ego/spec/skills/work/SKILL.md'
     custom = canonical.read_text().replace('Choose the **smallest useful workflow**.', 'Custom workflow.')
@@ -166,7 +165,7 @@ def test_planner_prompt_requires_requirement_and_steps(tmp_path: Path, monkeypat
 def test_custom_agent_discovery_task_routing_and_non_lean_alter(tmp_path: Path, monkeypatch):
     import pytest
     from ego.usecases import work
-    from ego.domain.config import Config, save_config
+    from ego.domain.config import default_config, save_config
     from ego.adapters.detect import detect, discover_agents
     from ego.domain.task_routing import build_task_prompt, validate_node_notes
     from ego.shared.util import EgoError
@@ -207,7 +206,7 @@ def test_custom_agent_discovery_task_routing_and_non_lean_alter(tmp_path: Path, 
     assert 'alter_task_context' in prompt
 
     # work.execute passes lean=True and mcp_servers=['alter'] when cfg.knowledge == 'alter'
-    save_config(tmp_path, Config(knowledge='alter', worker_context='lean'))
+    save_config(tmp_path, replace(default_config(), knowledge='alter', worker_context='lean'))
     captured_lean = []
     captured_mcp = []
 
@@ -279,8 +278,8 @@ def test_worktree_isolation_and_cleanup(tmp_path):
     apply_install_to_root = True
 
     from ego.usecases.install import apply_install
-    from ego.domain.config import Config
-    apply_install(root, Config())
+    from ego.domain.config import default_config
+    apply_install(root, default_config())
     subprocess.run(["git", "add", "."], cwd=root, capture_output=True, check=True)
     subprocess.run(["git", "commit", "-m", "add ego"], cwd=root, capture_output=True, check=True)
 
@@ -491,7 +490,7 @@ def test_parallel_wave_persists_a_passed_node_before_its_failing_sibling_ends(pr
 
 def _agent_driver(monkeypatch) -> list[tuple[str, str]]:
     """Fake worker. `WRITE f=v` writes f; `FIXED f=v` writes v instead when the prompt carries feedback `want-v`;
-    a judge approves only when good.txt says `good`. Returns (node id, prompt) per run."""
+    a reviewer approves only when good.txt says `good`. Returns (node id, prompt) per run."""
     ran: list[tuple[str, str]] = []
 
     def fake_agent(host, prompt, cwd, timeout=180, **kw):
@@ -502,7 +501,7 @@ def _agent_driver(monkeypatch) -> list[tuple[str, str]]:
         for name, text in re.findall(r"FIXED (\S+?)=(\S+)", prompt):
             (Path(cwd) / name).write_text(text if f"want-{text}" in prompt else "bad")
         output = "ok"
-        if nid == "judge":
+        if nid == "reviewer":
             good = (Path(cwd) / "good.txt").read_text() == "good"
             output = "VERDICT: APPROVE" if good else "- good.txt:1: want-good\nVERDICT: REJECT"
         return RunResult("PASS", output, "", 0, 0.0, host, cost_usd=0.0)
@@ -570,19 +569,19 @@ def test_resume_reruns_a_failed_node_with_its_last_failure_as_feedback(tmp_path:
     assert "x.txt is bad, want-ok" in ran[-1][1]
 
 
-def test_resume_after_a_judge_reject_sends_the_findings_to_the_reviewed_coder(tmp_path: Path, monkeypatch):
+def test_resume_after_a_reviewer_reject_sends_the_findings_to_the_reviewed_coder(tmp_path: Path, monkeypatch):
     ran = _agent_driver(monkeypatch)
     _scripts(tmp_path)
     task = {"goal": "g", "nodes": [
         _agent("code", "FIXED good.txt=good", role="coder", host="mock"),
         {"id": "gate", "kind": "gate", "depends_on": ["code"], "argv": ["python3", "noop.py"]},
-        _agent("judge", "review", ["gate"], role="judge", reviews="code", max_retries=0, host="mock",
+        _agent("reviewer", "review", ["gate"], role="reviewer", reviews="code", max_rounds=0, host="mock",
                write_allowlist=[])]}
     first = execute(tmp_path, task, extra_allow=["*.py"], run_id="j1")
-    assert first["final_status"] == "FAILED" and first["node_status"]["judge"] == "FAILED"
+    assert first["final_status"] == "FAILED" and first["node_status"]["reviewer"] == "FAILED"
     second = execute(tmp_path, task, run_id="j1", resume=True)
     assert second["final_status"] == "PASSED"
-    assert [n for n, _ in ran] == ["code", "judge", "code", "judge"]
+    assert [n for n, _ in ran] == ["code", "reviewer", "code", "reviewer"]
     assert "want-good" in ran[2][1] and "want-good" not in ran[0][1]
 
 
@@ -852,10 +851,54 @@ def test_turn_budget_is_shared_across_segments(tmp_path, monkeypatch):
     assert r.status == "FAIL" and r.reason == "MAX_TURNS" and len(calls) == 2
 
 
-def test_spend_is_capped_across_segments(tmp_path, monkeypatch):
-    r, calls, _ = drive(tmp_path, monkeypatch, [result(cost=0.6)], tokens=500, max_budget_usd=1.0)
-    assert r.reason == "BUDGET_EXHAUSTED" and len(calls) == 2
-    assert abs(calls[1]["max_budget_usd"] - 0.4) < 1e-9
+def test_token_cap_stops_the_run_before_the_next_attempt(tmp_path: Path, monkeypatch):
+    save_config(tmp_path, replace(default_config(), max_run_tokens=1000))
+    (tmp_path / "fail.py").write_text("import sys\nsys.exit(1)\n")
+    calls = []
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        calls.append(prompt)
+        return RunResult("PASS", "ok", "", 0, 0.0, host, usage={"input_tokens": 800, "output_tokens": 300})
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    result = execute(tmp_path, {"goal": "g", "nodes": [
+        {"id": "impl", "kind": "agent", "prompt": "do it", "host": "claude", "write_allowlist": ["src/**"],
+         "checks": [["python3", "fail.py"]], "max_attempts": 3}]}, host="claude", trust_cli=True)
+    assert result["final_status"] == "BUDGET_EXHAUSTED" and len(calls) == 1
+
+
+def test_cache_read_tokens_do_not_count_toward_the_token_cap(tmp_path: Path, monkeypatch):
+    save_config(tmp_path, replace(default_config(), max_run_tokens=1000))
+    monkeypatch.setattr(work, "run_agent", lambda host, *a, **kw: RunResult(
+        "PASS", "ok", "", 0, 0.0, host, usage={"input_tokens": 10, "output_tokens": 5, "cache_read_tokens": 100000}))
+    result = execute(tmp_path, {"goal": "g", "nodes": [
+        {"id": "impl", "kind": "agent", "prompt": "do it", "host": "claude", "write_allowlist": ["src/**"]}]},
+        host="claude", trust_cli=True)
+    assert result["final_status"] == "PASSED"
+
+
+def test_there_is_no_whole_run_time_limit(tmp_path: Path, monkeypatch):
+    save_config(tmp_path, replace(default_config(), timeout_seconds=5))
+    clock = iter(range(0, 10**6, 1000))
+    monkeypatch.setattr(work.time, "monotonic", lambda: float(next(clock)))
+    monkeypatch.setattr(work, "run_agent", lambda host, *a, **kw: RunResult("PASS", "ok", "", 0, 0.0, host))
+    result = execute(tmp_path, {"goal": "g", "nodes": [
+        {"id": "first", "kind": "agent", "prompt": "a", "host": "claude", "write_allowlist": ["src/**"]},
+        {"id": "second", "kind": "agent", "prompt": "b", "host": "claude", "write_allowlist": ["src/**"], "depends_on": ["first"]}]},
+        host="claude", trust_cli=True)
+    assert result["final_status"] == "PASSED"
+
+
+def test_tuning_override_in_project_defaults_limits_feedback_length(tmp_path: Path, monkeypatch):
+    (tmp_path / ".ego").mkdir()
+    (tmp_path / ".ego" / "defaults.toml").write_text("[tuning]\nmax_feedback_chars = 300\n")
+    (tmp_path / "noisy.py").write_text("import sys\nprint('x'*20000)\nprint('REAL FAILURE AT END')\nsys.exit(1)\n")
+    monkeypatch.setattr(work, "run_agent", lambda host, *a, **kw: RunResult("PASS", "ok", "", 0, 0.0, host))
+    result = execute(tmp_path, {"goal": "g", "nodes": [
+        {"id": "impl", "kind": "agent", "prompt": "do it", "host": "claude", "write_allowlist": ["src/**"],
+         "checks": [["python3", "noisy.py"]], "max_attempts": 1}]}, host="claude", trust_cli=True)
+    feedback = result["results"]["impl"]["attempts"][0]["feedback"]
+    assert len(feedback) <= 300 and "REAL FAILURE AT END" in feedback
 
 
 def test_worker_context_is_read_from_the_claude_session_record(tmp_path, monkeypatch):
@@ -968,15 +1011,14 @@ def _fake_claude(monkeypatch, tmp_path: Path, flags: str):
     monkeypatch.setenv("EGO_CACHE_DIR", str(tmp_path / "cache"))
 
 
-def test_lean_worker_drops_inherited_mcp_and_carries_turn_and_budget_limits(monkeypatch, tmp_path: Path):
-    _fake_claude(monkeypatch, tmp_path, "--output-format --max-turns --permission-mode --strict-mcp-config --mcp-config --max-budget-usd auto")
-    argv = hosts.build_command("claude", "p", read_only=False, max_turns=30, lean=True, max_budget_usd=1.5, use_stdin=True)
+def test_lean_worker_drops_inherited_mcp_and_carries_turn_limit(monkeypatch, tmp_path: Path):
+    _fake_claude(monkeypatch, tmp_path, "--output-format --max-turns --permission-mode --strict-mcp-config --mcp-config auto")
+    argv = hosts.build_command("claude", "p", read_only=False, max_turns=30, lean=True, use_stdin=True)
     assert "--strict-mcp-config" in argv
     assert "--mcp-config" not in argv
     assert argv[argv.index("--max-turns") + 1] == "30"
-    assert argv[argv.index("--max-budget-usd") + 1] == "1.50"
     inherit = hosts.build_command("claude", "p", read_only=False, use_stdin=True)
-    assert "--strict-mcp-config" not in inherit and "--max-budget-usd" not in inherit
+    assert "--strict-mcp-config" not in inherit
 
 
 def test_lean_worker_with_alter_loads_only_requested_mcp(monkeypatch, tmp_path: Path):
@@ -999,8 +1041,8 @@ def test_lean_worker_with_alter_loads_only_requested_mcp(monkeypatch, tmp_path: 
 
 def test_lean_flags_are_skipped_when_the_installed_cli_lacks_them(monkeypatch, tmp_path: Path):
     _fake_claude(monkeypatch, tmp_path, "--output-format --max-turns --permission-mode auto")
-    argv = hosts.build_command("claude", "p", read_only=False, lean=True, max_budget_usd=1.0, use_stdin=True)
-    assert "--strict-mcp-config" not in argv and "--max-budget-usd" not in argv
+    argv = hosts.build_command("claude", "p", read_only=False, lean=True, use_stdin=True)
+    assert "--strict-mcp-config" not in argv
 
 
 def test_managed_worker_gets_configured_turns_not_the_planner_default(tmp_path: Path, monkeypatch):
@@ -1015,7 +1057,7 @@ def test_managed_worker_gets_configured_turns_not_the_planner_default(tmp_path: 
     (tmp_path / ".ego/config.toml").write_text("clear_suggest_tokens = 0\n")  # no segmenting: one worker call gets the whole budget
     spec = {"goal": "g", "nodes": [{"id": "impl", "kind": "agent", "prompt": "p", "host": "claude", "write_allowlist": ["src/**"]}]}
     execute(tmp_path, spec, host="claude", trust_cli=True)
-    assert seen["max_turns"] == Config().max_turns == 30 and seen["lean"] is True
+    assert seen["max_turns"] == default_config().max_turns == 30 and seen["lean"] is True
     assert seen["mcp_servers"] == ["alter"]
     spec["nodes"][0]["max_turns"] = 5
     execute(tmp_path, spec, host="claude", trust_cli=True)
@@ -1040,43 +1082,6 @@ def test_natural_language_goal_finds_candidate_files(tmp_path: Path):
     assert found["strategy"] == "local_term_rank"
     assert found["matches"][0]["path"] == "src/timeout_validation.py"
     assert all(m["path"] != "src/other.py" for m in found["matches"])
-
-
-def _loop_project(root: Path) -> None:
-    (root / "make_a.py").write_text("from pathlib import Path\nPath('a.txt').write_text('A')\n")
-    # Proves the second iteration starts from the verified staging of the first.
-    (root / "make_b.py").write_text("from pathlib import Path\nassert Path('a.txt').read_text() == 'A'\nPath('b.txt').write_text('B')\n")
-    (root / "check.py").write_text("from pathlib import Path\nimport sys\n"
-                                    "missing=[n for n in ('a.txt','b.txt') if not Path(n).exists()]\n"
-                                    "print('missing: ' + ', '.join(missing))\nsys.exit(1 if missing else 0)\n")
-    (root / "noop.py").write_text("print('nothing to do')\n")
-
-
-def _node(script: str, out: str) -> dict:
-    return {"id": "step-" + out[0], "kind": "code", "argv": ["python3", script], "write_allowlist": [out]}
-
-
-def test_loop_replans_from_bounded_history_and_carries_verified_work(tmp_path: Path):
-    _loop_project(tmp_path)
-    histories = []
-
-    def planner(goal, history, workdir):
-        histories.append(history)
-        return {"goal": goal, "nodes": [_node("make_a.py", "a.txt") if history is None else _node("make_b.py", "b.txt")]}
-
-    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], planner=planner,
-                      scope=["*.txt"], max_iterations=4)
-    assert result["status"] == "VERIFIED"
-    assert [it["status"] for it in result["iterations"]] == ["FAILED", "PASSED"]
-    assert result["changed_files"] == ["a.txt", "b.txt"]
-    assert not (tmp_path / "a.txt").exists() and not (tmp_path / "b.txt").exists()
-    assert histories[0] is None
-    assert "failed goal check" in histories[1] and "missing: b.txt" in histories[1]
-    assert "step-a" in histories[1] and len(histories[1]) <= 2600
-    first_run = result["iterations"][0]["run_id"]
-    assert not (tmp_path / ".ego/state/runs" / first_run / "staging").exists()
-    checkpoint = json.loads((tmp_path / ".ego/memory/handoffs" / (result["loop_id"] + ".json")).read_text())
-    assert checkpoint["status"] == "VERIFIED"
 
 
 def _writing_agent(monkeypatch) -> list[str]:
@@ -1135,152 +1140,6 @@ def test_node_fingerprint_covers_ancestors_and_shared_settings_but_not_the_goal(
     assert work.node_fingerprints({**base, "instructions": "be careful"})["c"] != fp["c"]
 
 
-def test_loop_replan_keeps_verified_agent_nodes_without_running_them_again(tmp_path: Path, monkeypatch):
-    _loop_project(tmp_path)
-    ran = _writing_agent(monkeypatch)
-    histories = []
-
-    def planner(goal, history, workdir):
-        histories.append(history)
-        return {"goal": goal, "nodes": [_wagent("make-a", "a.txt=A") if history is None else _wagent("make-b", "b.txt=B")]}
-
-    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], planner=planner,
-                      scope=["*.txt"], max_iterations=3)
-    assert result["status"] == "VERIFIED"
-    assert ran == ["make-a", "make-b"]
-    assert "verified nodes (kept, not re-run): make-a" in histories[1]
-    record = json.loads((tmp_path / ".ego/state/runs" / result["iterations"][1]["run_id"] / "record.json").read_text())
-    assert record["carried"] == ["make-a"] and [n["id"] for n in record["spec"]["nodes"]] == ["make-a", "make-b", DONE_NODE]
-
-
-def test_loop_planner_may_redo_a_verified_node_by_reusing_its_id(tmp_path: Path, monkeypatch):
-    _loop_project(tmp_path)
-    ran = _writing_agent(monkeypatch)
-
-    def planner(goal, history, workdir):
-        if history is None:
-            return {"goal": goal, "nodes": [_wagent("make-a", "a.txt=A")]}
-        return {"goal": goal, "nodes": [_wagent("make-a", "a.txt=A WRITE b.txt=B")]}
-
-    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], planner=planner,
-                      scope=["*.txt"], max_iterations=3)
-    assert result["status"] == "VERIFIED" and ran == ["make-a", "make-a"]
-
-
-def test_loop_applies_only_with_approval_and_only_after_the_goal_holds(tmp_path: Path):
-    _loop_project(tmp_path)
-    with pytest.raises(EgoError):
-        run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=lambda *a: {}, apply=True)
-
-    def planner(goal, history, workdir):
-        return {"goal": goal, "nodes": [_node("make_a.py", "a.txt") if history is None else _node("make_b.py", "b.txt")]}
-
-    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], planner=planner,
-                      scope=["*.txt"], apply=True, approve=True)
-    assert result["status"] == "COMPLETED" and "完了" in result["message"]
-    assert (tmp_path / "a.txt").read_text() == "A" and (tmp_path / "b.txt").read_text() == "B"
-
-
-def test_loop_stops_when_an_iteration_makes_no_progress(tmp_path: Path):
-    _loop_project(tmp_path)
-    calls = []
-
-    def planner(goal, history, workdir):
-        calls.append(1)
-        return {"goal": goal, "nodes": [{"id": "noop", "kind": "code", "argv": ["python3", "noop.py"], "write_allowlist": ["x.txt"]}]}
-
-    result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=planner, max_iterations=6)
-    assert result["status"] == "STALLED" and len(calls) == 2
-    assert "未完了" in result["message"]
-
-
-def test_loop_respects_iteration_and_budget_limits(tmp_path: Path):
-    _loop_project(tmp_path)
-    count = {"n": 0}
-
-    def planner(goal, history, workdir):
-        count["n"] += 1
-        (tmp_path / f"w{count['n']}.py").write_text(f"from pathlib import Path\nPath('p{count['n']}.txt').write_text('x')\n")
-        return {"task": {"goal": goal, "nodes": [{"id": f"w{count['n']}", "kind": "code", "argv": ["python3", f"w{count['n']}.py"],
-                                                 "write_allowlist": ["*.txt"]}]},
-                "planner_usage": {"cost_usd": 0.6}}
-
-    capped = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=planner, max_iterations=2)
-    assert capped["status"] == "MAX_ITERATIONS" and len(capped["iterations"]) == 2 and capped["cost_usd"] == 1.2
-    count["n"] = 0
-    broke = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=planner, max_iterations=9, max_budget_usd=1.0)
-    assert broke["status"] == "BUDGET_EXHAUSTED" and len(broke["iterations"]) == 2
-
-
-def test_loop_requires_a_measurable_allowed_check(tmp_path: Path):
-    with pytest.raises(EgoError) as missing:
-        run_loop(tmp_path, "g", done_checks=[], planner=lambda *a: {})
-    assert missing.value.code == "DONE_CHECK_REQUIRED"
-    with pytest.raises(EgoError) as denied:
-        run_loop(tmp_path, "g", done_checks=[["bash", "-c", "true"]], planner=lambda *a: {})
-    assert denied.value.code == "COMMAND_DENIED"
-
-
-def test_rejected_plan_is_an_iteration_outcome_and_history_masks_old_iterations(tmp_path: Path):
-    _loop_project(tmp_path)
-
-    def planner(goal, history, workdir):
-        return {"goal": goal, "nodes": [{"id": DONE_NODE, "kind": "code", "argv": ["python3", "noop.py"], "write_allowlist": ["x"]}]}
-
-    result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=planner, max_iterations=5)
-    assert result["status"] == "STALLED" and result["iterations"][0]["status"] == "PLAN_REJECTED"
-    iterations = [{"n": i, "status": "FAILED", "passed": ["n"], "changed_files": ["f.py"],
-                   "failures": [{"node": "impl", "feedback": f"detail-{i} " + "y" * 3000}]} for i in range(1, 6)]
-    text = history_text(iterations)
-    assert len(text) <= 2600
-    assert "Iteration 1: FAILED; failed impl" in text and "detail-1" not in text
-    assert "detail-5" in text or "y" * 50 in text
-
-
-def test_loop_cli_roundtrip_with_mock_planner(tmp_path: Path, capsys):
-    _loop_project(tmp_path)
-    (tmp_path / "ok.py").write_text("print('ok')\n")
-    code = main(["work", "loop", "--root", str(tmp_path), "--goal", "nothing to change", "--done-check", "python3 ok.py"])
-    out = json.loads(capsys.readouterr().out)
-    assert code == 0 and out["status"] == "VERIFIED" and out["done_checks"] == [["python3", "ok.py"]]
-    assert main(["work", "loop-status", out["loop_id"], "--root", str(tmp_path)]) == 0
-    assert json.loads(capsys.readouterr().out)["status"] == "VERIFIED"
-    assert main(["work", "cancel", out["loop_id"], "--root", str(tmp_path)]) == 0
-    assert json.loads(capsys.readouterr().out)["loop_id"] == out["loop_id"]
-
-
-def test_verified_loop_is_applied_later_only_with_approval(tmp_path: Path, capsys):
-    _loop_project(tmp_path)
-
-    def planner(goal, history, workdir):
-        return {"goal": goal, "nodes": [_node("make_a.py", "a.txt") if history is None else _node("make_b.py", "b.txt")]}
-
-    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], planner=planner, scope=["*.txt"])
-    assert result["status"] == "VERIFIED" and not (tmp_path / "a.txt").exists()
-    assert main(["work", "loop-apply", result["loop_id"], "--root", str(tmp_path)]) != 0
-    capsys.readouterr()
-    assert not (tmp_path / "a.txt").exists()
-    assert main(["work", "loop-apply", result["loop_id"], "--root", str(tmp_path), "--approve"]) == 0
-    assert json.loads(capsys.readouterr().out)["status"] == "COMPLETED"
-    assert (tmp_path / "a.txt").read_text() == "A" and (tmp_path / "b.txt").read_text() == "B"
-
-
-def test_stale_target_blocks_a_later_loop_apply(tmp_path: Path):
-    from ego.usecases.loop import apply_loop
-    _loop_project(tmp_path)
-    (tmp_path / "a.txt").write_text("old")
-    (tmp_path / "over.py").write_text("from pathlib import Path\nPath('a.txt').write_text('A')\nPath('b.txt').write_text('B')\n")
-    planner = lambda goal, history, workdir: {"goal": goal, "nodes": [
-        {"id": "w", "kind": "code", "argv": ["python3", "over.py"], "write_allowlist": ["*.txt"]}]}
-    result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=planner, scope=["*.txt"])
-    assert result["status"] == "VERIFIED"
-    (tmp_path / "a.txt").write_text("edited by the user meanwhile")
-    with pytest.raises(EgoError) as stale:
-        apply_loop(tmp_path, result["loop_id"], approve=True)
-    assert stale.value.code == "STALE_BASE"
-    assert (tmp_path / "a.txt").read_text() == "edited by the user meanwhile"
-
-
 def test_planner_uses_the_configured_host_model(tmp_path: Path, monkeypatch):
     from ego.usecases import planner
     (tmp_path / ".ego").mkdir()
@@ -1296,105 +1155,6 @@ def test_planner_uses_the_configured_host_model(tmp_path: Path, monkeypatch):
     result = planner.plan_work(tmp_path, "add validation", "claude", execute=True, history="Iteration 1: FAILED")
     assert seen["model"] == "haiku" and seen["effort"] == "low" and seen["read_only"] is True
     assert result["planner_usage"]["cost_usd"] == 0.02
-
-
-def test_first_iteration_skips_the_planner_and_replans_only_after_failure(tmp_path: Path, monkeypatch):
-    from ego.usecases import planner as planner_module
-    _loop_project(tmp_path)
-    (tmp_path / "both.py").write_text("from pathlib import Path\nPath('a.txt').write_text('A')\nPath('b.txt').write_text('B')\n")
-    worker_prompts, plans = [], []
-
-    def idle_worker(host, prompt, cwd, timeout=180, **kw):
-        worker_prompts.append(prompt)
-        return RunResult("PASS", "done", "", 0, 0.0, host, cost_usd=0.01)
-
-    def fake_plan(root, goal, host, scope, *, execute, history, workdir):
-        plans.append(history)
-        return {"task": {"goal": goal, "nodes": [{"id": "both", "kind": "code", "argv": ["python3", "both.py"],
-                                                  "write_allowlist": ["*.txt"]}]}, "planner_usage": {"cost_usd": 0.07}}
-
-    monkeypatch.setattr(work, "run_agent", idle_worker)
-    monkeypatch.setattr(planner_module, "plan_work", fake_plan)
-    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], host="claude",
-                      scope=["*.txt"], trust_cli=True, execute_planner=True)
-    assert result["status"] == "VERIFIED"
-    assert [it["status"] for it in result["iterations"]] == ["FAILED", "PASSED"]
-    assert len(plans) == 1 and "missing: a.txt, b.txt" in plans[0]
-    assert "missing: a.txt, b.txt" in worker_prompts[1]  # in-node repair saw the done-check output
-    assert result["cost_usd"] == round(0.01 * len(worker_prompts) + 0.07, 4)
-
-    plans.clear()
-    run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], host="claude",
-             scope=["*.txt"], trust_cli=True, execute_planner=True, plan_first=True)
-    assert plans[0] is None
-
-
-def test_plan_with_a_forbidden_check_is_rejected_and_replanned_not_a_crash(tmp_path: Path):
-    """Seen on a real host: the replanner proposed a `python3 -c` check and the loop died with ERROR."""
-    _loop_project(tmp_path)
-    histories = []
-
-    def planner(goal, history, workdir):
-        histories.append(history)
-        return {"goal": goal, "nodes": [{"id": "impl", "kind": "agent", "prompt": "p", "write_allowlist": ["src/**"],
-                                         "checks": [["python3", "-c", "import x"]]}]}
-
-    result = run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=planner, max_iterations=5)
-    assert result["status"] == "STALLED"
-    assert [it["status"] for it in result["iterations"]] == ["PLAN_REJECTED", "PLAN_REJECTED"]
-    assert "Inline Python" in histories[1]
-    assert not (tmp_path / ".ego" / "state" / "runs").exists()  # rejected before any staging copy
-
-
-def test_approved_task_is_the_first_iteration_and_replanning_follows_only_on_failure(tmp_path: Path):
-    _loop_project(tmp_path)
-    calls = []
-
-    def planner(goal, history, workdir):
-        calls.append(history)
-        return {"goal": goal, "nodes": [_node("make_b.py", "b.txt")]}
-
-    approved = {"goal": "produce a and b", "nodes": [_node("make_a.py", "a.txt")],
-                "planner_usage": {"cost_usd": 0.05}}
-    result = run_loop(tmp_path, "produce a and b", done_checks=[["python3", "check.py"]], planner=planner,
-                      scope=["*.txt"], task=approved, max_iterations=3)
-    assert result["status"] == "VERIFIED"
-    assert [it["status"] for it in result["iterations"]] == ["FAILED", "PASSED"]
-    assert len(calls) == 1 and "missing: b.txt" in calls[0]  # the planner never replaced the approved first plan
-    assert result["usage"]["planned"] and result["cost_usd"] >= 0.05
-    ledger = json.loads((tmp_path / result["ledger_path"]).read_text())
-    assert ledger["seeded_from_task"] is True
-
-
-def test_approved_task_is_validated_and_excludes_plan_first(tmp_path: Path):
-    _loop_project(tmp_path)
-    with pytest.raises(EgoError) as broken:
-        run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=lambda *a: {},
-                 task={"goal": "g", "nodes": [{"id": "x", "kind": "code", "argv": ["python3", "noop.py"], "depends_on": ["y"],
-                                                "write_allowlist": ["*.txt"]}]})
-    assert broken.value.code == "INVALID_TASK"
-    with pytest.raises(EgoError):
-        run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=lambda *a: {},
-                 task={"goal": "g", "nodes": [{"id": "x", "kind": "code", "argv": ["bash", "-c", "true"],
-                                                "write_allowlist": ["*.txt"]}]})
-    assert not (tmp_path / ".ego/state/loops").exists()
-    with pytest.raises(EgoError) as both:
-        run_loop(tmp_path, "g", done_checks=[["python3", "check.py"]], planner=lambda *a: {},
-                 task={"goal": "g", "nodes": [_node("make_a.py", "a.txt")]}, plan_first=True)
-    assert both.value.code == "INVALID_LOOP"
-
-
-def test_loop_cli_runs_an_approved_task_file_with_its_goal(tmp_path: Path, capsys):
-    _loop_project(tmp_path)
-    task_file = tmp_path / "task.json"
-    task_file.write_text(json.dumps({"goal": "produce a and b", "nodes": [
-        _node("make_a.py", "a.txt"), {**_node("make_b.py", "b.txt"), "depends_on": ["step-a"]}]}))
-    code = main(["work", "loop", "--root", str(tmp_path), "--task", str(task_file),
-                 "--done-check", "python3 check.py", "--scope", "*.txt"])
-    out = json.loads(capsys.readouterr().out)
-    assert code == 0 and out["status"] == "VERIFIED" and out["goal"] == "produce a and b"
-    assert len(out["iterations"]) == 1
-    assert main(["work", "loop", "--root", str(tmp_path), "--done-check", "python3 check.py"]) != 0
 
 
 REAL = work.run_agent
@@ -1440,42 +1200,42 @@ def test_tester_may_only_write_tests(project, writing_agent):
     assert execute(project, bad)["final_status"] == "FAILED"
 
 
-def test_judge_cannot_write(project, writing_agent):
+def test_reviewer_cannot_write(project, writing_agent):
     task = {"nodes": [node("c", role="coder", prompt="p"),
                       {"id": "g", "kind": "gate", "depends_on": ["c"], "argv": ["python3", "--version"]},
-                      {"id": "j", "role": "judge", "depends_on": ["g"], "reviews": "c",
+                      {"id": "j", "role": "reviewer", "depends_on": ["g"], "reviews": "c",
                        "prompt": "[[WRITE:src/j.py]]VERDICT: APPROVE"}]}
     # Judge write: the node itself must not carry an allowlist, so the write is refused by role.
     result = execute(project, task)
     assert result["node_status"]["j"] == "FAILED"
 
 
-def judged(verdict_text, **jkw):
+def reviewed(verdict_text, **jkw):
     return {"nodes": [node("c", role="coder", prompt="[[WRITE:src/a.py]]ok"),
                       {"id": "g", "kind": "gate", "depends_on": ["c"], "argv": ["python3", "--version"]},
-                      {"id": "j", "role": "judge", "depends_on": ["g"], "reviews": "c",
+                      {"id": "j", "role": "reviewer", "depends_on": ["g"], "reviews": "c",
                        "prompt": "[[MOCK:" + verdict_text + "]]", **jkw}]}
 
 
-def test_judge_approve_passes(project, writing_agent):
-    assert execute(project, judged("VERDICT: APPROVE"))["final_status"] == "PASSED"
+def test_reviewer_approve_passes(project, writing_agent):
+    assert execute(project, reviewed("VERDICT: APPROVE"))["final_status"] == "PASSED"
 
 
-def test_judge_reject_without_evidence_is_approved(project, writing_agent):
-    assert execute(project, judged("- looks wrong\nVERDICT: REJECT"))["final_status"] == "PASSED"
+def test_reviewer_reject_without_evidence_is_approved(project, writing_agent):
+    assert execute(project, reviewed("- looks wrong\nVERDICT: REJECT"))["final_status"] == "PASSED"
 
 
-def test_judge_reject_with_evidence_retries_coder_locally_then_fails(project, writing_agent):
-    result = execute(project, judged("- src/a.py:1: spec omitted\nVERDICT: REJECT"))
+def test_reviewer_reject_with_evidence_retries_coder_locally_then_fails(project, writing_agent):
+    result = execute(project, reviewed("- src/a.py:1: spec omitted\nVERDICT: REJECT"))
     assert result["final_status"] == "FAILED"
-    assert result["judge_retries"] == {"j": 1}
+    assert result["rounds"] == {"j": 1}
     assert len(result["results"]["c"]["attempts"]) == 1 and result["node_status"]["c"] == "PASSED"
-    again = execute(project, judged("- src/a.py:1: spec omitted\nVERDICT: REJECT", max_retries=0))
-    assert "j" not in again["judge_retries"] or again["judge_retries"]["j"] == 0
+    again = execute(project, reviewed("- src/a.py:1: spec omitted\nVERDICT: REJECT", max_rounds=0))
+    assert "j" not in again["rounds"] or again["rounds"]["j"] == 0
 
 
-def test_judge_needs_reviews_and_a_gate():
-    base = judged("VERDICT: APPROVE")
+def test_reviewer_needs_reviews_and_a_gate():
+    base = reviewed("VERDICT: APPROVE")
     no_reviews = {"nodes": [dict(n) for n in base["nodes"]]}
     del no_reviews["nodes"][2]["reviews"]
     with pytest.raises(EgoError, match="reviews"):
@@ -1485,12 +1245,47 @@ def test_judge_needs_reviews_and_a_gate():
         validate_task(no_gate)
 
 
-def test_failed_gate_means_judge_never_runs(project, writing_agent):
-    task = judged("VERDICT: APPROVE")
+def test_failed_gate_means_reviewer_never_runs(project, writing_agent):
+    task = reviewed("VERDICT: APPROVE")
     (project / "fail.py").write_text("raise SystemExit(1)\n")
     task["nodes"][1]["argv"] = ["python3", "fail.py"]
     result = execute(project, task)
     assert result["final_status"] == "FAILED" and "j" not in result["node_status"]
+
+
+def test_gate_failure_in_reviewer_loop_sends_coder_back(project, writing_agent):
+    task = reviewed("VERDICT: APPROVE")
+    (project / "fail.py").write_text("raise SystemExit(1)\n")
+    task["nodes"][1]["argv"] = ["python3", "fail.py"]
+    result = execute(project, task)
+    assert result["final_status"] == "FAILED" and result["rounds"] == {"j": 1}
+
+
+def test_identical_retry_is_a_stall_before_max_rounds(project, writing_agent):
+    result = execute(project, reviewed("- src/a.py:1: spec omitted\nVERDICT: REJECT"))
+    assert result["rounds"] == {"j": 1} and result["exhausted"] == {"j": "fail"}
+
+
+def test_reviewer_unavailable_is_retried(project, monkeypatch):
+    seen = []
+    def fake(host, prompt, cwd, *a, **k):
+        if "## Reviewer rules" in prompt:
+            seen.append(prompt)
+            if len(seen) == 1:
+                return RunResult("UNAVAILABLE", "", "host down", 127, 0, host)
+        return REAL(host, prompt, cwd, *a, **k)
+    monkeypatch.setattr(work, "run_agent", fake)
+    assert execute(project, reviewed("VERDICT: APPROVE"))["final_status"] == "PASSED"
+    assert len(seen) == 2
+
+
+def test_overlapping_reviewer_loops_are_rejected():
+    nodes = [node("c", role="coder", prompt="p"),
+             {"id": "g", "kind": "gate", "depends_on": ["c"], "argv": ["python3", "--version"]},
+             {"id": "r1", "role": "reviewer", "depends_on": ["g"], "reviews": "c", "prompt": "p"},
+             {"id": "r2", "role": "reviewer", "depends_on": ["g"], "reviews": "c", "prompt": "p"}]
+    with pytest.raises(EgoError, match="overlap"):
+        validate_task({"nodes": nodes})
 
 
 def test_parallel_conflict_is_not_applied(project):
@@ -1536,7 +1331,7 @@ def test_build_task_prompt_inlines_rules_alter_rules_and_project_root(tmp_path: 
 def test_managed_execute_passes_alter_context_and_disables_duplicate_worker_hooks(tmp_path: Path, monkeypatch):
     # Arrange
     from ego.usecases import session
-    save_config(tmp_path, Config(knowledge="alter", clear_suggest_tokens=0))
+    save_config(tmp_path, replace(default_config(), knowledge="alter", clear_suggest_tokens=0))
     (tmp_path / ".agents/rules").mkdir(parents=True)
     (tmp_path / ".agents/rules/engineering.md").write_text("Prefer existing patterns.")
     seen: list[dict] = []
@@ -1654,12 +1449,12 @@ def test_node_runs_in_git_worktree_and_merges_non_overlapping_same_file_edits(tm
     import subprocess
     from unittest.mock import patch
     from ego.usecases import work
-    from ego.domain.config import Config, save_config
+    from ego.domain.config import default_config, save_config
 
     # Arrange
     lines = [f"line {i}" for i in range(1, 11)]
     _init_git_repo(tmp_path, {"shared.txt": "\n".join(lines) + "\n"})
-    save_config(tmp_path, Config(max_parallel=2))
+    save_config(tmp_path, replace(default_config(), max_parallel=2))
     node_has_git: dict[str, bool] = {}
 
     def fake_non_overlapping(host, prompt, cwd, timeout=180, **kw):
@@ -1770,10 +1565,10 @@ def test_seeded_run_preserves_git_worktree_across_from_rerun(tmp_path: Path, mon
 def test_dynamic_dag_scheduler_starts_dependent_node_before_slow_sibling_finishes(tmp_path: Path, monkeypatch):
     import threading
     from ego.usecases import work
-    from ego.domain.config import Config, save_config
+    from ego.domain.config import default_config, save_config
 
     # Arrange
-    save_config(tmp_path, Config(max_parallel=2))
+    save_config(tmp_path, replace(default_config(), max_parallel=2))
     slow_started = threading.Event()
     allow_slow_finish = threading.Event()
     events: list[str] = []
@@ -1825,3 +1620,63 @@ def test_worktree_without_branch_applies_edits(tmp_path: Path):
     # Assert
     assert res["final_status"] == "PASSED"
     assert (tmp_path / "note.txt").read_text(encoding="utf-8") == "after"
+
+
+def _replan_project(root: Path) -> None:
+    (root / "check.py").write_text("from pathlib import Path\nimport sys\nsys.exit(0 if Path('a.txt').exists() else 1)\n")
+    (root / "make_a.py").write_text("from pathlib import Path\nPath('a.txt').write_text('A')\n")
+
+
+def _code_node(nid: str, script: str) -> dict:
+    return {"id": nid, "kind": "code", "argv": ["python3", script], "write_allowlist": ["a.txt"]}
+
+
+def test_failed_run_replans_once_and_the_second_run_passes(tmp_path: Path, monkeypatch):
+    from ego.usecases import replan
+    _replan_project(tmp_path)
+    monkeypatch.setattr(replan, "plan_work", lambda *a, **kw: {"task": {"goal": "g", "nodes": [_code_node("make-a", "make_a.py")]}})
+    spec = {"goal": "g", "on_exhausted": "replan", "max_replans": 1, "nodes": [_code_node("check-a", "check.py")]}
+    result = replan.run_with_replans(tmp_path, spec, run_id="r-a", host="mock", trust_cli=False)
+    assert result["final_status"] == "PASSED" and len(result["replans"]) == 1
+
+
+def test_zero_max_replans_does_not_call_the_planner(tmp_path: Path, monkeypatch):
+    from ego.usecases import replan
+    _replan_project(tmp_path)
+    monkeypatch.setattr(replan, "plan_work", lambda *a, **kw: pytest.fail("planner must not run"))
+    spec = {"goal": "g", "on_exhausted": "replan", "max_replans": 0, "nodes": [_code_node("check-a", "check.py")]}
+    result = replan.run_with_replans(tmp_path, spec, run_id="r-b", host="mock", trust_cli=False)
+    assert result["final_status"] == "FAILED" and result["replans"] == []
+
+
+def test_replan_writing_outside_the_allowlist_is_refused(tmp_path: Path, monkeypatch):
+    from ego.usecases import replan
+    _replan_project(tmp_path)
+    outside = {"id": "make-a", "kind": "code", "argv": ["python3", "make_a.py"], "write_allowlist": ["secret.txt"]}
+    monkeypatch.setattr(replan, "plan_work", lambda *a, **kw: {"task": {"goal": "g", "nodes": [outside]}})
+    spec = {"goal": "g", "on_exhausted": "replan", "max_replans": 1, "nodes": [_code_node("check-a", "check.py")]}
+    result = replan.run_with_replans(tmp_path, spec, run_id="r-c", host="mock", trust_cli=False)
+    assert result["final_status"] == "REPLAN_OUT_OF_SCOPE" and len(result["replans"]) == 1
+
+
+def test_same_failure_twice_stops_as_stalled(tmp_path: Path, monkeypatch):
+    from ego.usecases import replan
+    _replan_project(tmp_path)
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text("max_replans = 2\n")
+    monkeypatch.setattr(replan, "plan_work", lambda *a, **kw: {"task": {"goal": "g", "nodes": [_code_node("check-a", "check.py")]}})
+    spec = {"goal": "g", "on_exhausted": "replan", "max_replans": 2, "nodes": [_code_node("check-a", "check.py")]}
+    result = replan.run_with_replans(tmp_path, spec, run_id="r-d", host="mock", trust_cli=False)
+    assert result["final_status"] == "STALLED" and len(result["replans"]) == 1
+
+
+def test_planner_tokens_are_charged_to_the_run_budget(tmp_path: Path, monkeypatch):
+    from ego.usecases import replan
+    _replan_project(tmp_path)
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text("max_run_tokens = 1000\n")
+    usage = {"input_tokens": 2000, "output_tokens": 0}
+    monkeypatch.setattr(replan, "plan_work", lambda *a, **kw: {"task": {"goal": "g", "nodes": [_code_node("make-a", "make_a.py")]}, "planner_usage": usage})
+    spec = {"goal": "g", "on_exhausted": "replan", "max_replans": 1, "nodes": [_code_node("check-a", "check.py")]}
+    result = replan.run_with_replans(tmp_path, spec, run_id="r-e", host="mock", trust_cli=False)
+    assert result["final_status"] == "BUDGET_EXHAUSTED"

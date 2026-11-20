@@ -57,21 +57,23 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `runtime_mode` | `"native"` | `native`、`managed` | 記録される既定の作業方式。コマンドの動作は変えません。CLI 内の `/work` は native、`ego work run` は常に managed です |
 | `tests` | `[]` | argv 配列のリスト | `--detect-tests` が記録するテストコマンド。例: `[["pytest", "-q"]]` |
 
-### 管理実行（`ego work run`、`ego work loop`）
+### 管理実行（`ego work run`）
 
 | キー | 既定値 | 範囲 | 効果 |
 |---|---|---|---|
 | `models` | `{claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}` | ホスト → モデル | ホストごとの既定モデル。[モデル](#モデル) を参照 |
 | `max_parallel` | `2` | 1〜8 | 独立したノードを同時に実行する数 |
 | `max_attempts` | `3` | 1〜5 | ノードごとの試行回数の上限（初回 + 修正） |
-| `timeout_seconds` | `3600` | 5〜7200 | ノードごとの上限。run 全体の上限はこの値 × ノード数 |
+| `timeout_seconds` | `3600` | 5〜7200 | ノードごとの上限。run 全体の時間制限はありません |
+| `max_rounds` | `2` | 0〜5 | reviewer が 1 ノードで差し戻せる回数。使い切ったら `on_exhausted` に従う |
+| `max_replans` | `1` | 0〜5 | task 1 件あたりの計画の作り直し回数 |
+| `max_run_tokens` | `500000` | 1000 以上 | run 全体の使用トークン上限（`cache_read` を除く） |
 | `max_turns` | `30` | 1〜200 | ワーカー 1 回の呼び出しにおけるエージェントのターン数 |
 | `worker_context` | `"lean"` | `lean`、`inherit` | `lean` は Claude ワーカーを MCP サーバーなしで起動。`inherit` はそのまま引き継ぎます |
 | `worker_segment_turns` | `10` | 1〜200 | Claude ワーカーをこのターン数ごとの区間で実行します。区間の間に実測コンテキストを `clear_suggest_tokens` と比べ、上限なら checkpoint を保存して新しいセッションで続きから再開します |
 | `isolation` | `"copy"` | `copy`、`worktree` | run の作業場所。ステージング用コピーか Git worktree か。`--worktree` で run ごとに上書き |
 | `cleanup_worktree` | `true` | bool | run 後に worktree を削除。`--keep-worktree` で run ごとに上書き |
 | `allow_commands` | 一般的なツールチェーン | コマンド名のリスト | `checks` と `--done-check` が起動してよい実行ファイル。シェルと `python -c` は常に拒否されます |
-| `plan_schema` | `{}` | 1 以上の整数のテーブル | 計画・タスクスキーマの文字数・項目数上限の上書き（`max_goal_chars`, `max_instructions_chars`, `max_instructions_file_chars`, `max_note_chars`, `max_note_items`, `max_step_items`, `max_agent_chars`, `max_mcp_items`, `max_mcp_chars`, `max_context_files`, `max_node_id_chars`, `max_prompt_chars`） |
 
 ### セッション
 
@@ -80,9 +82,24 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `clear_suggest_tokens` | `200000` | `0` または 20000〜2000000 | このコンテキストサイズに達したらセッションをチェックポイント保存してクリアします。各 CLI の生成フック（[セッション](sessions.md) を参照）と `ego run` が使います |
 | `usage_switch_percent` | `99` | `0` または 50〜99 | Claude Code と Codex（使用上限を報告する CLI）のみ。5 時間枠または 7 日枠の使用量がこの割合に達したら、チェックポイントを保存し、別の CLI への切り替えを提案します（`0` でオフ） |
 | `run_yolo` | `true` | bool | `ego run` が CLI を権限確認スキップのスイッチ付きで起動します。`--yolo` / `--no-yolo` で run ごとに上書き |
-| `session_schema` | `{}` | 1 以上の整数のテーブル | チェックポイントと再開プロンプトの上限の上書き（`max_goal_chars`, `max_item_chars`, `max_notes`, `max_prompt_chars`）。既定値は 800, 350, 8, 1600 |
 
 詳細は [セッション](sessions.md) を参照してください。
+
+## 細かいパラメーター（`.ego/defaults.toml`）
+
+上限と既定値の多くは、パッケージ同梱の `src/ego/defaults.toml` から読み込まれます。プロジェクトごとに変えるには `.ego/defaults.toml` に `[tuning]` テーブルを書きます。このファイルで上書きできるのは `[tuning]` のキーだけです。CLI フラグでこれらを上書きすることはできません。`.ego/config.toml` に新しいキーがなくても、パッケージの既定値で動きます。
+
+| キー | 既定値 | 用途 |
+|---|---|---|
+| `max_feedback_chars` | `4000` | 再試行に渡す、チェック出力と reviewer の指摘の文字数 |
+| `max_summary_chars` | `800` | イベント、チェックポイント、再計画の履歴に載せる要約の文字数 |
+| `max_record_chars` | `20000` | `record.json` に残す試行ごとの出力の文字数 |
+| `max_context_hits` | `8` | 計画時のコード検索の結果件数 |
+| `max_save_turns` | `3` | チェックポイント保存のターン数 |
+| `max_handoff_chars` | `1000` | ノード間で渡す handoff の文字数 |
+| `max_role_candidates` | `8` | 役割ごとのルーティング候補数の上限 |
+| `[tuning.plan_schema]` | 同梱の `defaults.toml` を参照 | 計画・タスクスキーマの文字数・項目数の上限（`max_goal_chars` など 12 キー） |
+| `[tuning.session_schema]` | `max_goal_chars` 800、`max_item_chars` 350、`max_notes` 8、`max_prompt_chars` 1600 | チェックポイントと再開プロンプトの上限 |
 
 ## ポリシーモード
 
@@ -110,12 +127,12 @@ models = {claude = "sonnet", codex = "auto", opencode = "anthropic/claude-sonnet
 ### 役割別ルーティング（`roles`）
 
 ```toml
-roles = {judge = {host = "agy", model = "gemini-2.5-pro", effort = "high"}, coder = {host = "claude", model = "sonnet"}}
+roles = {reviewer = {host = "agy", model = "gemini-2.5-pro", effort = "high"}, coder = {host = "claude", model = "sonnet"}}
 ```
 
-- キーは `coder`、`tester`、`judge`。各テーブルは任意の `host`、`model`、`effort` を取ります（`hosts` / `models` と同じ語彙）。
+- キーは `coder`、`tester`、`reviewer`。各テーブルは任意の `host`、`model`、`effort` を取ります（`hosts` / `models` と同じ語彙）。
 - 省略した項目は `models` / `hosts` に従います。effort だけの指定はホストとモデルを保ったまま effort のみ設定します。
-- 優先順位: ノード > タスク `defaults.roles` > `roles` > タスク `defaults` > `models`。`ego apply --roles '{"judge":{"host":"agy"}}'` で設定できます。
+- 優先順位: ノード > タスク `defaults.roles` > `roles` > タスク `defaults` > `models`。`ego apply --roles '{"reviewer":{"host":"agy"}}'` で設定できます。
 
 ホスト別・複数指定: role の中にホスト名をキーとして書けます。`host` で使うホストを選びます（未指定なら実行時の既定ホスト）。
 

@@ -7,12 +7,20 @@ actually processed, so the figure matches the context the work consumed.
 from __future__ import annotations
 
 TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
+BILLABLE_KEYS = ("input_tokens", "output_tokens", "cache_creation_tokens")
 
 
 def tokens_of(usage: object) -> int:
     if not isinstance(usage, dict):
         return 0
     return sum(int(usage.get(key) or 0) for key in TOKEN_KEYS)
+
+
+def billable_tokens(usage: object) -> int:
+    """The figure the run-wide token cap counts: prompt-cache reads are excluded."""
+    if not isinstance(usage, dict):
+        return 0
+    return sum(int(usage.get(key) or 0) for key in BILLABLE_KEYS)
 
 
 def fmt_tokens(count: int) -> str:

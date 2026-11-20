@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 from ..adapters.runner import RunResult
 from ..domain.config import load_config
+from ..domain.usage import billable_tokens
 from .session import RUN_ID_ENV, context_tokens, latest_open_checkpoint, resume_prompt
 from ..shared.util import ALTER_ROOT_ENV, read_json
 
@@ -60,7 +61,7 @@ def _drop_handoffs(cwd: Path, tag: str) -> None:
 def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callable[..., RunResult], threshold: int,
                segment_turns: int, tag: str, max_turns: int, read_only: bool,
                project_root: Path, on_event: Callable[..., None] | None = None,
-               max_budget_usd: float | None = None, **kw: Any) -> RunResult:
+               token_budget: Any = None, **kw: Any) -> RunResult:
     emit = on_event or (lambda **_: None)
     env = {
         **os.environ,
@@ -69,33 +70,32 @@ def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callab
         "EGO_ALTER_PROMPT_CONTEXT": "0",
     }
     if host != "claude" or read_only or threshold <= 0:
-        return agent(host, prompt, cwd, timeout, max_turns=max_turns, read_only=read_only,
-                     max_budget_usd=max_budget_usd, env=env, **kw)
+        return agent(host, prompt, cwd, timeout, max_turns=max_turns, read_only=read_only, env=env, **kw)
     from .session import _save_request
     env |= {"EGO_RUN": "claude", RUN_ID_ENV: tag}
     deadline = time.monotonic() + timeout
+    cfg = load_config(project_root)
     results: list[RunResult] = []
     used = rotations = 0
     session: str | None = None
     text = prompt
     consumed: dict[str, int] = {}
 
-    def spent() -> float:
-        return sum(r.cost_usd or 0.0 for r in results)
+    def out_of_tokens() -> bool:
+        # Segments of this worker are not charged to the shared budget until the node returns, so subtract them here.
+        return token_budget is not None and bool(results) and \
+            token_budget.remaining() - sum(billable_tokens(r.usage) for r in results) <= 0
 
     try:
         while True:
             left = deadline - time.monotonic()
             if left <= 0 and results:
                 return _merge(results, status="TIMEOUT", rotations=rotations)
-            remaining = None
-            if max_budget_usd is not None:
-                remaining = max_budget_usd - spent()
-                if remaining <= 0 and results:
-                    return _merge(results, status="FAIL", reason="BUDGET_EXHAUSTED", rotations=rotations)
+            if out_of_tokens():
+                return _merge(results, status="FAIL", reason="BUDGET_EXHAUSTED", rotations=rotations)
             turns = max(1, min(segment_turns, max_turns - used))
             r = agent(host, text, cwd, max(1, int(left)), max_turns=turns, read_only=False, resume_session=session,
-                      env=env, max_budget_usd=remaining, **kw)
+                      env=env, **kw)
             results.append(r)
             used += int((r.usage or {}).get("turns") or turns)
             if r.status != "PASS" or r.stop_reason != "error_max_turns":
@@ -107,18 +107,17 @@ def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callab
                 emit(segment=len(results), tokens=tokens, action="continue")
                 session, text = r.session_id, CONTINUE_PROMPT
                 continue
-            save_remaining = (max_budget_usd - spent()) if max_budget_usd is not None else None
-            if save_remaining is not None and save_remaining <= 0:
+            if out_of_tokens():
                 return _merge(results, status="FAIL", reason="BUDGET_EXHAUSTED", rotations=rotations)
-            saved = agent(host, _save_request(tokens, threshold), cwd, max(1, int(deadline - time.monotonic())), max_turns=3,
-                          read_only=False, resume_session=r.session_id, env=env, max_budget_usd=save_remaining, **kw)
+            saved = agent(host, _save_request(tokens, threshold), cwd, max(1, int(deadline - time.monotonic())), max_turns=cfg.tuning.max_save_turns,
+                          read_only=False, resume_session=r.session_id, env=env, **kw)
             results.append(saved)
             checkpoint = latest_open_checkpoint(cwd, run=tag, consumed=consumed)
             if checkpoint is None:
                 return _merge(results, status="FAIL", reason="NO_CHECKPOINT", rotations=rotations)
             consumed[checkpoint["task_id"]] = int(checkpoint.get("revision", 1))
             emit(segment=len(results), tokens=tokens, action="rotate")
-            session, text = None, prompt + "\n\n" + resume_prompt(checkpoint, limits=load_config(project_root).session_schema_limits())
+            session, text = None, prompt + "\n\n" + resume_prompt(checkpoint, limits=cfg.session_schema_limits())
             rotations += 1
     finally:
         _drop_handoffs(cwd, tag)

@@ -1,4 +1,5 @@
-"""Domain layer: config validation, role/effort routing, policy, judge verdicts, retention, and the AST architecture rules."""
+from dataclasses import replace
+"""Domain layer: config validation, role/effort routing, policy, reviewer verdicts, retention, and the AST architecture rules."""
 from pathlib import Path
 import json
 import os
@@ -13,8 +14,8 @@ from ego.adapters.memory import FileMemory
 from ego.adapters.runner import run_agent, parse_host_response
 from ego.cli import main
 from ego.domain import retention
-from ego.domain.config import Config, load_config, save_config
-from ego.domain.judge import parse_verdict
+from ego.domain.config import default_config, load_config, save_config
+from ego.domain.review import parse_verdict
 from ego.domain.policy import check_command, check_hook_payload
 from ego.domain.policy import check_command, check_write
 from ego.domain.task_routing import build_task_prompt, resolve_routes
@@ -182,15 +183,17 @@ def node(i, **kw):
 def test_role_validation():
     with pytest.raises(EgoError):
         validate_task({"nodes": [node("a", role="boss")]})
+    with pytest.raises(EgoError, match="renamed to 'reviewer'"):
+        validate_task({"nodes": [node("a", role="judge")]})
     with pytest.raises(EgoError, match="tests/"):
         validate_task({"nodes": [node("a", role="tester")]})
     with pytest.raises(EgoError, match="read-only"):
-        validate_task({"nodes": [node("a", role="judge")]})
+        validate_task({"nodes": [node("a", role="reviewer")]})
 
 
 def test_role_routing_node_overrides_role_overrides_defaults():
-    spec = {"defaults": {"host": "mock", "roles": {"judge": {"host": "codex"}}}}
-    j = {"id": "j", "role": "judge", "prompt": "p"}
+    spec = {"defaults": {"host": "mock", "roles": {"reviewer": {"host": "codex"}}}}
+    j = {"id": "j", "role": "reviewer", "prompt": "p"}
     assert resolve_routes(j, spec)[1][0].host == "codex"
     assert resolve_routes({**j, "host": "mock"}, spec)[1][0].host == "mock"
     assert resolve_routes({"id": "c", "role": "coder", "prompt": "p"}, spec)[1][0].host == "mock"
@@ -205,42 +208,42 @@ def test_parse_verdict_discards_evidence_free_findings():
     assert v["verdict"] == "REJECT" and v["dropped"] == 1 and v["findings"][0]["line"] == 12
 
 
-def judged(verdict_text, **jkw):
+def reviewed(verdict_text, **jkw):
     return {"nodes": [node("c", role="coder", prompt="[[WRITE:src/a.py]]ok"),
                       {"id": "g", "kind": "gate", "depends_on": ["c"], "argv": ["python3", "--version"]},
-                      {"id": "j", "role": "judge", "depends_on": ["g"], "reviews": "c",
+                      {"id": "j", "role": "reviewer", "depends_on": ["g"], "reviews": "c",
                        "prompt": "[[MOCK:" + verdict_text + "]]", **jkw}]}
 
 
 def test_config_roles_route_host_model_effort_with_precedence():
     import pytest
-    from ego.domain.config import Config
+    from ego.domain.config import default_config
     from ego.shared.util import EgoError
-    roles = {"judge": {"host": "agy", "model": "gemini-2.5-pro", "effort": "high"}, "coder": {"effort": "low"}}
-    j = {"id": "j", "role": "judge", "prompt": "p"}
+    roles = {"reviewer": {"host": "agy", "model": "gemini-2.5-pro", "effort": "high"}, "coder": {"effort": "low"}}
+    j = {"id": "j", "role": "reviewer", "prompt": "p"}
     r = resolve_routes(j, {}, default_roles=roles)[1][0]
     assert (r.host, r.model, r.effort) == ("agy", "gemini-2.5-pro", "high")
     # effort-only role keeps host default and configured model
     c = resolve_routes({"id": "c", "role": "coder", "prompt": "p"}, {}, "claude", default_models={"claude": "sonnet"}, default_roles=roles)[1][0]
     assert (c.host, c.model, c.effort) == ("claude", "sonnet", "low")
     # task defaults.roles beats config roles; node beats both
-    spec = {"defaults": {"roles": {"judge": {"host": "codex", "effort": "max"}}}}
+    spec = {"defaults": {"roles": {"reviewer": {"host": "codex", "effort": "max"}}}}
     r = resolve_routes(j, spec, default_roles=roles)[1][0]
     assert (r.host, r.effort) == ("codex", "max")
     assert resolve_routes({**j, "host": "mock"}, spec, default_roles=roles)[1][0].host == "mock"
-    Config(roles=roles).validate()
-    for bad in ({"boss": {}}, {"judge": {"host": "x"}}, {"judge": {"effort": "huge"}}, {"judge": {"foo": 1}}):
+    replace(default_config(), roles={"reviewer": roles["reviewer"], "coder": roles["coder"]}).validate()
+    for bad in ({"boss": {}}, {"reviewer": {"host": "x"}}, {"reviewer": {"effort": "huge"}}, {"reviewer": {"foo": 1}}):
         with pytest.raises(EgoError):
-            Config(roles=bad).validate()
+            replace(default_config(), roles=bad).validate()
 
 
 def test_role_per_host_and_multi_candidate_specs():
     import pytest
-    from ego.domain.config import Config, parse_role_spec
+    from ego.domain.config import default_config, parse_role_spec
     from ego.shared.util import EgoError
     assert parse_role_spec([{"model": "haiku", "effort": ["low", "high"]}, {"model": "auto"}]) == [("haiku", "low"), ("haiku", "high"), (None, None)]
     roles = {"coder": {"claude": [{"model": "haiku", "effort": ["low", "middle"]}, {"model": "sonnet"}], "codex": {"model": "gpt-5-codex", "effort": "medium"}}}
-    Config(roles=roles).validate()
+    replace(default_config(), roles=roles).validate()
     c = {"id": "c", "role": "coder", "prompt": "p"}
     strategy, routes, _ = resolve_routes(c, {}, "claude", default_roles=roles)
     assert strategy == "fallback"
@@ -251,14 +254,14 @@ def test_role_per_host_and_multi_candidate_specs():
     assert resolve_routes({**c, "model": "opus"}, {}, "claude", default_roles=roles)[1][0].model == "opus"
     for bad in ({"coder": {"claude": "haiku"}}, {"coder": {"claude": ""}}, {"coder": {"claude": {"foo": 1}}}):
         with pytest.raises(EgoError):
-            Config(roles=bad).validate()
+            replace(default_config(), roles=bad).validate()
 
 
 def test_role_spec_table_list_with_pipe_efforts():
-    from ego.domain.config import Config, parse_role_spec
+    from ego.domain.config import default_config, parse_role_spec
     spec = [{"model": "haiku", "effort": ["low", "middle"]}, {"model": "sonnet"}]
     assert parse_role_spec(spec) == [("haiku", "low"), ("haiku", "medium"), ("sonnet", None)]
-    Config(roles={"coder": {"claude": spec}}).validate()
+    replace(default_config(), roles={"coder": {"claude": spec}}).validate()
 
 
 def test_role_spec_effort_is_a_list_only():
@@ -272,7 +275,7 @@ def test_role_spec_effort_is_a_list_only():
 
 
 # ---------------------------------------------------------------------------
-# Domain layer rules (policy, roles, judge verdicts, config validation)
+# Domain layer rules (policy, roles, reviewer verdicts, config validation)
 # ---------------------------------------------------------------------------
 
 def test_strict_policy_refuses_remote_git_mutation_relaxed_permits_it():
@@ -311,7 +314,7 @@ def test_hook_payload_relaxed_allows_ordinary_writes_but_still_blocks_destructiv
 def test_role_write_restrictions():
     from ego.domain.policy import check_role_write
     with pytest.raises(EgoError) as ro:
-        check_role_write("judge", "src/a.py")
+        check_role_write("reviewer", "src/a.py")
     assert ro.value.code == "ROLE_READ_ONLY"
     check_role_write("tester", "tests/test_a.py")
     with pytest.raises(EgoError) as scope:
@@ -320,7 +323,7 @@ def test_role_write_restrictions():
     check_role_write("coder", "src/a.py")
 
 
-def test_judge_verdict_parsing_discards_evidence_free_rejections():
+def test_reviewer_verdict_parsing_discards_evidence_free_rejections():
     assert parse_verdict("VERDICT: APPROVE")["verdict"] == "APPROVE"
     rejected = parse_verdict("VERDICT: REJECT\n- src/a.py:3: wrong branch")
     assert rejected["verdict"] == "REJECT"

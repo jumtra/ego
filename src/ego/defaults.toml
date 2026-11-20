@@ -1,0 +1,62 @@
+# ego の既定値。上限・既定値はここから注入する（コードに数値を書かない）。
+# プロジェクトごとの上書きは .ego/defaults.toml の [tuning] のみ。
+
+[config]
+schema_version = 1
+profile = "balanced"
+policy_mode = "relaxed"
+hosts = ["claude", "codex", "opencode", "agy"]
+code_intelligence = "codegraph"
+knowledge = "alter"
+runtime_mode = "native"
+max_parallel = 4
+max_attempts = 3
+max_rounds = 2
+max_replans = 1
+max_run_tokens = 500000
+timeout_seconds = 7200
+max_turns = 30
+worker_context = "lean"
+worker_segment_turns = 10
+clear_suggest_tokens = 150000
+auto_resume = true
+usage_switch_percent = 99
+run_yolo = true
+alter_analysis = false
+alter_analyzer = { opencode = { model = "opencode/glm-5.3-flash-free" } }
+alter_analysis_timeout_seconds = 600
+models = { claude = { model = "sonnet", effort = "auto" }, codex = { model = "auto", effort = "medium" }, opencode = "auto", agy = { model = "gemini-4-hydrogen-medium", effort = "auto" } }
+roles = { coder = { claude = { model = "haiku", effort = ["medium", "high"] }, codex = { model = "auto", effort = "medium" }, agy = { model = "gemini-4-hydrogen-medium", effort = "medium" }, opencode = { model = "auto", effort = "medium" } }, tester = { claude = { model = "haiku", effort = ["medium", "high"] }, codex = { model = "auto", effort = "low" }, agy = { model = "gemini-4-hydrogen-low", effort = "low" }, opencode = { model = "auto", effort = "low" } }, reviewer = { claude = { model = "haiku", effort = "high" }, codex = { model = "auto", effort = "high" }, agy = { model = "gemini-4-hydrogen-medium", effort = "high" }, opencode = { model = "auto", effort = "high" } } }
+isolation = "worktree"
+cleanup_worktree = true
+tests = []
+allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"]
+
+[tuning]
+max_feedback_chars = 4000
+max_summary_chars = 800
+max_record_chars = 20000
+max_context_hits = 8
+max_save_turns = 3
+max_handoff_chars = 1000
+max_role_candidates = 8
+
+[tuning.plan_schema]
+max_goal_chars = 6000
+max_instructions_chars = 65536
+max_instructions_file_chars = 512
+max_note_chars = 400
+max_note_items = 6
+max_step_items = 10
+max_agent_chars = 128
+max_mcp_items = 8
+max_mcp_chars = 64
+max_context_files = 24
+max_node_id_chars = 64
+max_prompt_chars = 200
+
+[tuning.session_schema]
+max_goal_chars = 800
+max_item_chars = 350
+max_notes = 8
+max_prompt_chars = 1600

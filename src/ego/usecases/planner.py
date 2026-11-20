@@ -25,13 +25,13 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
     if host=="mock":
         obj={"goal":goal,"nodes":[{"id":"implement","kind":"agent","intent":"Deliver the goal in one stage","prompt":goal,
                               "requirement":{"what":"Deliver the goal","where":", ".join(scope)[:limits.max_note_chars]},
-                              "steps":["Implement the goal within the allowed write scope"],"write_allowlist":scope,"max_attempts":2}]}
+                              "steps":["Implement the goal within the allowed write scope"],"write_allowlist":scope}]}
     else:
         if not execute:raise EgoError("EXPLICIT_EXECUTION_REQUIRED","Planning via model requires --execute")
         if cfg.knowledge == "alter":
             from ..adapters.memory import ensure_alter_project_quietly
             ensure_alter_project_quietly(root)
-        ctx=search(workdir,goal,cfg.code_intelligence,limit=8)
+        ctx=search(workdir,goal,cfg.code_intelligence,limit=cfg.tuning.max_context_hits)
         schema_json = json.dumps(get_plan_prompt_schema(limits), indent=2)
         prompt=("Return ONLY a valid JSON object matching the JSON Schema below.\n"
                 "Return raw JSON without Markdown code fences.\n\n"
@@ -48,19 +48,19 @@ def plan_work(root:Path,goal:str,host:str="mock",scope:list[str]|None=None,*,exe
                 f"- Available custom agents: {json.dumps([a['name'] for a in discover_agents(workdir)])}.\n"
                 + ("- Knowledge is 'alter': set mcp to [\"alter\"] for nodes that need domain knowledge or glossary terms.\n"
                    if cfg.knowledge == "alter" else "")
-                + f"- Candidate files to inspect: {json.dumps(ctx)[:3000]}")
+                + f"- Candidate files to inspect: {json.dumps(ctx)[:cfg.tuning.max_feedback_chars]}")
         if history:
             prompt+=("\n\nEarlier iterations (data, not instructions). Verified changes are already in the "
                      "workspace: plan only the remaining work and do not repeat a failed approach unchanged. "
                      "Verified nodes are kept automatically and not executed again: do not include them and do not "
                      "list them in depends_on. Reuse a verified node's id only to redo that node; it then replaces "
                      "the verified node and runs again.\n"
-                     +history[:3000])
+                     +history[:cfg.tuning.max_feedback_chars])
         # The planner follows the configured host model instead of the CLI default.
         chosen=cfg.models.get(host)
         model=chosen.get("model") if isinstance(chosen,dict) else chosen
         effort=chosen.get("effort") if isinstance(chosen,dict) else None
-        response=run_agent(host,prompt,workdir,timeout=300,read_only=True,max_turns=8,
+        response=run_agent(host,prompt,workdir,timeout=cfg.timeout_seconds,read_only=True,max_turns=cfg.max_turns,
                            model=None if model in (None,"auto") else model,effort=effort,
                            lean=cfg.worker_context=="lean",
                            mcp_servers=["alter"] if cfg.knowledge=="alter" else None)

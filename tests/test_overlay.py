@@ -1,7 +1,8 @@
+from dataclasses import replace
 import json
 from pathlib import Path
 
-from ego.domain.config import Config
+from ego.domain.config import Config, default_config
 from ego.domain.templates import MARK_BEGIN
 from ego.usecases.overlay import STATE_DIR, begin_overlay, end_overlay
 
@@ -9,7 +10,7 @@ DEAD_PID = 2**31 - 2  # no process can have this pid
 
 
 def _cfg() -> Config:
-    return Config(hosts=["claude", "codex"])
+    return replace(default_config(), hosts=["claude", "codex"])
 
 
 def test_block_goes_on_line_one_and_the_original_comes_back_byte_for_byte(tmp_path: Path):

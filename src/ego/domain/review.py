@@ -1,4 +1,4 @@
-"""Evidence-gated judge verdicts: a finding without path:line evidence is discarded."""
+"""Evidence-gated reviewer verdicts: a finding without path:line evidence is discarded."""
 from __future__ import annotations
 import re
 from ..shared.util import clip_output
@@ -27,5 +27,5 @@ def parse_verdict(output: str) -> dict:
     return {"verdict": verdict, "findings": findings, "dropped": dropped}
 
 
-def format_findings(findings: list[dict]) -> str:
-    return clip_output("\n".join(f"{f['path']}:{f['line']}: {f['text']}" for f in findings), 4000)
+def format_findings(findings: list[dict], limit: int) -> str:
+    return clip_output("\n".join(f"{f['path']}:{f['line']}: {f['text']}" for f in findings), limit)

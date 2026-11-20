@@ -1,5 +1,6 @@
 """Knowledge: where project knowledge lives per mode (file index + topic files, or alter) and how it is read and written."""
 from __future__ import annotations
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ import pytest
 
 from ego.adapters.knowledge import KnowledgeStore, record_checkpoint_decisions
 from ego.cli import main
-from ego.domain.config import Config, load_config, save_config
+from ego.domain.config import default_config, load_config, save_config
 from ego.domain.templates import generated_files, instruction_block
 from ego.usecases.install import apply_install, installation_plan
 
@@ -108,7 +109,7 @@ def test_cli_add_search_get_index_in_file_mode(project: Path, capsys):
 
 
 def test_cli_knowledge_is_an_error_in_alter_mode(tmp_path: Path, capsys):
-    save_config(tmp_path, Config(knowledge="alter"))
+    save_config(tmp_path, replace(default_config(), knowledge="alter"))
     assert main(["knowledge", "add", "x fact here", "--root", str(tmp_path)]) == 2
     assert "KNOWLEDGE_IS_ALTER" in capsys.readouterr().err
     assert not (tmp_path / ".ego" / "knowledge").exists()
@@ -144,7 +145,7 @@ def test_auto_record_can_be_switched_off_and_skips_checkpoints_without_decisions
 
 def test_alter_mode_checkpoint_does_not_write_the_file_store(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("EGO_ALTER_AUTO_REVIEW", "0")
-    save_config(tmp_path, Config(knowledge="alter"))
+    save_config(tmp_path, replace(default_config(), knowledge="alter"))
     assert _checkpoint(tmp_path, "A decision for alter") == 0
     assert not (tmp_path / ".ego" / "knowledge").exists()
 
@@ -157,27 +158,27 @@ def test_legacy_memory_key_is_read_as_knowledge(tmp_path: Path):
     assert load_config(tmp_path).knowledge == "file"
     (tmp_path / ".ego" / "config.toml").write_text('schema_version = 1\nmemory = "alter-mcp"\nknowledge = "file"\n')
     assert load_config(tmp_path).knowledge == "file"  # the new key wins
-    save_config(tmp_path, Config(knowledge="file"))
+    save_config(tmp_path, replace(default_config(), knowledge="file"))
     saved = (tmp_path / ".ego" / "config.toml").read_text()
     assert 'knowledge = "file"' in saved and "\nmemory =" not in saved
 
 
 def test_instruction_block_names_the_source_of_knowledge_and_rules():
-    alter = instruction_block(Config(knowledge="alter"))
+    alter = instruction_block(replace(default_config(), knowledge="alter"))
     assert "alter project AI usage rules" in alter and "`alter_bootstrap`" in alter and "index.md" not in alter
-    file = instruction_block(Config(knowledge="file"))
+    file = instruction_block(replace(default_config(), knowledge="file"))
     assert ".ego/knowledge/index.md" in file and "ego knowledge add" in file and "alter_bootstrap" not in file
 
 
 def test_no_domain_file_is_generated_any_more():
-    assert ".ego/knowledge/domain.md" not in generated_files(Config(knowledge="file"))
-    assert not any(path.startswith(".ego/knowledge") for path in generated_files(Config(knowledge="alter")))
+    assert ".ego/knowledge/domain.md" not in generated_files(replace(default_config(), knowledge="file"))
+    assert not any(path.startswith(".ego/knowledge") for path in generated_files(replace(default_config(), knowledge="alter")))
 
 
 def test_an_edited_legacy_domain_file_does_not_block_a_sync(tmp_path: Path):
     root = tmp_path / "p"
     root.mkdir()
-    cfg = Config(knowledge="file", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0)
+    cfg = replace(default_config(), knowledge="file", clear_suggest_tokens=0, auto_resume=False, usage_switch_percent=0)
     apply_install(root, cfg)
     legacy = root / ".ego" / "knowledge" / "domain.md"
     legacy.parent.mkdir(parents=True, exist_ok=True)
@@ -202,7 +203,7 @@ def _hook(monkeypatch, capsys, root: Path, event: str, payload: dict) -> dict:
 
 def test_user_prompt_hook_reports_an_unreachable_alter(tmp_path: Path, monkeypatch, capsys):
     from ego.adapters import memory
-    save_config(tmp_path, Config(knowledge="alter"))
+    save_config(tmp_path, replace(default_config(), knowledge="alter"))
     monkeypatch.delenv("EGO_ALTER_PROMPT_CONTEXT", raising=False)
     monkeypatch.setattr(memory, "_alter_mcp_spec", lambda root: None)
     out = _hook(monkeypatch, capsys, tmp_path, "user-prompt", {"prompt": "過去の決定を探したい", "cwd": str(tmp_path)})
@@ -217,9 +218,9 @@ def test_user_prompt_hook_is_silent_in_file_mode(project: Path, monkeypatch, cap
 
 def test_rules_are_generated_for_every_host_and_agents_md_points_at_them():
     from ego.domain.templates import root_instructions
-    files = generated_files(Config(hosts=["claude", "codex", "opencode", "agy"]))
+    files = generated_files(replace(default_config(), hosts=["claude", "codex", "opencode", "agy"]))
     for name in ("engineering", "testing"):
         assert files[f".agents/rules/{name}.md"] == files[f".claude/rules/{name}.md"]
-    blocks = root_instructions(Config(hosts=["claude", "codex"]))
+    blocks = root_instructions(replace(default_config(), hosts=["claude", "codex"]))
     assert "`.agents/rules/`" in blocks["AGENTS.md"] and "read every file" not in blocks["CLAUDE.md"]
-    assert not any(p.startswith(".agents/rules") for p in generated_files(Config(hosts=["claude"])))
+    assert not any(p.startswith(".agents/rules") for p in generated_files(replace(default_config(), hosts=["claude"])))

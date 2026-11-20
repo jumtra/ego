@@ -10,10 +10,10 @@ def sample_task():
             {'id':'impl','kind':'agent','role':'coder','prompt':'Implement login','intent':'login works',
              'requirement':{'who':'user','what':'login','when':'always','where':'web','why':'access'},
              'steps':['add handler'],'write_allowlist':['src/login.py'],'done_when':['handler returns 200'],
-             'checks':[['pytest','-q','tests/test_login.py']],'depends_on':[],'max_retries':1,'model':'sonnet','agent':'coder-x'},
+             'checks':[['pytest','-q','tests/test_login.py']],'depends_on':[],'max_rounds':1,'model':'sonnet','agent':'coder-x'},
             {'id':'check','kind':'gate','depends_on':['impl'],'prompt':'','write_allowlist':[],'checks':[['pytest','-q']]},
-            {'id':'review','kind':'agent','role':'judge','reviews':'impl','depends_on':['impl','check'],
-             'prompt':'Review login','write_allowlist':[],'checks':[],'max_retries':1},
+            {'id':'review','kind':'agent','role':'reviewer','reviews':'impl','depends_on':['impl','check'],
+             'prompt':'Review login','write_allowlist':[],'checks':[],'max_rounds':1},
         ],
     }
 

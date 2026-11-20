@@ -163,8 +163,7 @@ def _agy_failed(raw: str) -> bool:
 def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: str|None = None,
               effort: str|None = None, read_only: bool = True, max_turns: int = 4,
               autonomy: str = "auto", isolated: bool = False, lean: bool = False,
-              mcp_servers: list[str]|tuple[str,...]|None = None,
-              max_budget_usd: float|None = None, resume_session: str|None = None,
+              mcp_servers: list[str]|tuple[str,...]|None = None, resume_session: str|None = None,
               env: dict[str,str]|None = None, allowed_tools: list[str]|tuple[str,...]|None = None) -> RunResult:
     start = time.monotonic()
     if host == "mock":
@@ -175,7 +174,7 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
     stdin_supported = host in ("claude", "codex")
     project_root = Path(env[ALTER_ROOT_ENV]) if env and env.get(ALTER_ROOT_ENV) else None
     command = build_command(host, prompt, model=model, effort=effort, read_only=read_only, max_turns=max_turns, use_stdin=stdin_supported, autonomy=autonomy, isolated=isolated,
-                            lean=lean, mcp_servers=mcp_servers, cwd=cwd, max_budget_usd=max_budget_usd, resume_session=resume_session,
+                            lean=lean, mcp_servers=mcp_servers, cwd=cwd, resume_session=resume_session,
                             allowed_tools=allowed_tools, project_root=project_root)
     try:
         code,stdout,stderr,seconds = run_process(command, cwd, timeout, input_text=prompt if stdin_supported else None, env=env)

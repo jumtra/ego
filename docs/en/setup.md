@@ -138,7 +138,7 @@ The four agents are `implementer`, `reviewer` (read-only), `fixer` and `evolver`
 
 `ego apply` never changes `CLAUDE.md` / `AGENTS.md`. `ego run` places the `EGO:BEGIN` / `EGO:END` block on top at launch and removes only that block at exit, restoring the original content (after a crash, the next `ego run` restores it). A file ego created is deleted at exit. The rest of the file is yours. Every other generated file is tracked by hash: ego replaces a file only while it still matches what ego wrote, and reports a conflict (`BLOCKED`) otherwise.
 
-Runtime state lives under `.ego/` too: `state/` (runs, loops, events), `memory/` (memory items, checkpoints in `handoffs/`), `backups/` (apply snapshots), `locks/`. Keep `.ego/state/`, `.ego/backups/`, `.ego/locks/` and `.ego/memory/handoffs/` out of Git.
+Runtime state lives under `.ego/` too: `state/` (runs, events), `memory/` (memory items, checkpoints in `handoffs/`), `backups/` (apply snapshots), `locks/`. Keep `.ego/state/`, `.ego/backups/`, `.ego/locks/` and `.ego/memory/handoffs/` out of Git.
 
 ## Change settings later
 
