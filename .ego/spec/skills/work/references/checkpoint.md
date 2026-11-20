@@ -2,7 +2,15 @@
 
 Write a compact factual handoff:
 
-`ego session checkpoint --task-id <id> --goal "..." --completed "verified result" --next "next action" --evidence "file/test reference" --status <status> --root .`
+`ego session checkpoint --task-id <id> --goal "..." --completed "verified result" --next "next action" --evidence "file/test reference" --decision "decision made" --blocker "blocker or none" --status <status> --kind <kind> --root .`
+
+Choose `--kind` to match the session phase (it adjusts field priority and resume framing):
+- `ongoing` (default): work is mid-flight (context rotation / pause). Focus on `--next`, `--blocker`, uncommitted changes and `--decision`.
+- `plan_ready`: planning finished cleanly (`work-plan` approved, task JSON written). Focus on `--next` (run command / plan path) and `--decision`; omit unstarted `--evidence`.
+- `plan_resume`: planning paused mid-way. Focus on `--blocker` (open questions), `--next` (remaining design points) and `--decision`.
+- `completed`: work finished and validated (auto-selected when `--status COMPLETED`). Focus on `--completed`, `--evidence` and `--decision`.
+
+Bounds (`max_goal_chars`, `max_item_chars`, `max_notes`, `max_prompt_chars`) are configurable via `[tuning.session_schema]` in `.ego/defaults.toml`.
 
 Status is IN_PROGRESS while work remains, BLOCKED on a blocker, VERIFIED for verified but unapplied work, COMPLETED only after successful validation and application. Include decisions, known failures and uncommitted changes, not raw transcripts or secrets. Confirm that the checkpoint succeeded.
 
@@ -12,6 +20,6 @@ When `ego session resume` returns `auto_resume_after_clear: true` (Claude Code w
 
 Checkpoints are shared by every CLI in the project (Claude Code, Codex, OpenCode, AGY) and record which one saved them. To pick up another CLI's work in this session, run `ego session resume --from <claude|codex|opencode|agy> --root .` and follow `resume_prompt` (no clear needed); `ego session list --root .` shows all open checkpoints. To send work the other way, checkpoint, then give the user the `launch_command` from `ego session handoff <id> --to <cli> --root .`; you cannot open the other CLI yourself.
 
-Managed runs and goal loops checkpoint automatically under their run or loop ID, with a new CLI session per node.
+Managed runs checkpoint automatically under their run ID, with a new CLI session per node.
 
 A managed run's checkpoint is rewritten as each node finishes (also inside a parallel wave), so it is current after any node. While the run's lock (`.ego/locks/<run_id>.lock`) is held, `ego session resume --from`, `ego session handoff` and the context-clear instructions refuse that checkpoint with `RUN_ACTIVE`; without a task ID, locked managed checkpoints are skipped. A run whose process died shows as `INTERRUPTED` in `ego work status`: resume it with `ego work resume` (see `managed`), not by continuing its checkpoint by hand.
