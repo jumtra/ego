@@ -11,6 +11,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import time
@@ -53,6 +54,23 @@ def _merge_notes(prev_items: list[str], new_items: list[str], *, limits: Session
     return list(dict.fromkeys([*prev_items, *new_items]))[-limits.max_notes:]
 
 
+_PLAN_KINDS = ("plan_ready", "plan_resume")
+
+
+def _infer_kind(root: Path, task_id: str, status: str, prev_open: dict[str, Any] | None) -> str:
+    """kind が省略されたときの自動判定。task JSON と run の有無で計画フェーズを見分ける。"""
+    if status == "COMPLETED":
+        return "completed"
+    prev_kind = (prev_open.get("kind") if prev_open else None) or "ongoing"
+    task_file = root / ".ego" / "state" / "tasks" / f"{task_id}.json"
+    runs_dir = root / ".ego" / "state" / "runs"
+    pattern = re.compile(rf"^run-{re.escape(task_id)}(-\d+)?$")
+    has_run = runs_dir.is_dir() and any(pattern.match(p.name) for p in runs_dir.iterdir())
+    if task_file.is_file() and not has_run:
+        return "plan_ready"
+    if prev_kind in _PLAN_KINDS:
+        return "ongoing" if has_run else "plan_resume"
+    return prev_kind
 
 
 def _run_lock_held(root: Path, task_id: str) -> bool:
@@ -124,9 +142,7 @@ def save_checkpoint(
                 return list(prev_open.get(key) or [])
             return _notes(values, limits=eff_limits)
 
-        resolved_kind = kind or (
-            "completed" if status == "COMPLETED" else (prev_open.get("kind") if prev_open else None) or "ongoing"
-        )
+        resolved_kind = kind or _infer_kind(root, task_id, status, prev_open)
         record = {
             "schema_version": SCHEMA,
             "task_id": task_id,
