@@ -175,7 +175,7 @@ def test_project_apply_lifecycle(tmp_path: Path):
     assert cmd(proj, "apply", "--check").returncode == 0
     status = output(cmd(proj, "status"))
     assert status["status"] == "UP_TO_DATE"
-    assert status["installed_version"] == "0.0.40"
+    assert status["installed_version"] == "0.0.41"
     assert status["last_snapshot_id"] == snapshot_id
 
     # 5. Rollback restores previous state
