@@ -55,6 +55,6 @@
 <text x="60" y="1154" font-size="24" fill="#f8fafc" font-weight="700">Plan before you edit.</text>
 <text x="44" y="1188" font-size="15" fill="#cbd5e1" font-weight="400">AI CLI: /work-plan → Node graph</text>
 <text x="44" y="1210" font-size="15" fill="#cbd5e1" font-weight="400">→ Approve</text>
-<text x="44" y="1238" font-size="13" fill="#7dd3fc" font-weight="400">Or ego work loop · Bounded &amp; reversible</text>
+<text x="44" y="1238" font-size="13" fill="#7dd3fc" font-weight="400">Retry · review · replan, all bounded &amp; reversible</text>
 <text x="24" y="1298" font-size="12" fill="#9cb1ca" font-weight="400">Works beyond Python · Local memory · Code search</text>
 </g></svg>
