@@ -1680,3 +1680,44 @@ def test_planner_tokens_are_charged_to_the_run_budget(tmp_path: Path, monkeypatc
     spec = {"goal": "g", "on_exhausted": "replan", "max_replans": 1, "nodes": [_code_node("check-a", "check.py")]}
     result = replan.run_with_replans(tmp_path, spec, run_id="r-e", host="mock", trust_cli=False)
     assert result["final_status"] == "BUDGET_EXHAUSTED"
+
+
+def test_has_parallel_writers_only_for_unordered_writer_pairs():
+    def node(nid, deps=(), kind="agent", role=None):
+        n = {"id": nid, "kind": kind, "depends_on": list(deps)}
+        if role:
+            n["role"] = role
+        return n
+
+    # A serial chain of writers never runs two writers at once.
+    assert work._has_parallel_writers([node("a"), node("b", ["a"]), node("c", ["b"])]) is False
+    # Two independent writers can run at the same time.
+    assert work._has_parallel_writers([node("a"), node("b")]) is True
+    # A reviewer and a gate never write, so they do not count as writers.
+    assert work._has_parallel_writers([node("a"), node("r", ["a"], role="reviewer"), node("g", kind="gate")]) is False
+    # d depends only on a, so it can run alongside b and its descendant c.
+    assert work._has_parallel_writers([node("a"), node("b", ["a"]), node("c", ["b"]), node("d", ["a"])]) is True
+
+
+def test_auto_isolation_uses_worktree_only_for_parallel_writers(tmp_path: Path):
+    from unittest.mock import patch
+    assert default_config().isolation == "auto"
+    _init_git_repo(tmp_path, {"seed.txt": "seed\n"})
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        node_id = re.search(r"NODE:(\w+)", prompt).group(1)
+        (Path(cwd) / f"{node_id}.txt").write_text("changed\n")
+        return RunResult("PASS", "ok", "", 0, 0.0, host)
+
+    def writer(nid, deps=()):
+        return {"id": nid, "kind": "agent", "intent": f"NODE:{nid}", "prompt": f"NODE:{nid}", "depends_on": list(deps), "write_allowlist": ["**"]}
+
+    serial = {"goal": "serial writers", "nodes": [writer("s1"), writer("s2", ["s1"])]}
+    parallel = {"goal": "parallel writers", "nodes": [writer("p1"), writer("p2")]}
+
+    with patch("ego.usecases.work.run_agent", side_effect=fake_agent):
+        serial_res = work._execute(tmp_path, serial, work.Progress(tmp_path / "progress.jsonl"), apply=False, cleanup_worktree=False)
+        parallel_res = work._execute(tmp_path, parallel, work.Progress(tmp_path / "progress.jsonl"), apply=False, cleanup_worktree=False)
+
+    assert serial_res["final_status"] == "PASSED" and serial_res["worktree"] is False
+    assert parallel_res["final_status"] == "PASSED" and parallel_res["worktree"] is True

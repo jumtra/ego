@@ -24,7 +24,7 @@ clear_suggest_tokens = 200000
 usage_switch_percent = 99
 run_yolo = true
 models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}
-isolation = "copy"
+isolation = "auto"
 cleanup_worktree = true
 tests = []
 allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"]
@@ -71,7 +71,7 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `max_turns` | `30` | 1–200 | Agent turns per worker invocation |
 | `worker_context` | `"lean"` | `lean`, `inherit` | `lean` starts Claude workers without your MCP servers; `inherit` keeps them |
 | `worker_segment_turns` | `10` | 1–200 | Claude workers run this many turns per segment; between segments the context is measured against `clear_suggest_tokens` and, at the limit, the worker checkpoints and continues in a fresh session |
-| `isolation` | `"copy"` | `copy`, `worktree` | Where a run works: a staging copy, or a Git worktree. `--worktree` overrides per run |
+| `isolation` | `"auto"` | `auto`, `copy`, `worktree` | Where a run works: a staging copy, or a Git worktree. `auto` uses a worktree only when two writer nodes (coder/tester/code/worker nodes with no dependency path between them) can run at the same time, and a staging copy otherwise. `worktree` always uses one, `copy` never does. `--worktree` overrides per run |
 | `cleanup_worktree` | `true` | bool | Remove the worktree after the run. `--keep-worktree` overrides per run |
 | `allow_commands` | common toolchains | list of command names | Executables that `checks` and `--done-check` may start. Shells and `python -c` are always refused |
 

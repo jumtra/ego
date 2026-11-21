@@ -183,6 +183,37 @@ def _effective_status(root:Path, record:dict)->str:
     return str(record.get("final_status") or "UNKNOWN")
 
 
+def _is_writer(node:dict)->bool:
+    """Nodes that may change files. gate, splitter and reviewer never write, so they never get a private worktree."""
+    return node.get("kind","agent") not in ("gate","splitter") and node.get("role")!="reviewer"
+
+
+def _has_parallel_writers(nodes:list[dict])->bool:
+    """True when two writer nodes can run at the same time: neither depends on the other, directly or transitively.
+
+    Only then does the 3-way merge of worktree isolation matter. Serial writers are safe in copy mode.
+    """
+    amap={n["id"]:n for n in nodes}
+    ancestors:dict[str,set[str]]={}
+    def ancestors_of(nid:str)->set[str]:
+        if nid not in ancestors:
+            acc:set[str]=set()
+            for dep in amap[nid].get("depends_on") or []:
+                acc|={dep}|ancestors_of(dep)
+            ancestors[nid]=acc
+        return ancestors[nid]
+    writers=[n["id"] for n in nodes if _is_writer(n)]
+    return any(a not in ancestors_of(b) and b not in ancestors_of(a)
+               for i,a in enumerate(writers) for b in writers[i+1:])
+
+
+def _worktree_mode(cfg, nodes:list[dict], worktree:bool|None)->bool:
+    """An explicit worktree flag wins. `auto` isolates a run only when two writer nodes can run in parallel."""
+    if worktree is not None:return worktree
+    if cfg.isolation=="auto":return _has_parallel_writers(nodes)
+    return cfg.isolation=="worktree"
+
+
 def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
               autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
               token_budget:TokenBudget|None=None, progress:Progress|None=None, project_root:Path,
@@ -211,7 +242,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             keep_branch=False
             try:
                 with _STAGING_LOCK:
-                    if use_worktree:
+                    if use_worktree and _is_writer(node):
                         base_commit=git_head(staging)
                         cand_branch=f"ego-node-{run_id}-{node['id']}-{iteration}-{uuid.uuid4().hex[:6]}"
                         if base_commit and git_worktree_add(staging,work,commit_or_branch=base_commit,new_branch=cand_branch):
@@ -452,7 +483,6 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
     if cfg.knowledge == "alter":
         from ..adapters.memory import ensure_alter_project_quietly
         ensure_alter_project_quietly(root)
-    use_worktree = worktree if worktree is not None else (cfg.isolation == "worktree")
     seed_dir=None
     if seed_from:
         # Continue from the verified staging of an earlier run: only edits of
@@ -461,9 +491,11 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         seed_dir=root/".ego"/"state"/"runs"/seed_from/"staging"
         seed_record=read_json(seed_dir.parent/"record.json")
         if not seed_dir.is_dir() or not seed_record:raise EgoError("SEED_MISSING",f"No staging for run {seed_from}",3)
-        use_worktree = use_worktree and bool(seed_record.get("worktree")) and git_is_repo(seed_dir)
     should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
     nodes=validate_task(spec, limits=cfg.plan_schema_limits(), caps=cfg)
+    use_worktree=_worktree_mode(cfg,nodes,worktree)
+    if seed_from:
+        use_worktree=use_worktree and bool(seed_record.get("worktree")) and git_is_repo(seed_dir)
     if apply and not approve:raise EgoError("APPROVAL_REQUIRED", "--apply requires --approve")
     if autonomy=="bypass" and not isolated:
         raise EgoError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)
