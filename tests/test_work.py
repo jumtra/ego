@@ -280,7 +280,7 @@ def test_worktree_isolation_and_cleanup(tmp_path):
     from ego.usecases.install import apply_install
     from ego.domain.config import default_config
     apply_install(root, default_config())
-    subprocess.run(["git", "add", "."], cwd=root, capture_output=True, check=True)
+    subprocess.run(["git", "add", "-f", "."], cwd=root, capture_output=True, check=True)  # generated files are git-excluded
     subprocess.run(["git", "commit", "-m", "add ego"], cwd=root, capture_output=True, check=True)
 
     (root / "write_script.py").write_text("from pathlib import Path\nPath('result.txt').write_text('done')\n")

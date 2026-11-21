@@ -1088,3 +1088,27 @@ def test_sync_keeps_file_memory_without_alter_mcp_or_when_opted_out(tmp_path: Pa
     monkeypatch.setenv("EGO_ALTER_MCP_COMMAND", "true")
     monkeypatch.setenv("EGO_SYNC_KEEP_MEMORY", "1")
     assert project_info(root.resolve())["status"] == "UP_TO_DATE"
+
+
+def test_apply_adds_generated_files_to_git_exclude(tmp_path):
+    from ego.usecases.install import apply_install
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".claude" / "skills" / "mine").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills" / "mine" / "SKILL.md").write_text("own\n")
+    cfg = default_config(tmp_path)
+    cfg.hosts = ["claude"]
+    first = apply_install(tmp_path, cfg)
+    assert first["git_exclude"]["status"] == "updated"
+    lines = (tmp_path / ".git" / "info" / "exclude").read_text().splitlines()
+    assert "/.ego/" in lines and "/.claude/skills/work/SKILL.md" in lines
+    assert not any("mine" in x for x in lines)
+    status = subprocess.run(["git", "status", "--porcelain", "-uall"], cwd=tmp_path, capture_output=True, text=True).stdout
+    assert ".claude/skills/mine/SKILL.md" in status and ".ego" not in status and "skills/work" not in status
+    assert apply_install(tmp_path, cfg)["git_exclude"]["status"] == "unchanged"
+
+
+def test_apply_without_git_skips_exclude(tmp_path):
+    from ego.usecases.install import apply_install
+    cfg = default_config(tmp_path)
+    cfg.hosts = ["claude"]
+    assert apply_install(tmp_path, cfg)["git_exclude"]["status"] == "skipped"
