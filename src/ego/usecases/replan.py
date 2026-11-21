@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..domain.config import load_config
+from ..domain.config import load_config, resolve_max_run_tokens
 from ..domain.policy import check_command
 from ..shared.util import EgoError, clip_output, filehash, json_text, safe_path, sha256
 from .planner import plan_work
@@ -106,10 +106,11 @@ def _out_of_scope(spec: dict, allowed: set[str], cfg) -> bool:
     return False
 
 
-def run_with_replans(root: Path, spec: dict, *, run_id: str | None, host: str | None, trust_cli: bool, **kw) -> dict:
+def run_with_replans(root: Path, spec: dict, *, run_id: str | None, host: str | None, trust_cli: bool,
+                     max_run_tokens: int | None = None, **kw) -> dict:
     root = root.resolve()
     cfg = load_config(root)
-    budget = TokenBudget(cfg.max_run_tokens)
+    budget = TokenBudget(resolve_max_run_tokens(cfg, max_run_tokens))
     allowed = {p for n in spec.get("nodes", []) for p in n.get("write_allowlist", [])}
     may_replan = trust_cli or host == "mock"
     result = execute(root, spec, run_id=run_id, host=host, trust_cli=trust_cli, token_budget=budget, **kw)

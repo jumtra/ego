@@ -841,7 +841,7 @@ def test_handoffs_are_dropped_even_when_the_worker_crashes(tmp_path, monkeypatch
 
 
 def test_other_hosts_and_read_only_nodes_run_once(tmp_path, monkeypatch):
-    for host, ro in (("codex", False), ("claude", True)):
+    for host, ro in (("mock", False), ("claude", True), ("codex", True), ("opencode", True), ("agy", True)):
         r, calls, _ = drive(tmp_path, monkeypatch, [result(stop="error_max_turns")], tokens=5000, host=host, read_only=ro)
         assert len(calls) == 1 and "resume_session" not in calls[0] and calls[0]["max_turns"] == 10
 
@@ -2148,3 +2148,474 @@ def test_stale_partial_is_cleared_and_interrupt_and_segment_persist_partial(tmp_
     res_c = execute(tmp_path, spec_c, host="claude", trust_cli=True, run_id="rl-seg")
     assert res_c["final_status"] == "PASSED"
     assert not (tmp_path / ".ego/state/runs/rl-seg/partial/n3").exists()
+
+
+def test_resume_resets_token_budget_and_keeps_cumulative_usage(tmp_path: Path, monkeypatch):
+    save_config(tmp_path, replace(default_config(), knowledge="file", max_run_tokens=1000))
+    seen: list[str] = []
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        node_id = "n1" if "STEP:n1" in prompt else "n2"
+        seen.append(node_id)
+        if node_id == "n1":
+            (Path(cwd) / "a.txt").write_text("a\n")
+            return RunResult("PASS", "n1 ok", "", 0, 0.1, host, usage={"input_tokens": 800, "output_tokens": 300})
+        (Path(cwd) / "b.txt").write_text("b\n")
+        return RunResult("PASS", "n2 ok", "", 0, 0.1, host, usage={"input_tokens": 500, "output_tokens": 300})
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    spec = {
+        "goal": "Reset token cap on resume",
+        "nodes": [
+            {"id": "n1", "kind": "agent", "prompt": "STEP:n1", "write_allowlist": ["a.txt"], "max_attempts": 1},
+            {"id": "n2", "kind": "agent", "depends_on": ["n1"], "prompt": "STEP:n2", "write_allowlist": ["b.txt"], "max_attempts": 1},
+        ],
+    }
+    first = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="budget-reset", task_file="task.json")
+    assert first["final_status"] == "BUDGET_EXHAUSTED"
+    assert first["node_status"] == {"n1": "PASSED"}
+    assert seen == ["n1"]
+
+    compact = compact_result(first, task_file="task.json")
+    assert "ego work resume budget-reset" in (compact.get("next_action") or "")
+    assert "max_run_tokens" in compact["message"] and "トークン上限" in compact["message"]
+
+    resumed = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="budget-reset", resume=True, task_file="task.json")
+    assert resumed["final_status"] == "PASSED"
+    assert seen == ["n1", "n2"]
+    assert resumed["usage"]["input_tokens"] == 1300
+    assert resumed["usage"]["output_tokens"] == 600
+    assert resumed["usage"]["work_tokens"] == 1900
+
+
+def test_max_run_tokens_zero_disables_cap_for_run_and_worker(tmp_path: Path, monkeypatch):
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text(
+        'knowledge = "file"\n'
+        'max_run_tokens = 0\n'
+        'clear_suggest_tokens = 100000\n'
+        'worker_segment_turns = 2\n'
+    )
+    calls = 0
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return RunResult(
+                "PASS", "seg 1", "", 0, 0.1, host,
+                session_id="s1", stop_reason="error_max_turns",
+                usage={"input_tokens": 3000000, "output_tokens": 2000000, "turns": 2},
+            )
+        if calls == 2:
+            (Path(cwd) / "a.txt").write_text("a\n")
+            return RunResult("PASS", "seg 2", "", 0, 0.1, host, session_id="s1", usage={"input_tokens": 1000000, "output_tokens": 500000})
+        (Path(cwd) / "b.txt").write_text("b\n")
+        return RunResult("PASS", "n2 ok", "", 0, 0.1, host, usage={"input_tokens": 4000000, "output_tokens": 1000000})
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    spec = {
+        "goal": "Unlimited budget when max_run_tokens = 0",
+        "nodes": [
+            {"id": "n1", "kind": "agent", "prompt": "Write a.txt", "write_allowlist": ["a.txt"], "max_turns": 6, "max_attempts": 1},
+            {"id": "n2", "kind": "agent", "depends_on": ["n1"], "prompt": "Write b.txt", "write_allowlist": ["b.txt"], "max_attempts": 1},
+        ],
+    }
+    res = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="budget-zero")
+    assert res["final_status"] == "PASSED"
+    assert calls == 3
+    assert res["usage"]["work_tokens"] == 11500000
+
+
+def test_cli_max_run_tokens_override_and_validation(tmp_path: Path, monkeypatch, capsys):
+    from ego.cli import main as cli_main
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text('knowledge = "file"\n')
+    task_path = tmp_path / "task.json"
+    spec = {
+        "goal": "CLI --max-run-tokens override",
+        "nodes": [
+            {"id": "n1", "kind": "agent", "prompt": "STEP:n1", "write_allowlist": ["a.txt"], "max_attempts": 1},
+            {"id": "n2", "kind": "agent", "depends_on": ["n1"], "prompt": "STEP:n2", "write_allowlist": ["b.txt"], "max_attempts": 1},
+        ],
+    }
+    task_path.write_text(json.dumps(spec))
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        if "STEP:n1" in prompt:
+            (Path(cwd) / "a.txt").write_text("a\n")
+            return RunResult("PASS", "n1 ok", "", 0, 0.1, host, usage={"input_tokens": 800, "output_tokens": 300})
+        (Path(cwd) / "b.txt").write_text("b\n")
+        return RunResult("PASS", "n2 ok", "", 0, 0.1, host, usage={"input_tokens": 1500, "output_tokens": 500})
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    code1 = cli_main([
+        "work", "run",
+        "--root", str(tmp_path),
+        "--task", str(task_path),
+        "--host", "claude",
+        "--run-id", "cli-cap",
+        "--max-run-tokens", "1000",
+        "--trust-cli",
+    ])
+    out1 = json.loads(capsys.readouterr().out)
+    assert code1 == 5
+    assert out1["final_status"] == "BUDGET_EXHAUSTED"
+    assert out1["node_status"] == {"n1": "PASSED"}
+
+    bad_code = cli_main([
+        "work", "resume", "cli-cap",
+        "--root", str(tmp_path),
+        "--task", str(task_path),
+        "--max-run-tokens", "500",
+        "--trust-cli",
+    ])
+    bad_err = capsys.readouterr().err
+    assert bad_code == 2 and '"INVALID_CONFIG"' in bad_err
+
+    code2 = cli_main([
+        "work", "resume", "cli-cap",
+        "--root", str(tmp_path),
+        "--task", str(task_path),
+        "--max-run-tokens", "0",
+        "--trust-cli",
+    ])
+    out2 = json.loads(capsys.readouterr().out)
+    assert code2 == 0
+    assert out2["final_status"] == "PASSED"
+    assert out2["node_status"] == {"n1": "PASSED", "n2": "PASSED"}
+
+
+def test_worker_mid_node_budget_exhausted_preserves_partial_with_max_attempts_1(tmp_path: Path, monkeypatch):
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text(
+        'knowledge = "file"\n'
+        'max_run_tokens = 1000\n'
+        'clear_suggest_tokens = 100000\n'
+        'worker_segment_turns = 2\n'
+    )
+    seen: list[dict] = []
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        p = Path(cwd)
+        seen.append({
+            "prompt": prompt,
+            "a_text": (p / "a.txt").read_text() if (p / "a.txt").exists() else None,
+        })
+        if len(seen) == 1:
+            (p / "a.txt").write_text("part-1\n")
+            return RunResult(
+                "PASS", "Created a.txt", "", 0, 0.1, host,
+                session_id="s1", stop_reason="error_max_turns",
+                usage={"input_tokens": 1100, "output_tokens": 100, "turns": 2},
+            )
+        (p / "b.txt").write_text("part-2\n")
+        return RunResult("PASS", "Done b.txt", "", 0, 0.1, host, usage={"input_tokens": 400, "output_tokens": 100})
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    spec = {
+        "goal": "Preserve partial when worker exhausts budget mid-node",
+        "nodes": [{
+            "id": "n1",
+            "kind": "agent",
+            "prompt": "Write a.txt and b.txt",
+            "write_allowlist": ["a.txt", "b.txt"],
+            "max_turns": 6,
+            "max_attempts": 1,
+        }],
+    }
+    first = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="mid-budget")
+    assert first["final_status"] == "BUDGET_EXHAUSTED"
+    assert (tmp_path / ".ego/state/runs/mid-budget/partial/n1/files/a.txt").read_text() == "part-1\n"
+
+    resumed = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="mid-budget", resume=True)
+    assert resumed["final_status"] == "PASSED"
+    assert seen[1]["a_text"] == "part-1\n"
+    assert "BUDGET_EXHAUSTED" in seen[1]["prompt"] and "a.txt" in seen[1]["prompt"]
+    staging = tmp_path / ".ego/state/runs/mid-budget/staging"
+    assert (staging / "a.txt").read_text() == "part-1\n"
+    assert (staging / "b.txt").read_text() == "part-2\n"
+
+
+def test_default_max_run_tokens_is_unlimited_and_does_not_stop_run(tmp_path: Path, monkeypatch):
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text('knowledge = "file"\n')
+    calls = 0
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        nonlocal calls
+        calls += 1
+        fname = "a.txt" if calls == 1 else "b.txt"
+        (Path(cwd) / fname).write_text(f"{calls}\n")
+        return RunResult("PASS", f"ok {calls}", "", 0, 0.1, host, usage={"input_tokens": 8000000, "output_tokens": 2000000})
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    spec = {
+        "goal": "Default max_run_tokens = 0 never interrupts normal runs",
+        "nodes": [
+            {"id": "n1", "kind": "agent", "prompt": "Write a.txt", "write_allowlist": ["a.txt"], "max_attempts": 1},
+            {"id": "n2", "kind": "agent", "depends_on": ["n1"], "prompt": "Write b.txt", "write_allowlist": ["b.txt"], "max_attempts": 1},
+        ],
+    }
+    res = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="default-unlimited")
+    assert res["final_status"] == "PASSED"
+    assert calls == 2
+    assert res["usage"]["work_tokens"] == 20000000
+
+
+@pytest.mark.parametrize("host", ["agy", "codex", "opencode"])
+def test_non_claude_worker_rotates_with_checkpoint_across_hosts(tmp_path: Path, host: str):
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text('knowledge = "file"\n')
+    calls: list[dict] = []
+    events: list[dict] = []
+
+    def fake_agent(h, prompt, cwd, timeout, **kw):
+        calls.append({"host": h, "prompt": prompt, **kw})
+        if len(calls) == 1:
+            return RunResult("PASS", "partial work", "", 0, 0.1, h, session_id="sid-1",
+                             stop_reason="context_limit", context_tokens=2100, usage={"input_tokens": 2100, "output_tokens": 50})
+        if len(calls) == 2:
+            save_checkpoint(cwd, "t-rot", goal="goal", next_steps=["finish C"], run=kw["env"]["EGO_RUN_ID"])
+            return RunResult("PASS", "saved", "", 0, 0.1, h, session_id="sid-1")
+        return RunResult("PASS", "completed", "", 0, 0.1, h, session_id="sid-2")
+
+    r = run_worker(
+        host, "DO WORK", tmp_path, 120, agent=fake_agent, threshold=1500, segment_turns=2,
+        tag="n1-1-abc", max_turns=10, read_only=False, project_root=tmp_path,
+        on_event=lambda **f: events.append(f),
+    )
+    assert r.status == "PASS" and r.rotations == 1 and r.segments == 3
+    assert calls[0]["context_limit"] == 1500 and callable(calls[0]["context_probe"])
+    assert calls[1]["resume_session"] == "sid-1" and "2100" in calls[1]["prompt"]
+    assert "resume_session" not in calls[2]
+    assert "DO WORK" in calls[2]["prompt"] and "finish C" in calls[2]["prompt"]
+    assert events == [{"segment": 2, "tokens": 2100, "action": "rotate"}]
+    assert not list((tmp_path / ".ego/memory/handoffs").glob("*.json"))
+
+
+@pytest.mark.parametrize("host", ["agy", "codex", "opencode"])
+@pytest.mark.parametrize("with_sid", [True, False])
+def test_non_claude_worker_mechanical_fallback_when_checkpoint_missing(tmp_path: Path, host: str, with_sid: bool):
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text('knowledge = "file"\n')
+    calls: list[dict] = []
+    events: list[dict] = []
+
+    def fake_agent(h, prompt, cwd, timeout, **kw):
+        calls.append({"host": h, "prompt": prompt, **kw})
+        if len(calls) == 1:
+            (cwd / "wip.txt").write_text("partial-content\n", encoding="utf-8")
+            return RunResult("PASS", "wrote wip.txt and stopped halfway", "", 0, 0.1, h,
+                             session_id="sid-1" if with_sid else None,
+                             stop_reason="context_limit", context_tokens=2400)
+        if with_sid and len(calls) == 2:
+            # Model forgets to save a checkpoint; fallback must still resume in a fresh session.
+            return RunResult("PASS", "no checkpoint written", "", 0, 0.1, h, session_id="sid-1")
+        return RunResult("PASS", "finished after fallback", "", 0, 0.1, h, session_id="sid-2")
+
+    r = run_worker(
+        host, "DO WORK", tmp_path, 120, agent=fake_agent, threshold=1500, segment_turns=2,
+        tag="n1-1-fb", max_turns=10, read_only=False, project_root=tmp_path,
+        on_event=lambda **f: events.append(f),
+    )
+    expected_segments = 3 if with_sid else 2
+    assert r.status == "PASS" and r.rotations == 1 and r.segments == expected_segments
+    assert events == [{"segment": expected_segments - 1, "tokens": 2400, "action": "rotate", "fallback": True}]
+    fresh_prompt = calls[-1]["prompt"]
+    assert "resume_session" not in calls[-1]
+    assert "Context rotation fallback" in fresh_prompt
+    assert "wip.txt" in fresh_prompt
+    assert "wrote wip.txt and stopped halfway" in fresh_prompt
+
+
+def test_non_claude_worker_stops_at_max_rotations(tmp_path: Path):
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text('knowledge = "file"\n')
+    calls = 0
+
+    def fake_agent(h, prompt, cwd, timeout, **kw):
+        nonlocal calls
+        calls += 1
+        return RunResult("PASS", f"loop {calls}", "", 0, 0.05, h, session_id=None,
+                         stop_reason="context_limit", context_tokens=5000)
+
+    r = run_worker(
+        "agy", "DO WORK", tmp_path, 120, agent=fake_agent, threshold=1000, segment_turns=2,
+        tag="n1-1-maxrot", max_turns=3, read_only=False, project_root=tmp_path,
+    )
+    assert r.status == "FAIL" and r.reason == "MAX_ROTATIONS" and r.rotations == 3 and calls == 4
+
+
+def test_worker_context_tokens_for_host_reads_codex_opencode_agy(tmp_path: Path, monkeypatch):
+    import sqlite3
+    # Codex rollout
+    codex_home = tmp_path / "codex"
+    rollout = codex_home / "sessions" / "2026" / "11" / "21" / "rollout-2026-11-21T10-00-00-thr_1.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text(json.dumps({
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 42000}}},
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    # OpenCode sqlite DB
+    xdg = tmp_path / "xdg"
+    db = xdg / "opencode" / "opencode.db"
+    db.parent.mkdir(parents=True)
+    con = sqlite3.connect(db)
+    con.execute("create table message (session_id text, time_created integer, data text)")
+    con.execute(
+        "insert into message values (?, ?, ?)",
+        ("ses_1", 100, json.dumps({"role": "assistant", "tokens": {"input": 1200, "cache": {"read": 8000, "write": 300}}})),
+    )
+    con.commit()
+    con.close()
+    monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
+
+    # AGY transcript
+    agy_home = tmp_path / "agy_data"
+    transcript = agy_home / "brain" / "conv_1" / ".system_generated" / "logs" / "transcript.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({
+        "type": "PLANNER_RESPONSE",
+        "source": "MODEL",
+        "input_tokens": 5000,
+        "cache_read_tokens": 15000,
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setenv("AGY_DATA_DIR", str(agy_home))
+
+    assert worker.worker_context_tokens_for_host("codex", tmp_path, "thr_1") == 42000
+    assert worker.worker_context_tokens_for_host("opencode", tmp_path, "ses_1") == 9500
+    assert worker.worker_context_tokens_for_host("agy", tmp_path, "conv_1") == 20000
+    for h in ("codex", "opencode", "agy"):
+        assert worker.worker_context_tokens_for_host(h, tmp_path, "../bad") is None
+        assert worker.worker_context_tokens_for_host(h, tmp_path, None) is None
+
+
+def test_build_command_resume_session_and_stream_for_all_hosts(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("ego.adapters.hosts.capability", lambda h: type("Cap", (), {"supported": True, "binary": h, "reason": ""})())
+    monkeypatch.setattr("ego.adapters.hostcompat.inspect_host", lambda h: {
+        "host": h, "available": True, "supported": True,
+        "flags": ["--json", "--model", "--sandbox", "--ask-for-approval", "--format", "--session",
+                  "--auto", "--print", "--output-format", "--mode", "--dangerously-skip-permissions",
+                  "--conversation", "--effort"],
+        "permission_modes": ["auto", "plan"],
+    })
+    codex_cmd = hosts.build_command("codex", "hello", read_only=False, use_stdin=True, resume_session="thr-1")
+    assert codex_cmd[:5] == ["codex", "exec", "--json", "--sandbox", "workspace-write"]
+    assert codex_cmd[-3:] == ["resume", "thr-1", "-"]
+
+    oc_cmd = hosts.build_command("opencode", "hello", read_only=False, resume_session="ses-1")
+    assert "--session" in oc_cmd and oc_cmd[oc_cmd.index("--session") + 1] == "ses-1"
+    assert oc_cmd[-1] == "hello"
+
+    agy_json = hosts.build_command("agy", "hello", read_only=False, resume_session="conv-1", stream=False)
+    assert agy_json[1:3] == ["--output-format", "json"]
+    assert "--conversation" in agy_json and agy_json[agy_json.index("--conversation") + 1] == "conv-1"
+
+    agy_stream = hosts.build_command("agy", "hello", read_only=False, resume_session="conv-1", stream=True)
+    assert agy_stream[1:3] == ["--output-format", "stream-json"]
+
+
+def test_run_agent_monitored_interrupts_on_context_limit_and_allows_normal_finish(tmp_path: Path, monkeypatch):
+    from ego.adapters import runner
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    codex_home = tmp_path / "codex_home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setenv("EGO_CACHE_DIR", str(tmp_path / "cache"))
+
+    # Fake agy CLI
+    agy_bin = bindir / "agy"
+    agy_bin.write_text("""#!/usr/bin/env python3
+import json, sys, time
+args = sys.argv[1:]
+if '--version' in args: print('1.0.0'); sys.exit(0)
+if '--help' in args:
+    print('--print --output-format --model --effort --mode --dangerously-skip-permissions --conversation')
+    sys.exit(0)
+prompt = [a for a in args if a.startswith('--print=')][0][8:]
+if 'FINISH' in prompt:
+    print(json.dumps({'type': 'init', 'conversation_id': 'conv-agy-2'}), flush=True)
+    print(json.dumps({'type': 'result', 'status': 'SUCCESS', 'response': 'all done',
+                      'usage': {'input_tokens': 5000, 'output_tokens': 100}}), flush=True)
+    sys.exit(0)
+print(json.dumps({'type': 'init', 'conversation_id': 'conv-agy-1'}), flush=True)
+print(json.dumps({'type': 'step_update', 'usage': {'input_tokens': 2500, 'output_tokens': 50}}), flush=True)
+time.sleep(3.0)
+""", encoding="utf-8")
+    agy_bin.chmod(0o755)
+
+    # Fake codex CLI
+    codex_bin = bindir / "codex"
+    codex_bin.write_text("""#!/usr/bin/env python3
+import json, os, pathlib, sys, time
+args = sys.argv[1:]
+if '--version' in args: print('1.0.0'); sys.exit(0)
+if '--help' in args:
+    print('--json --model --sandbox --ask-for-approval --yolo')
+    sys.exit(0)
+prompt = sys.stdin.read()
+if 'FINISH' in prompt:
+    print(json.dumps({'type': 'thread.started', 'thread_id': 'thr-codex-2'}), flush=True)
+    print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'codex done'}}), flush=True)
+    print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 5000, 'cached_input_tokens': 1000, 'output_tokens': 20}}), flush=True)
+    sys.exit(0)
+print(json.dumps({'type': 'thread.started', 'thread_id': 'thr-codex-1'}), flush=True)
+roll = pathlib.Path(os.environ['CODEX_HOME']) / 'sessions' / '2026' / '11' / '21' / 'rollout-2026-11-21T00-00-00-thr-codex-1.jsonl'
+roll.parent.mkdir(parents=True, exist_ok=True)
+roll.write_text(json.dumps({'type': 'event_msg', 'payload': {'type': 'token_count', 'info': {'last_token_usage': {'input_tokens': 3000}}}}) + '\\n', encoding='utf-8')
+time.sleep(3.0)
+""", encoding="utf-8")
+    codex_bin.chmod(0o755)
+
+    # Fake opencode CLI
+    oc_bin = bindir / "opencode"
+    oc_bin.write_text("""#!/usr/bin/env python3
+import json, sys, time
+args = sys.argv[1:]
+if '--version' in args: print('1.0.0'); sys.exit(0)
+if '--help' in args:
+    print('--format --model --session --auto')
+    sys.exit(0)
+prompt = args[-1]
+if 'FINISH' in prompt:
+    print(json.dumps({'type': 'text', 'sessionID': 'ses-oc-2', 'part': {'sessionID': 'ses-oc-2', 'text': 'oc done'}}), flush=True)
+    print(json.dumps({'type': 'step_finish', 'sessionID': 'ses-oc-2', 'part': {'sessionID': 'ses-oc-2', 'reason': 'stop', 'tokens': {'input': 5000, 'output': 50, 'cache': {'read': 0, 'write': 0}}}}), flush=True)
+    sys.exit(0)
+print(json.dumps({'type': 'step_finish', 'sessionID': 'ses-oc-1', 'part': {'sessionID': 'ses-oc-1', 'reason': 'tool-calls', 'tokens': {'input': 1800, 'output': 20, 'cache': {'read': 500, 'write': 0}}}}), flush=True)
+time.sleep(3.0)
+""", encoding="utf-8")
+    oc_bin.chmod(0o755)
+
+    # 1. Mid-turn context limit interrupts and captures session_id
+    r_agy = runner.run_agent("agy", "WORK", tmp_path, timeout=5, read_only=False, context_limit=2000)
+    assert r_agy.status == "PASS" and r_agy.stop_reason == "context_limit"
+    assert r_agy.session_id == "conv-agy-1" and (r_agy.context_tokens or 0) >= 2000
+
+    r_codex = runner.run_agent(
+        "codex", "WORK", tmp_path, timeout=5, read_only=False, context_limit=2000,
+        context_probe=lambda sid: worker.worker_context_tokens_for_host("codex", tmp_path, sid),
+    )
+    assert r_codex.status == "PASS" and r_codex.stop_reason == "context_limit"
+    assert r_codex.session_id == "thr-codex-1" and (r_codex.context_tokens or 0) >= 2000
+
+    r_oc = runner.run_agent("opencode", "WORK", tmp_path, timeout=5, read_only=False, context_limit=2000)
+    assert r_oc.status == "PASS" and r_oc.stop_reason == "context_limit"
+    assert r_oc.session_id == "ses-oc-1" and (r_oc.context_tokens or 0) >= 2000
+
+    # 2. Normal completion right after a terminal event (even above limit) finishes cleanly
+    ok_agy = runner.run_agent("agy", "FINISH", tmp_path, timeout=5, read_only=False, context_limit=2000)
+    assert ok_agy.status == "PASS" and ok_agy.stop_reason is None and ok_agy.output == "all done"
+    assert ok_agy.session_id == "conv-agy-2"
+
+    ok_codex = runner.run_agent("codex", "FINISH", tmp_path, timeout=5, read_only=False, context_limit=2000)
+    assert ok_codex.status == "PASS" and ok_codex.stop_reason is None and ok_codex.output == "codex done"
+    assert ok_codex.session_id == "thr-codex-2"
+
+    ok_oc = runner.run_agent("opencode", "FINISH", tmp_path, timeout=5, read_only=False, context_limit=2000)
+    assert ok_oc.status == "PASS" and ok_oc.stop_reason is None and ok_oc.output == "oc done"
+    assert ok_oc.session_id == "ses-oc-2"
+    assert ok_oc.usage == {"input_tokens": 5000, "output_tokens": 50, "cache_read_tokens": 0, "cache_creation_tokens": 0}

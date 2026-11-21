@@ -140,7 +140,7 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
                   mcp_servers: list[str] | tuple[str, ...] | None = None, cwd: Path | None = None,
                   resume_session: str | None = None,
                   allowed_tools: list[str] | tuple[str, ...] | None = None,
-                  project_root: Path | None = None) -> list[str]:
+                  project_root: Path | None = None, stream: bool = False) -> list[str]:
     cap=capability(host)
     if not cap.supported:raise EgoError("HOST_UNAVAILABLE",cap.reason,3)
     if host=="mock":return []
@@ -207,6 +207,8 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
                     argv += ["--ask-for-approval","never"]
                 elif "--approve-for-me" in info["flags"]:
                     argv.append("--approve-for-me")
+        if resume_session:
+            return argv + ["resume", resume_session, "-" if use_stdin else prompt]
         return argv + (["-"] if use_stdin else [prompt])
     if host=="opencode":
         require_flags(info,"--format")
@@ -214,17 +216,24 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
         if model:
             require_flags(info,"--model")
             argv += ["--model",model]
+        if resume_session:
+            require_flags(info,"--session")
+            argv += ["--session",resume_session]
         # OpenCode --auto auto-approves only non-explicitly-denied permissions;
         # it is NOT equivalent to removing an OS sandbox.
         if not read_only and autonomy!="safe" and "--auto" in info["flags"]:argv.append("--auto")
         return argv+[prompt]
     if host=="agy":
         require_flags(info,"--print","--output-format")
-        argv=[cap.binary,"--output-format","json"]
+        output_fmt = "stream-json" if stream else "json"
+        argv=[cap.binary,"--output-format",output_fmt]
         if model:
             require_flags(info,"--model")
             argv += ["--model",model]
         if effort and effort != "auto" and "--effort" in info["flags"]:argv += ["--effort",effort]
+        if resume_session:
+            require_flags(info,"--conversation")
+            argv += ["--conversation",resume_session]
         if (read_only or autonomy=="safe") and autonomy!="bypass":
             require_flags(info,"--mode")
             argv += ["--mode","plan"]

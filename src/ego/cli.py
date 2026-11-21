@@ -290,7 +290,8 @@ def _cmd_work(args):
                    autonomy=args.autonomy,isolated=args.attest_external_sandbox,
                    worktree=args.worktree,cleanup_worktree=args.cleanup_worktree,planner_usage=planner_usage,
                    seed_from=getattr(args,"seed_from",None),task_file=args.task,
-                   route_override=route_override,defaults_override=defaults_override)
+                   route_override=route_override,defaults_override=defaults_override,
+                   max_run_tokens=args.max_run_tokens)
     _print(shape(result));return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
 
 
@@ -695,6 +696,8 @@ def build_parser()->argparse.ArgumentParser:
         r.add_argument("--attest-external-sandbox",action="store_true",help="Assert externally hardened OS sandbox; needed for bypass mode")
         r.add_argument("--worktree",action="store_true",default=None,help="Execute task in an isolated Git worktree")
         r.add_argument("--keep-worktree",dest="cleanup_worktree",action="store_false",default=None,help="Keep the Git worktree after task completion")
+        r.add_argument("--max-run-tokens",type=int,default=None,
+                       help="Override max_run_tokens for this invocation (0 = unlimited, or >= 1000)")
         r.add_argument("--verbose",action="store_true",help="Print the full run record instead of the compact summary")
         if name=="resume":
             r.add_argument("run_id")

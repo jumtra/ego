@@ -67,10 +67,10 @@ Most keys can stay at their defaults. These are the ones worth a decision:
 | `timeout_seconds` | `3600` | 5–7200 | Upper bound per node. There is no whole-run time limit |
 | `max_rounds` | `2` | 0–5 | Reviewer rejections allowed per node before `on_exhausted` applies |
 | `max_replans` | `1` | 0–5 | Plan revisions allowed per task |
-| `max_run_tokens` | `500000` | integer ≥ 1000 | Whole-run billable token cap (`cache_read` excluded) |
+| `max_run_tokens` | `0` | `0` or integer ≥ 1000 | Per-invocation (`run`/`resume`) billable token cap (`0` = unlimited, default; when set ≥ 1000, resets on resume; `cache_read` excluded) |
 | `max_turns` | `30` | 1–200 | Agent turns per worker invocation |
 | `worker_context` | `"lean"` | `lean`, `inherit` | `lean` starts Claude workers without your MCP servers; `inherit` keeps them |
-| `worker_segment_turns` | `10` | 1–200 | Claude workers run this many turns per segment; between segments the context is measured against `clear_suggest_tokens` and, at the limit, the worker checkpoints and continues in a fresh session |
+| `worker_segment_turns` | `10` | 1–200 | Claude workers run this many turns per segment and measure context against `clear_suggest_tokens` between segments; Codex, OpenCode, and AGY monitor live stream/session context against `clear_suggest_tokens`. At the limit, the worker checkpoints (or falls back mechanically on non-Claude hosts) and continues in a fresh session |
 | `isolation` | `"auto"` | `auto`, `copy`, `worktree` | Where a run works: a staging copy, or a Git worktree. `auto` uses a worktree only when two writer nodes (coder/tester/code/worker nodes with no dependency path between them) can run at the same time, and a staging copy otherwise. `worktree` always uses one, `copy` never does. `--worktree` overrides per run |
 | `cleanup_worktree` | `true` | bool | Remove the worktree after the run. `--keep-worktree` overrides per run |
 | `allow_commands` | common toolchains | list of command names | Executables that `checks` and `--done-check` may start. Shells and `python -c` are always refused |

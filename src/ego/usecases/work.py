@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import uuid
-from ..domain.config import Config, load_config
+from ..domain.config import Config, load_config, resolve_max_run_tokens
 from ..domain.defaults import package_defaults
 from ..domain.policy import check_write, check_role_write
 from ..adapters.runner import run_agent, run_checked_command
@@ -29,7 +29,7 @@ from ..domain.usage import TOKEN_KEYS, billable_tokens, tokens_of, summary_line
 _STAGING_LOCK=threading.Lock()
 
 class TokenBudget:
-    """Run-wide billable token cap, shared by parallel node threads."""
+    """Per-invocation billable token cap (0 = unlimited), shared by parallel node threads."""
     def __init__(self,limit:int,spent:int=0):
         self.limit,self.spent=limit,spent
         self.lock=threading.Lock()
@@ -38,11 +38,13 @@ class TokenBudget:
         count=billable_tokens(usage)
         with self.lock:self.spent+=count
 
-    def remaining(self)->int:
+    def remaining(self)->int|None:
+        if self.limit<=0:return None
         with self.lock:return self.limit-self.spent
 
-    def exhausted(self)->bool:
-        return self.remaining()<=0
+    def exhausted(self,extra:int=0)->bool:
+        if self.limit<=0:return False
+        with self.lock:return self.limit-self.spent-extra<=0
 
 class Progress:
     """Append-only per-run event log (`progress.jsonl`), optionally echoed to stderr.
@@ -579,15 +581,18 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
         last_output=r["output"]
         if r["ok"]:
             success=True;edits=r["edits"];winning_branch=r.get("branch");break
+        is_budget_hit=r["record"]["execution"].get("reason")=="BUDGET_EXHAUSTED"
         if r["writes_ok"] and kind not in ("code","gate"):
             latest_partial=dict(r["edits"])
             latest_meta={
                 "host":chosen.host if chosen else "local",
                 "model":(chosen.model if chosen else None) or "native-default",
-                "execution_status":r["execution_status"],
+                "execution_status":"BUDGET_EXHAUSTED" if is_budget_hit else r["execution_status"],
                 "output":clip_output(r["output"],cfg.tuning.max_feedback_chars),
                 "base_hashes":r.get("base_hashes") or {},
             }
+        if is_budget_hit:
+            budget_exhausted=True;break
         if strategy=="fallback" and r["execution_status"] in fallback_on and route_pos<len(routes)-1:
             route_pos+=1
             carry=dict(latest_partial)
@@ -655,15 +660,10 @@ def usage_summary(record:dict)->dict:
     return total
 
 
-def _billable_spent(record:dict)->int:
-    return sum(billable_tokens((attempt.get("execution") or {}).get("usage"))
-               for data in record.get("results",{}).values() for attempt in data.get("attempts",[]))
-
-
 def next_action(result:dict, task_file:str="<task-file>")->str|None:
     if not result.get("run_id"):return None
     task_ref=(task_file if task_file!="<task-file>" else None) or result.get("task_file") or "<task-file>"
-    if result.get("final_status")=="INTERRUPTED":
+    if result.get("final_status") in ("INTERRUPTED","BUDGET_EXHAUSTED"):
         return f"ego work resume {result['run_id']} --root . --task {task_ref} --host {result.get('host','<host>')} --trust-cli"
     if result.get("final_status")=="FAILED":
         for nid,data in (result.get("results") or {}).items():
@@ -717,7 +717,8 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str|None="mock",ap
             trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False,
             worktree:bool|None=None,cleanup_worktree:bool|None=None,seed_from:str|None=None,
             extra_allow:list[str]|None=None,token_budget:TokenBudget|None=None,planner_usage:dict|None=None,
-            task_file:str|None=None,route_override:dict|None=None,defaults_override:dict|None=None)->dict:
+            task_file:str|None=None,route_override:dict|None=None,defaults_override:dict|None=None,
+            max_run_tokens:int|None=None)->dict:
     root=root.resolve();cfg=load_config(root)
     from ..domain.retention import prune_state
     prune_state(root)  # bounded state: fail-open, before this run adds to it
@@ -906,7 +907,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str|None="mock",ap
                     prev_fb=feedbacks.get(nid,"")
                     combined=f"{handoff_note}\n\n{prev_fb}".strip() if prev_fb and prev_fb not in handoff_note else handoff_note
                     feedbacks[nid]=clip_output(combined,cfg.tuning.max_feedback_chars)
-        if token_budget is None:token_budget=TokenBudget(cfg.max_run_tokens,spent=_billable_spent(record))
+        if token_budget is None:token_budget=TokenBudget(resolve_max_run_tokens(cfg,max_run_tokens))
         pending={n["id"]:n for n in nodes if record["node_status"].get(n["id"])!="PASSED"}
         failed=[]
         rounds=record.setdefault("rounds",{})

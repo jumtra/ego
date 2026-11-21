@@ -14,9 +14,11 @@ import os
 import re
 import shlex
 import shutil
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from ..shared.util import EgoError, alter_project_root, exclusive_lock, is_locked, now, read_json, redact, safe_path, write_json
 from ..shared.util import RUN_SESSION_ENV, _id, detect_host, handoff_relpath
@@ -240,6 +242,42 @@ def context_tokens(transcript: Path, tail_bytes: int = 512 * 1024, host: str = "
             total = sum(int(usage.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
             if total > 0:
                 return total
+    return None
+
+
+def opencode_context_tokens(session_id: str | None) -> int | None:
+    """Measured context size of an OpenCode session, read from its local SQLite store."""
+    if not session_id or not all(c.isalnum() or c in "-_" for c in session_id):
+        return None
+    db = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "opencode" / "opencode.db"
+    if not db.is_file():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{quote(str(db))}?mode=ro", uri=True, timeout=1)
+        try:
+            rows = con.execute(
+                "select data from message where session_id=? order by time_created desc limit 20",
+                (session_id,),
+            ).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    for (data,) in rows:
+        try:
+            message = json.loads(data)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        tokens = message.get("tokens") if isinstance(message.get("tokens"), dict) else {}
+        cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+        try:
+            total = int(tokens.get("input") or 0) + int(cache.get("read") or 0) + int(cache.get("write") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        if total > 0:
+            return total
     return None
 
 
@@ -714,6 +752,8 @@ def completion_message(record: dict[str, Any]) -> str:
     state = record.get("final_status")
     if state == "INTERRUPTED":
         return "中断（再開可能）：実行が途中で中断されました。ego work resume で完了済みノードを引き継いで再開できます。"
+    if state == "BUDGET_EXHAUSTED":
+        return "中断（トークン上限）：1回の実行のトークン上限（max_run_tokens）に達しました。ego work resume で残りのノードを新しい上限枠で再開できます（必要なら --max-run-tokens で上書き）。"
     if state == "PASSED" and record.get("applied"):
         return "完了：変更を適用し、指定された検証に合格しました。"
     if state == "PASSED":

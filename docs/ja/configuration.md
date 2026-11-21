@@ -67,10 +67,10 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `timeout_seconds` | `3600` | 5〜7200 | ノードごとの上限。run 全体の時間制限はありません |
 | `max_rounds` | `2` | 0〜5 | reviewer が 1 ノードで差し戻せる回数。使い切ったら `on_exhausted` に従う |
 | `max_replans` | `1` | 0〜5 | task 1 件あたりの計画の作り直し回数 |
-| `max_run_tokens` | `500000` | 1000 以上 | run 全体の使用トークン上限（`cache_read` を除く） |
+| `max_run_tokens` | `0` | `0` または 1000 以上 | 1 回の実行（`run`/`resume`）あたりの使用トークン上限（既定 `0` = 無制限。1000 以上を指定した場合のみ `resume` ごとにリセットで上限停止。`cache_read` は除外） |
 | `max_turns` | `30` | 1〜200 | ワーカー 1 回の呼び出しにおけるエージェントのターン数 |
 | `worker_context` | `"lean"` | `lean`、`inherit` | `lean` は Claude ワーカーを MCP サーバーなしで起動。`inherit` はそのまま引き継ぎます |
-| `worker_segment_turns` | `10` | 1〜200 | Claude ワーカーをこのターン数ごとの区間で実行します。区間の間に実測コンテキストを `clear_suggest_tokens` と比べ、上限なら checkpoint を保存して新しいセッションで続きから再開します |
+| `worker_segment_turns` | `10` | 1〜200 | Claude ワーカーをこのターン数ごとの区間で実行し、区間の間に実測コンテキストを `clear_suggest_tokens` と比べます（Codex / OpenCode / AGY はストリーム/セッション監視）。上限に達すると checkpoint を保存（他ホストで未保存時は機械的フォールバック）し、新しいセッションで続きから再開します |
 | `isolation` | `"auto"` | `auto`、`copy`、`worktree` | run の作業場所。`auto` は同時に書き込むノード（互いに依存関係のない coder/tester/code/worker ノード）が 2 つ以上ある run だけ Git worktree、それ以外はステージング用コピー。`worktree` は常に worktree、`copy` は常にコピー。`--worktree` で run ごとに上書き |
 | `cleanup_worktree` | `true` | bool | run 後に worktree を削除。`--keep-worktree` で run ごとに上書き |
 | `allow_commands` | 一般的なツールチェーン | コマンド名のリスト | `checks` と `--done-check` が起動してよい実行ファイル。シェルと `python -c` は常に拒否されます |

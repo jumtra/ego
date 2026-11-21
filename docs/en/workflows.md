@@ -71,6 +71,7 @@ Or run and apply in one step with `ego work run ... --apply --approve`.
 | `--model <id>` / `--models <json>` | Task-wide default model, or host → model map |
 | `--autonomy <mode>` | `auto` (default), `safe` (plan/read-only modes), `bypass` (skip permissions; requires `--attest-external-sandbox`) |
 | `--worktree` / `--keep-worktree` | Use a Git worktree; keep it afterwards |
+| `--max-run-tokens <N>` | Override `max_run_tokens` for this invocation (`0` = unlimited, or `>= 1000`) |
 | `--run-id <id>` | (`run` only) Fixed run ID, so `ego work watch <id>` can follow the run |
 | `--from <run_id>` | (`run` only) Continue a failed run with a corrected task: start from its verified changes and skip its verified agent nodes whose definition and upstream are unchanged |
 | `--verbose` | Print the full run record instead of the summary |
@@ -117,7 +118,7 @@ The summary adds `nodes` (status, attempts and check results per node) and, for 
 
 **`/work-plan` runs through this.** After you approve a plan, the AI writes it as a Task JSON, starts `ego work run --run-id ...`, relays these events to you as they arrive (Monitor in Claude Code, `ego work status` elsewhere), and asks before applying.
 
-**Context limit for workers.** A Claude worker runs in segments of `worker_segment_turns` turns. Between segments ego measures the session's real context size. Below `clear_suggest_tokens` the same session continues with `--resume`; at or above it, the session saves a checkpoint and the work continues in a fresh session from that checkpoint (`worker_segment` event with `action: rotate`). Other hosts and read-only nodes run once, as before.
+**Context limit for workers.** Writable workers across all hosts (`claude`, `codex`, `opencode`, `agy`) rotate automatically at `clear_suggest_tokens`. A Claude worker runs in segments of `worker_segment_turns` turns and measures context between segments; Codex, OpenCode, and AGY monitor live stream/session context during execution and interrupt at the limit. Below `clear_suggest_tokens` Claude continues with `--resume`; at or above it, the session saves a checkpoint and continues in a fresh session (`worker_segment` event with `action: rotate`). On non-Claude hosts, if no checkpoint was saved, ego generates a mechanical handoff from changed workspace files and the last output (`fallback: true`) and continues in a fresh session. Read-only nodes and `mock` run once, as before.
 
 ### Task JSON
 
@@ -209,7 +210,7 @@ The task's `max_replans` is the number of times the whole plan may be revised (d
 
 ## Token cap
 
-`max_run_tokens` (default 500000) caps the billable tokens of the whole run; `cache_read` tokens are not counted. When the cap is reached, the run stops between steps and `final_status` is `BUDGET_EXHAUSTED`. There is no whole-run time limit.
+`max_run_tokens` (default `0` = unlimited, so runs do not stop mid-way by default) caps the billable tokens of a single `run` or `resume` invocation only when set to `>= 1000` in config or via `--max-run-tokens`; `cache_read` tokens are not counted, and the budget resets on `resume`. When an explicit cap is reached, the run stops between steps and `final_status` is `BUDGET_EXHAUSTED`. There is no whole-run time limit.
 
 ## Supporting commands
 
