@@ -1,3 +1,3 @@
 """Portable, CLI-first harness.  No external SDK dependency."""
-__version__ = "0.0.45"
+__version__ = "0.0.46"
 
