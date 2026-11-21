@@ -50,7 +50,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 
 ### run の動作
 
-1. プロジェクトを `.ego/state/runs/<run_id>/` 配下のステージング用ディレクトリにコピーします。`--worktree` または `isolation = "worktree"` の場合、ステージング用ディレクトリは Git worktree になり、agent ノードはそれぞれ run の HEAD から切った branch の worktree で作業します。
+1. プロジェクトを `.ego/state/runs/<run_id>/` 配下のステージング用ディレクトリにコピーします。`--worktree` または `isolation = "worktree"`、もしくは既定の `isolation = "auto"` で同時に書き込むノードが 2 つ以上ある場合、ステージング用ディレクトリは Git worktree になり、書き込むノードはそれぞれ run の HEAD から切った branch の worktree で作業します。読み取り専用のノード（reviewer・splitter・gate）は worktree を作りません。`auto` で書き込みノードが直列にしかない場合はステージング用コピーのみです。
 2. 依存するノードがすべて成功した時点で、そのノードを開始します。同時実行は最大 `max_parallel` 件です。空いた枠は実行中のどれかが終わるとすぐ埋められるため、ノードが wave の残りを待つことはありません。
 3. agent ノードごとに、CLI をノードのプロンプトで実行し、変更された全ファイルが `write_allowlist` に一致するか確認し、ノードの `checks` を実行します。失敗したら、チェックの出力をフィードバックとして修正し、`max_attempts` まで繰り返します。ノードが失敗しても止まるのはその下流だけで、独立したノードは最後まで実行します。
 4. 成功したノードは、終わるたびにステージングへマージされます。worktree 隔離の場合はそのノードのコミットを 3-way マージします。隔離しない場合はノードのファイルを直接書き込み、このノードの開始後に別のノードが変更したファイルは競合になります。競合が起きると run は `MERGE_CONFLICT` で終了します。

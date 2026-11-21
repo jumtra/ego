@@ -128,7 +128,7 @@ class ConfigSpec(BaseModel):
     alter_analysis_timeout_seconds: Annotated[int, Field(gt=0)]
     models: dict[HostLiteral, NonEmptyModelStr | ModelTableSpec]
     roles: dict[RoleLiteral, RoleConfigSpec]
-    isolation: Literal["copy", "worktree"]
+    isolation: Literal["copy", "worktree", "auto"]
     cleanup_worktree: bool
     tests: list[Annotated[list[str], Field(min_length=1)]]
     allow_commands: list[str]
@@ -245,7 +245,7 @@ class Config:
     alter_analysis_timeout_seconds: int  # per-analysis wall-clock limit in seconds; must be > 0
     models: dict[str, Any]
     roles: dict[str, Any]  # role (coder/tester/reviewer) -> {host, model, effort}; same vocabulary as hosts/models
-    isolation: str  # "copy" (staging directory) or "worktree" (git worktree)
+    isolation: str  # "auto" (worktree only when writer nodes can run in parallel), "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool  # whether to remove the worktree after run
     tests: list[list[str]]
     allow_commands: list[str]
@@ -304,8 +304,9 @@ def dump_config(cfg: Config) -> str:
         "#   優先順位: ノード > タスク defaults.roles > config roles > タスク defaults > config models\n"
         "#\n"
         "# 実行環境の隔離 (isolation, cleanup_worktree):\n"
+        "#   isolation = \"auto\"      # 既定。同時に書き込むノードが 2 つ以上ある run だけ worktree、それ以外は copy\n"
         "#   isolation = \"copy\"      # ディレクトリコピーによるステージング\n"
-        "#   isolation = \"worktree\"  # Git worktree によるブランチ作業分離\n"
+        "#   isolation = \"worktree\"  # 常に Git worktree によるブランチ作業分離\n"
         "#   cleanup_worktree = true  # タスク終了時に worktree を自動削除するかどうか\n"
         "#\n"
         "# Managed worker のコンテキスト (max_turns, worker_context):\n"

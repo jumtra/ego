@@ -24,7 +24,7 @@ clear_suggest_tokens = 200000
 usage_switch_percent = 99
 run_yolo = true
 models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}
-isolation = "copy"
+isolation = "auto"
 cleanup_worktree = true
 tests = []
 allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"]
@@ -71,7 +71,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `max_turns` | `30` | 1〜200 | ワーカー 1 回の呼び出しにおけるエージェントのターン数 |
 | `worker_context` | `"lean"` | `lean`、`inherit` | `lean` は Claude ワーカーを MCP サーバーなしで起動。`inherit` はそのまま引き継ぎます |
 | `worker_segment_turns` | `10` | 1〜200 | Claude ワーカーをこのターン数ごとの区間で実行します。区間の間に実測コンテキストを `clear_suggest_tokens` と比べ、上限なら checkpoint を保存して新しいセッションで続きから再開します |
-| `isolation` | `"copy"` | `copy`、`worktree` | run の作業場所。ステージング用コピーか Git worktree か。`--worktree` で run ごとに上書き |
+| `isolation` | `"auto"` | `auto`、`copy`、`worktree` | run の作業場所。`auto` は同時に書き込むノード（互いに依存関係のない coder/tester/code/worker ノード）が 2 つ以上ある run だけ Git worktree、それ以外はステージング用コピー。`worktree` は常に worktree、`copy` は常にコピー。`--worktree` で run ごとに上書き |
 | `cleanup_worktree` | `true` | bool | run 後に worktree を削除。`--keep-worktree` で run ごとに上書き |
 | `allow_commands` | 一般的なツールチェーン | コマンド名のリスト | `checks` と `--done-check` が起動してよい実行ファイル。シェルと `python -c` は常に拒否されます |
 

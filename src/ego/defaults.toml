@@ -27,7 +27,7 @@ alter_analyzer = { opencode = { model = "opencode/glm-5.3-flash-free" } }
 alter_analysis_timeout_seconds = 600
 models = { claude = { model = "sonnet", effort = "auto" }, codex = { model = "auto", effort = "medium" }, opencode = "auto", agy = { model = "gemini-4-hydrogen-medium", effort = "auto" } }
 roles = { coder = { claude = { model = "haiku", effort = ["medium", "high"] }, codex = { model = "auto", effort = "medium" }, agy = { model = "gemini-4-hydrogen-medium", effort = "medium" }, opencode = { model = "auto", effort = "medium" } }, tester = { claude = { model = "haiku", effort = ["medium", "high"] }, codex = { model = "auto", effort = "low" }, agy = { model = "gemini-4-hydrogen-low", effort = "low" }, opencode = { model = "auto", effort = "low" } }, reviewer = { claude = { model = "haiku", effort = "high" }, codex = { model = "auto", effort = "high" }, agy = { model = "gemini-4-hydrogen-medium", effort = "high" }, opencode = { model = "auto", effort = "high" } } }
-isolation = "worktree"
+isolation = "auto"
 cleanup_worktree = true
 tests = []
 allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"]

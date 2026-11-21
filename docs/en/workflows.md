@@ -50,7 +50,7 @@ Or run and apply in one step with `ego work run ... --apply --approve`.
 
 ### What a run does
 
-1. Copies the project to a staging directory under `.ego/state/runs/<run_id>/`. With `--worktree` / `isolation = "worktree"` the staging directory is a Git worktree, and each agent node works in its own worktree on a branch from the run's HEAD.
+1. Copies the project to a staging directory under `.ego/state/runs/<run_id>/`. With `--worktree`, `isolation = "worktree"`, or the default `isolation = "auto"` when two writer nodes can run at the same time, the staging directory is a Git worktree, and each writer node works in its own worktree on a branch from the run's HEAD. Read-only nodes (reviewer, splitter, gate) never get a worktree. Under `auto`, serial writers only use the staging copy.
 2. Starts every node whose dependencies have passed, up to `max_parallel` at once. A free slot is refilled as soon as any node finishes, so a node does not wait for the rest of its wave.
 3. For each agent node: runs the CLI with the node prompt, checks every changed file against `write_allowlist`, runs the node's `checks`. On failure the node is repaired with the check output as feedback, up to `max_attempts`. A failed node stops only its dependents; independent nodes still finish.
 4. Merges each passed node into the staging tree as it completes. With worktree isolation, the node's commit is 3-way merged; without it, the node's files are written directly, and a file that another node changed after this node started is a conflict. A conflict ends the run with `MERGE_CONFLICT`.

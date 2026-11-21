@@ -13,8 +13,9 @@
 #   agy:      "auto", "gemini-2.5-pro", etc.
 #
 # 実行環境の隔離 (isolation, cleanup_worktree):
+#   isolation = "auto"      # 既定。同時に書き込むノードが 2 つ以上ある run だけ worktree、それ以外は copy
 #   isolation = "copy"      # ディレクトリコピーによるステージング
-#   isolation = "worktree"  # Git worktree によるブランチ作業分離
+#   isolation = "worktree"  # 常に Git worktree によるブランチ作業分離
 #   cleanup_worktree = true  # タスク終了時に worktree を自動削除するかどうか
 schema_version = 1
 profile = "balanced"
@@ -29,7 +30,7 @@ max_attempts = 3
 timeout_seconds = 7200
 models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "gemini-4-hydrogen-medium", effort = "auto"}}
 roles = {coder = {claude = {model = "haiku", effort = ["low", "medium"]}, codex = {model = "auto", effort = "medium"}, agy = {model = "gemini-4-hydrogen-medium", effort = "medium"}, opencode = {model = "auto", effort = "medium"}}, tester = {claude = {model = "haiku", effort = "low"}, codex = {model = "auto", effort = "low"}, agy = {model = "gemini-4-hydrogen-low", effort = "low"}, opencode = {model = "auto", effort = "low"}}, reviewer = {claude = {model = "haiku", effort = "high"}, codex = {model = "auto", effort = "high"}, agy = {model = "gemini-4-hydrogen-medium", effort = "high"}, opencode = {model = "auto", effort = "high"}}}
-isolation = "worktree"
+isolation = "auto"
 cleanup_worktree = true
 tests = []
 allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"]
