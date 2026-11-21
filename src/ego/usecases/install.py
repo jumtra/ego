@@ -7,6 +7,7 @@ from ..domain.templates import generated_files, MARK_BEGIN, MARK_END, LEGACY_SKI
 from .. import __version__
 from ..shared.util import EgoError, safe_path, filehash, sha256, read_json, write_json, atomic_text, ident, exclusive_lock, now
 import os
+import subprocess
 from typing import Any
 
 OWNERSHIP = ".ego/ownership.json"
@@ -100,6 +101,40 @@ def installation_plan(root: Path, cfg: Config) -> dict:
     return {"root": str(root), "changes": changes, "conflicts": [x for x in changes if x["action"].startswith("conflict")], "wanted": wanted}
 
 
+EXCLUDE_HEADER = "# ego generated files (added by ego apply/sync)"
+
+
+def ensure_git_exclude(root: Path, rels: list[str]) -> dict:
+    """Add `.ego/` and the generated files outside it to .git/info/exclude (local only, never committed).
+
+    Each file is listed individually so the project's own skills/rules in the same directories stay visible to git.
+    Files git already tracks are left out. Fail-open: no repo or an unwritable file only reports the reason."""
+    if not (root / ".git").exists():
+        return {"status": "skipped", "reason": "no .git"}
+    try:
+        out = subprocess.run(["git", "rev-parse", "--git-path", "info/exclude"], cwd=root, capture_output=True, text=True, timeout=30)
+        if out.returncode: return {"status": "skipped", "reason": out.stderr.strip()[-200:]}
+        exclude = Path(out.stdout.strip())
+        if not exclude.is_absolute(): exclude = root / exclude
+        outside = sorted(r for r in rels if not r.startswith(".ego/"))
+        tracked: set[str] = set()
+        if outside:
+            ls = subprocess.run(["git", "ls-files", "-z", "--", *outside], cwd=root, capture_output=True, text=True, timeout=30)
+            tracked = {x for x in ls.stdout.split("\0") if x}
+        wanted = ["/.ego/", *(f"/{r}" for r in outside if r not in tracked)]
+        old = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        have = {line.strip() for line in old.splitlines()}
+        add = [w for w in wanted if w not in have]
+        if not add: return {"status": "unchanged"}
+        text = old if not old or old.endswith("\n") else old + "\n"
+        if EXCLUDE_HEADER not in have: text += EXCLUDE_HEADER + "\n"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text(text + "\n".join(add) + "\n", encoding="utf-8")
+        return {"status": "updated", "added": add}
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"status": "error", "reason": str(exc)}
+
+
 def apply_install(root: Path, cfg: Config) -> dict:
     root = root.resolve()
     with exclusive_lock(root / ".ego" / "locks" / "install.lock"):
@@ -147,6 +182,7 @@ def apply_install(root: Path, cfg: Config) -> dict:
             raise
     register_quietly(root)
     out = {"status": "APPLIED", "snapshot_id": snapshot_id, "changes": [x for x in plan["changes"] if x["action"] != "unchanged"]}
+    out["git_exclude"] = ensure_git_exclude(root, [r for r in plan["wanted"] if r not in ("CLAUDE.md", "AGENTS.md")])
     if cfg.knowledge == "alter":
         from ..adapters.memory import ensure_alter_project_quietly, ensure_alter_skills_quietly
         out["alter_project"] = ensure_alter_project_quietly(root, force=True)
