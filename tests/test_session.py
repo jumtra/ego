@@ -706,6 +706,69 @@ def test_near_usage_limit_asks_for_a_checkpoint_and_proposes_installed_clis_once
     assert usage_advice(tmp_path, {"session_id": "s4"}, 85, hosts) == {}
 
 
+def _agy_status(root: Path, model: str = "Gemini 4 Hydrogen (Medium)", **buckets) -> dict:
+    """AGY's status line input: quota buckets report the REMAINING fraction. The values mirror a real capture."""
+    import time
+    quota = {"gemini-5h": (0.9, 3000), "gemini-weekly": (0.7, 400000), "3p-5h": (0.02, 3000), "3p-weekly": (0.5, 400000)}
+    quota.update(buckets)
+    return {"conversation_id": "c1", "model": {"id": model, "display_name": model}, "workspace": {"project_dir": str(root)},
+            "quota": {k: {"remaining_fraction": f, "reset_time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + secs)),
+                          "reset_in_seconds": secs} for k, (f, secs) in quota.items()}}
+
+
+def test_agy_quota_is_read_for_the_bucket_its_model_draws_from(tmp_path: Path):
+    from ego.usecases.session import agy_limits, record_usage
+    (tmp_path / ".ego").mkdir()
+    limits = agy_limits(_agy_status(tmp_path))
+    assert round(limits["five_hour"]["used_percentage"]) == 10 and round(limits["seven_day"]["used_percentage"]) == 30  # remaining -> used
+    # A third-party model draws from the 3p buckets, not from the (here healthy) Gemini ones.
+    assert round(agy_limits(_agy_status(tmp_path, model="Claude Sonnet"))["five_hour"]["used_percentage"]) == 98
+    # An Argon model also counts its own weekly bucket; the larger usage wins.
+    argon = agy_limits(_agy_status(tmp_path, model="Gemini 4 Argon", **{"gemini-argon-wtu-weekly": (0.05, 400000)}))
+    assert round(argon["seven_day"]["used_percentage"]) == 95
+    assert agy_limits({**_agy_status(tmp_path), "model": None}) == {}  # unknown model: nothing is guessed
+    assert agy_limits({"model": "Gemini", "quota": {"gemini-5h": {"remaining_fraction": "x"}}}) == {}
+    assert record_usage(_agy_status(tmp_path)) == "ego · 5h 10% · 7d 30%"
+    assert read_json(tmp_path / ".ego/state/usage_limits.agy.json")["rate_limits"]["five_hour"]["used_percentage"] > 9
+    assert not (tmp_path / ".ego/state/usage_limits.json").exists()  # Claude's own reading is a separate file
+
+
+def test_agy_usage_limit_advises_agy_only_and_never_crosses_hosts(tmp_path: Path, monkeypatch):
+    from ego.usecases.session import record_usage, usage_advice
+    (tmp_path / ".ego").mkdir()
+    monkeypatch.setattr("ego.usecases.session.shutil.which", lambda name: f"/bin/{name}" if name in ("claude", "codex") else None)
+    hosts = ["claude", "codex", "agy"]
+    record_usage(_agy_status(tmp_path, **{"gemini-5h": (0.01, 3000)}))
+    assert usage_advice(tmp_path, {"session_id": "c1"}, 85, hosts, host="claude") == {}  # AGY's quota is not Claude's
+    out = usage_advice(tmp_path, {"session_id": "c1"}, 85, hosts, host="agy")
+    assert out["decision"] == "block" and "AGY usage limit" in out["reason"] and "99%" in out["systemMessage"]
+    assert "(claude, codex)" in out["reason"] and "agy" not in out["reason"].split("alternative(s)")[1]  # proposes the other CLIs
+    assert usage_advice(tmp_path, {"session_id": "c1"}, 85, hosts, host="agy") == {}  # once per session and window
+    # Claude's reading does not trigger AGY either.
+    record_usage(_status(tmp_path, 97))
+    assert usage_advice(tmp_path, {"session_id": "c2"}, 85, hosts, host="agy") != {}  # its own file is still near the limit
+    other = tmp_path / "other"; (other / ".ego").mkdir(parents=True)
+    record_usage(_status(other, 97))
+    assert usage_advice(other, {"session_id": "c3"}, 85, hosts, host="agy") == {}
+
+
+def test_agy_hooks_carry_usage_switch_and_context_probe_records_quota(tmp_path: Path, monkeypatch, capsys):
+    cfg = replace(default_config(), hosts=["agy"], clear_suggest_tokens=0, auto_resume=False, knowledge="file")
+    cfg.usage_switch_percent = 85
+    assert "Stop" in json.loads(generated_files(cfg)[".agents/hooks.json"])["ego"]  # usage alone is enough for the Stop hook
+    cfg.usage_switch_percent = 0
+    assert ".agents/hooks.json" not in generated_files(cfg)
+    # Under `ego run agy` the context probe also keeps the quota and shows it beside the context size.
+    (tmp_path / ".ego").mkdir()
+    state = tmp_path / "state.json"
+    monkeypatch.setenv("EGO_RUN_STATE", str(state))
+    payload = {**_agy_status(tmp_path), "agent_state": "idle", "context_window": {"context_window_size": 1000000, "used_percentage": 12.5}}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    assert main(["hook", "context-probe", "--root", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.strip() == "ego · ctx 125k · 5h 10% · 7d 30%"
+    assert (tmp_path / ".ego/state/usage_limits.agy.json").exists()
+
+
 def test_usage_switch_hooks_and_statusline_cli(tmp_path: Path, monkeypatch, capsys):
     cfg = replace(default_config(), clear_suggest_tokens=0, auto_resume=False, knowledge="file"); cfg.usage_switch_percent = 85
     settings = json.loads(generated_files(cfg)[".claude/settings.json"])
@@ -840,7 +903,8 @@ def test_hook_files_are_generated_for_codex_agy_and_opencode_on_request(tmp_path
     usage_only = replace(default_config(), clear_suggest_tokens=0, auto_resume=False, knowledge="file"); usage_only.usage_switch_percent = 85
     only = generated_files(usage_only)
     assert set(json.loads(only[".codex/hooks.json"])["hooks"]) == {"Stop"}  # Codex reports its limits
-    assert ".agents/hooks.json" not in only and ".opencode/plugins/ego.ts" not in only  # AGY / OpenCode do not
+    assert set(json.loads(only[".agents/hooks.json"])["ego"]) == {"Stop"}  # AGY reports its quota in the status line
+    assert ".opencode/plugins/ego.ts" not in only  # OpenCode reports none
     cfg.hosts = ["claude"]
     assert not {".codex/hooks.json", ".agents/hooks.json", ".opencode/plugins/ego.ts"} & set(generated_files(cfg))
 

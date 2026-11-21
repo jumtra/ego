@@ -63,12 +63,14 @@ def _cmd_apply(args):
     plan = installation_plan(root, cfg)
     changes = [c for c in plan["changes"] if c["action"] != "unchanged"]
     status = "BLOCKED" if plan["conflicts"] else "UP_TO_DATE" if not changes else "CHANGES_PENDING"
+    from .adapters.hostcompat import host_versions as _host_versions
+    host_versions = _host_versions(cfg.hosts)
     summary = {"status": status, "root": str(root), "harness_version": __version__,
                "profile": cfg.profile, "policy_mode": cfg.policy_mode, "hosts": cfg.hosts, "models": cfg.models, "roles": cfg.roles,
                "code_intelligence": cfg.code_intelligence, "knowledge": cfg.knowledge,
                "runtime_mode": cfg.runtime_mode, "tests_detected": bool(detect_tests),
                "changes": changes, "conflicts": plan["conflicts"],
-               "changed_count": len(changes)}
+               "changed_count": len(changes), "host_versions": host_versions}
     if args.dry_run or args.check or plan["conflicts"]:
         if getattr(args, "install_alter_skills", False) and not args.check and not plan["conflicts"]:
             from .adapters.memory import install_alter_skills
@@ -83,7 +85,7 @@ def _cmd_apply(args):
         return 0
     if interactive:
         try:
-            if not confirm_apply(cfg, changes, root):
+            if not confirm_apply(cfg, changes, root, host_versions):
                 _print({**summary, "status": "CANCELLED"})
                 return 0
         except WizardCancelled:
@@ -181,6 +183,8 @@ def _cmd_init(args):
     result=apply_install(root,cfg) if args.apply else installation_plan(root,cfg)
     if not args.apply:result.pop("wanted",None)
     result["detection"]=detection
+    from .adapters.hostcompat import host_versions
+    result["host_versions"]=host_versions(cfg.hosts)
     _print(result);return 0
 
 def _cmd_sync(args):
@@ -194,6 +198,8 @@ def _cmd_sync(args):
     cfg=load_config(_root(args))
     result=apply_install(_root(args),cfg) if args.apply else installation_plan(_root(args),cfg)
     if not args.apply:result.pop("wanted",None)
+    from .adapters.hostcompat import host_versions
+    result["host_versions"]=host_versions(cfg.hosts)
     _print(result);return 0
 
 def _cmd_projects(args):
@@ -416,7 +422,12 @@ def _cmd_hook(args):
         # Status line of a host started by `ego run`: report its context size to the wrapper.
         try:
             from .usecases.ptyrun import STATE_ENV,record_context
-            print(record_context(json.loads(raw),Path(os.environ[STATE_ENV])))
+            from .usecases.session import record_usage
+            payload=json.loads(raw)
+            line=record_context(payload,Path(os.environ[STATE_ENV]))
+            # The same input carries AGY's quota: keep it for the Stop hook and show it beside the context size.
+            usage=record_usage(payload,root).removeprefix("ego · ")
+            print(f"{line} · {usage}" if usage else line)
         except (ValueError,OSError,EgoError,KeyError,TypeError):print("")
         return 0
     if args.event=="statusline":
@@ -476,11 +487,11 @@ def _cmd_hook(args):
                 # A nearly spent usage limit outranks a large context: there may be no later turn to save in.
                 # Under `ego run` the wrapper saves, clears and resumes: the hooks must not ask for the same again.
                 wrapped=bool(os.environ.get("EGO_RUN"))
-                # Codex reports its usage limits in the session record; Claude's come from the status line.
-                # OpenCode and AGY report none, so there usage_switch_percent has nothing to act on.
+                # Codex reports its usage limits in the session record; Claude's and AGY's come from the status line
+                # (usage_advice reads what it recorded). OpenCode reports none, so there usage_switch_percent has nothing to act on.
                 limits=None
                 if host=="codex":limits=codex_limits(Path(obj["transcript_path"]).expanduser()) if isinstance(obj.get("transcript_path"),str) else {}
-                elif host in ("opencode","agy"):limits={}
+                elif host=="opencode":limits={}
                 out=usage_advice(root,obj,cfg.usage_switch_percent,cfg.hosts,host=host,limits=limits) or ({} if wrapped else clear_advice(root,obj,cfg.clear_suggest_tokens,host=host,info=info))
             else:
                 out={} if os.environ.get("EGO_RUN") or not load_config(root).auto_resume else clear_resume(root,obj)  # the hook is also installed for alter alone

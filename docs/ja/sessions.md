@@ -11,7 +11,7 @@
 | 別の CLI で続ける | [`ego session resume --from` / `ego session handoff`](#別の-cli-で続ける) |
 | どの CLI でも、クリアと再開を自動で行う | [`ego run`](#ego-run-自動ローテーション) |
 | 素の Claude Code・Codex・OpenCode・AGY でクリアを促してもらう | [`clear_suggest_tokens` フック](#claude-code-のフック) |
-| Claude / Codex の使用上限が近づいたら CLI を切り替える | [`usage_switch_percent`](#使用上限での切り替えclaude-code-と-codex) |
+| Claude / Codex / AGY の使用上限が近づいたら CLI を切り替える | [`usage_switch_percent`](#使用上限での切り替えclaude-codecodex-agy) |
 
 日常的には、これらのコマンドは AI 自身が実行します。「チェックポイントを保存して」や「codex の続きから」と頼んでください。
 
@@ -122,7 +122,7 @@ ego run codex --yolo                  # 権限確認なしで起動
 | Claude Code | `~/.claude/projects/<project>/*.jsonl` |
 | Codex | `~/.codex/sessions/**/rollout-*.jsonl`（`token_count`） |
 | OpenCode | `~/.local/share/opencode/opencode.db` |
-| AGY | ステータスラインの入力（`context_window`）。セッション限りの `--settings` 経由 |
+| AGY | ステータスラインの入力（`context_window`。`usage_switch_percent` には `quota` も）。セッション限りの `--settings` 経由 |
 
 - **チェックポイントがなければクリアしません。** 5 分以内に新しいチェックポイントが現れなければ、ローテーションは中止され、コンテキストがさらに 25% 増えるまで再試行しません。
 - **再開後にループしません。** 再開したセッションがすでにしきい値を超えていても、再開直後のサイズから 25% 増えるまでは再度ローテーションしません。
@@ -162,7 +162,7 @@ ego apply --clear-suggest-tokens 120000     # または clear_suggest_tokens を
 
 `ego run` の中では、Claude Code のフックと同様にこれらのフックも動作を止めます。Codex・AGY・OpenCode のフックは、各 CLI の公開されているフックの仕様に沿って作られています。AGY と OpenCode はインストール済みの CLI で動作を確認しましたが、Codex の Stop のペイロードは端から端までは実行していません。
 
-## 使用上限での切り替え（Claude Code と Codex）
+## 使用上限での切り替え（Claude Code、Codex、AGY）
 
 ```toml
 usage_switch_percent = 99    # その後: ego sync --apply
@@ -178,7 +178,14 @@ usage_switch_percent = 99    # その後: ego sync --apply
 
 **Codex:** 同じ設定で `.codex/hooks.json` に `Stop` フックが追加されます。Codex は両方の使用枠をセッション記録に書き込むため、ステータスラインは不要です。フックはそこから読み取り、上記と同じ動きをします（設定済みの他の CLI を提案します）。
 
-**OpenCode と AGY** は、フックやプラグインに使用上限を報告しません。そのため `usage_switch_percent` はそこでは何もできず、この設定のためのフックは生成されません。ego は使用量を推定することもありません。
+**AGY:** 同じ設定で `.agents/hooks.json` に `Stop` フックが追加されます。AGY が残りの quota（`quota.<枠>.remaining_fraction` と `reset_time`）を報告するのはステータスラインの入力だけなので、フックはステータスラインが `.ego/state/usage_limits.agy.json` に記録した値を見て動きます。
+
+- **`ego run agy` の中**では自動です。コンテキストを計測するセッション限りのステータスラインが quota も記録します（`ego · ctx 120k · 5h 42% · 7d 12%`）。
+- **素の `agy` セッション**では、AGY にプロジェクト単位のステータスラインはありません。AGY が入力を ego に渡すよう、ユーザー設定（`~/.gemini/antigravity-cli/settings.json`）に `"statusLine": {"type": "command", "command": "ego hook statusline", "enabled": true, "stack_with_default": true}` を追加してください。ないと、フックは計測値を持たず何もしません。
+- **見る枠:** セッションのモデルが消費する枠だけです。Gemini モデルは `gemini-5h` と `gemini-weekly`（Argon モデルは `gemini-argon-wtu-weekly` も）、それ以外のモデルは `3p-5h` と `3p-weekly` です。モデル名がなければ何もしません。この対応は AGY が報告する quota 名に基づくもので、AGY が文書化しているものではありません。
+- AGY が報告するのは*残り*の割合です。ego は使用率（`100 - 残り`）を表示・比較します。
+
+**OpenCode** は、プラグインに使用上限を報告しません（多数のプロバイダーを束ねており、API キーには 5 時間枠がありません）。そのため `usage_switch_percent` はそこでは何もできず、この設定のためのフックは生成されません。ego は使用量を推定することもありません。
 
 ## ベストプラクティス
 

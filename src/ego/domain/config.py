@@ -144,6 +144,7 @@ class ConfigSpec(BaseModel):
     roles: dict[RoleLiteral, RoleConfigSpec]
     isolation: Literal["copy", "worktree", "auto"]
     cleanup_worktree: bool
+    git_exclude: bool
     tests: list[Annotated[list[str], Field(min_length=1)]]
     allow_commands: list[str]
 
@@ -257,7 +258,7 @@ class Config:
     worker_segment_turns: int  # managed Claude worker: turns per segment; context is measured between segments
     clear_suggest_tokens: int  # Claude Code/Codex/OpenCode/AGY: at this measured context size the Stop hook forces a checkpoint and suggests /clear; 0 = off
     auto_resume: bool  # Claude Code/Codex/AGY: SessionStart(clear) hook injects the saved checkpoint after /clear (core; independent of clear_suggest_tokens)
-    usage_switch_percent: int  # Claude Code/Codex: at this % of the usage limit, checkpoint and propose another CLI; 0 = off
+    usage_switch_percent: int  # Claude Code/Codex/AGY (OpenCode reports no usage): at this % of the usage limit, checkpoint and propose another CLI; 0 = off
     run_yolo: bool  # `ego run` starts the CLI with its skip-permissions switch (--yolo / --no-yolo overrides per run)
     alter_analysis: bool  # opt-in: after a session ends, run the analyzer host headless to attach analysis to the recorded conversation (knowledge=alter only)
     alter_analyzer: dict[str, Any]  # host -> {model} used for analysis; overrides the session host
@@ -266,6 +267,7 @@ class Config:
     roles: dict[str, Any]  # role (coder/tester/reviewer) -> {host, model, effort}; same vocabulary as hosts/models
     isolation: str  # "auto" (worktree only when writer nodes can run in parallel), "copy" (staging directory) or "worktree" (git worktree)
     cleanup_worktree: bool  # whether to remove the worktree after run
+    git_exclude: bool  # true: apply/sync/update list .ego/ and generated files in .git/info/exclude (local only); false: leave git's ignore rules alone so the project may commit them
     tests: list[list[str]]
     allow_commands: list[str]
     tuning: Tuning
@@ -328,6 +330,10 @@ def dump_config(cfg: Config) -> str:
         "#   isolation = \"worktree\"  # 常に Git worktree によるブランチ作業分離\n"
         "#   cleanup_worktree = true  # タスク終了時に worktree を自動削除するかどうか\n"
         "#\n"
+        "# git 管理からの除外 (git_exclude):\n"
+        "#   git_exclude = true   # 既定。.ego/ と生成ファイルを .git/info/exclude（ローカルのみ）に追加。追跡済みのファイルは対象外\n"
+        "#   git_exclude = false  # .git/info/exclude に触れない。.ego/config.toml や spec をリポジトリで管理したい場合\n"
+        "#\n"
         "# Managed worker のコンテキスト (max_turns, worker_context):\n"
         "#   max_turns = 30             # worker 1 回あたりの最大ターン数\n"
         "#   worker_context = \"lean\"   # \"lean\": ユーザーの MCP サーバーを継承しない / \"inherit\": 継承する\n"
@@ -342,7 +348,7 @@ def dump_config(cfg: Config) -> str:
         "# セッションクリアのしきい値 (clear_suggest_tokens, Claude Code / Codex / OpenCode / AGY。Stop hook が強制):\n"
         "#   clear_suggest_tokens = 150000  # 実測コンテキストがこの値に達したらチェックポイントを自動保存させ /clear を提案。0 で無効\n"
         "#\n"
-        "# 使用量上限が近いときの自動保存と切り替え提案 (usage_switch_percent, Claude Code / Codex。使用量を報告しない OpenCode / AGY は対象外):\n"
+        "# 使用量上限が近いときの自動保存と切り替え提案 (usage_switch_percent, Claude Code / Codex / AGY。使用量を報告しない OpenCode は対象外):\n"
         "#   usage_switch_percent = 99  # 5時間/7日枠の使用率がこの%以上でチェックポイント保存と別CLIへの切り替えを提案。0 で無効\n"
         "#\n"
         "# ego run の権限確認スキップ (run_yolo):\n"

@@ -359,10 +359,10 @@ def generated_files(cfg: Config) -> dict[str, str]:
         if cfg.knowledge == "alter":
             codex_hooks["UserPromptSubmit"] = [{"hooks": handlers("user-prompt")}]
         files[".codex/hooks.json"] = json.dumps({"hooks": codex_hooks}, indent=2) + "\n"
-    if "agy" in cfg.hosts and (cfg.clear_suggest_tokens > 0 or cfg.auto_resume or cfg.knowledge == "alter"):
-        # AGY reports no usage limit, so only the context-limit, resume and alter hooks apply to it.
+    if "agy" in cfg.hosts and (session_hooks or cfg.auto_resume or cfg.knowledge == "alter"):
+        # AGY reports its quota only in its status line input (see `ego hook statusline`); the Stop hook acts on what that recorded.
         handler = lambda event: [{"type": "command", "command": f"ego hook {event} --host agy --root .", "timeout": 30}]
-        agy_hooks: dict[str, list] = {"Stop": handler("stop")} if cfg.clear_suggest_tokens > 0 or cfg.knowledge == "alter" else {}
+        agy_hooks: dict[str, list] = {"Stop": handler("stop")} if session_hooks else {}
         if cfg.auto_resume or cfg.knowledge == "alter":
             agy_hooks["SessionStart"] = handler("session-start")
         if cfg.knowledge == "alter":  # AGY has no prompt-submit event: PreInvocation runs before each model call (ego injects once per prompt)

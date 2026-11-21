@@ -1112,3 +1112,61 @@ def test_apply_without_git_skips_exclude(tmp_path):
     cfg = default_config(tmp_path)
     cfg.hosts = ["claude"]
     assert apply_install(tmp_path, cfg)["git_exclude"]["status"] == "skipped"
+
+
+def test_git_exclude_can_be_disabled(tmp_path):
+    from ego.usecases.install import apply_install
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    cfg = default_config(tmp_path)
+    cfg.hosts = ["claude"]
+    cfg.git_exclude = False
+    assert apply_install(tmp_path, cfg)["git_exclude"]["status"] == "disabled"
+    exclude = tmp_path / ".git" / "info" / "exclude"
+    assert "/.ego/" not in (exclude.read_text() if exclude.exists() else "")
+    status = subprocess.run(["git", "status", "--porcelain", "-uall"], cwd=tmp_path, capture_output=True, text=True).stdout
+    assert ".ego/config.toml" in status
+
+
+def test_git_exclude_reports_already_tracked_ego_files(tmp_path):
+    from ego.usecases.install import apply_install
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    cfg = default_config(tmp_path)
+    cfg.hosts = ["claude"]
+    cfg.git_exclude = False
+    apply_install(tmp_path, cfg)
+    subprocess.run(["git", "add", ".ego/config.toml"], cwd=tmp_path, check=True)
+    cfg.git_exclude = True
+    res = apply_install(tmp_path, cfg)["git_exclude"]
+    assert res["status"] == "updated" and ".ego/config.toml" in res["tracked_ego"]
+
+
+def _fake_cli(directory: Path, name: str, body: str) -> None:
+    directory.mkdir(exist_ok=True)
+    script = directory / name
+    script.write_text("#!/bin/sh\n" + body + "\n")
+    script.chmod(0o755)
+
+
+def test_host_versions_reports_installed_missing_and_silent_clis(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    _fake_cli(bin_dir, "claude", 'echo "9.9.9 (Claude Code)"')
+    _fake_cli(bin_dir, "opencode", "exit 0")  # installed, but says nothing
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + "/usr/bin:/bin")
+    monkeypatch.setattr(shutil, "which", lambda name, _w=shutil.which: _w(name, path=str(bin_dir)))
+    out = hostcompat.host_versions(["claude", "codex", "opencode"])
+    assert out["claude"] == {"installed": True, "version": "9.9.9 (Claude Code)", "note": "ok"}
+    assert out["codex"]["installed"] is False and out["codex"]["version"] is None and "inert" in out["codex"]["note"]
+    assert out["opencode"]["installed"] is True and out["opencode"]["version"] is None and "--version" in out["opencode"]["note"]
+
+
+def test_apply_and_sync_report_the_selected_hosts_versions(tmp_path, monkeypatch, capsys):
+    bin_dir = tmp_path / "bin"
+    _fake_cli(bin_dir, "claude", 'echo "9.9.9 (Claude Code)"')
+    monkeypatch.setattr(shutil, "which", lambda name, _w=shutil.which: _w(name, path=str(bin_dir)))
+    root = tmp_path / "proj"; root.mkdir()
+    assert main(["apply", "--root", str(root), "--non-interactive", "--hosts", "claude,agy", "--dry-run"]) == 0
+    versions = json.loads(capsys.readouterr().out)["host_versions"]
+    assert set(versions) == {"claude", "agy"}  # only what was selected
+    assert versions["claude"]["version"] == "9.9.9 (Claude Code)" and versions["agy"]["installed"] is False
+    assert main(["init", "--root", str(root), "--hosts", "claude"]) == 0
+    assert json.loads(capsys.readouterr().out)["host_versions"]["claude"]["installed"] is True
