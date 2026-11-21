@@ -42,8 +42,9 @@ def _merge(results: list[RunResult], *, status: str | None = None, reason: str |
             if isinstance(value, (int, float)):
                 usage[key] = usage.get(key, 0) + value
     costs = [r.cost_usd for r in results]
+    output = last.output or next((r.output for r in reversed(results) if r.output), "")
     return dataclasses.replace(
-        last, status=status or last.status, reason=reason if reason is not None else last.reason,
+        last, status=status or last.status, output=output, reason=reason if reason is not None else last.reason,
         usage=usage or None, cost_usd=None if any(c is None for c in costs) else round(sum(costs), 6),
         tokens=sum(r.tokens or 0 for r in results) or last.tokens,
         elapsed_seconds=round(sum(r.elapsed_seconds for r in results), 4),

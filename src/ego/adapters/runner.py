@@ -160,6 +160,17 @@ def _agy_failed(raw: str) -> bool:
     return isinstance(obj, dict) and isinstance(obj.get("status"), str) and obj["status"] != "SUCCESS"
 
 
+_RATE_LIMIT_RE = re.compile(
+    r"rate[\s_-]?limit|\b429\b|too many requests|usage limit|"
+    r"quota\s+(?:exceeded|limit|exhausted|reached)|out\s+of\s+quota|insufficient_quota|"
+    r"hit (?:your|the) limit|"
+    r"(?:usage|rate|token|spend|billing|daily|weekly|hourly)\s+limit\s+reached|"
+    r"overloaded_error|(?:server|api|model|service|system)\s+(?:is\s+)?overloaded|"
+    r"(?:at|over|exceeded)\s+capacity|capacity\s+limit",
+    re.I,
+)
+
+
 def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: str|None = None,
               effort: str|None = None, read_only: bool = True, max_turns: int = 4,
               autonomy: str = "auto", isolated: bool = False, lean: bool = False,
@@ -183,7 +194,7 @@ def run_agent(host: str, prompt: str, cwd: Path, timeout: int = 180, *, model: s
     output,tokens,cost = parse_host_response(host,stdout)
     error_text = stderr.lower() + " " + output.lower()
     if host == "agy" and code == 0 and _agy_failed(stdout): code = 1
-    status = "PASS" if code == 0 else "TIMEOUT" if code == 124 else "RATE_LIMIT" if ("rate limit" in error_text or re.search(r"\b429\b", error_text)) else "FAIL"
+    status = "PASS" if code == 0 else "TIMEOUT" if code == 124 else "RATE_LIMIT" if _RATE_LIMIT_RE.search(error_text) else "FAIL"
     return RunResult(status, redact(output), redact(stderr),code,seconds,host,tokens,cost,"" if code == 0 else "Host CLI error", model=model or "native-default", effort=effort,
                      usage=parse_host_usage(host,stdout),
                      **dict(zip(("session_id","stop_reason"), parse_claude_session(stdout) if host == "claude" else (None, None))))

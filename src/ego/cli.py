@@ -261,22 +261,36 @@ def _cmd_work(args):
     if not task:raise EgoError("TASK_MISSING",str(args.task),3)
     # Planning cost is reporting data, not part of the task specification (resume compares specs).
     planner_usage=task.pop("planner_usage",None)
-    if any(getattr(args,attr,None) for attr in ("hosts","strategy","model","models")):
-        task=dict(task)
-        defaults=dict(task.get("defaults",{}))
-        if args.hosts:defaults["hosts"]=[h.strip() for h in args.hosts.split(",")]
-        if args.strategy:defaults["strategy"]=args.strategy
-        if args.model:defaults["model"]=args.model
+    route_override=None
+    defaults_override=None
+    if args.action=="resume":
+        override={}
+        if args.host:override["host"]=args.host
+        if args.hosts:override["hosts"]=[h.strip() for h in args.hosts.split(",") if h.strip()]
+        if args.strategy:override["strategy"]=args.strategy
+        if args.model:override["model"]=args.model
         if args.models:
-            try:defaults["models"]=json.loads(args.models)
+            try:override["models"]=json.loads(args.models)
             except json.JSONDecodeError as exc:raise EgoError("INVALID_MODEL",str(exc),2) from exc
-        task["defaults"]=defaults
+        if getattr(args,"nodes",None):
+            nodes=[nid.strip() for raw in args.nodes for nid in raw.split(",") if nid.strip()]
+            if nodes:override["nodes"]=nodes
+        if override:route_override=override
+    elif any(getattr(args,attr,None) for attr in ("hosts","strategy","model","models")):
+        defaults_override={}
+        if args.hosts:defaults_override["hosts"]=[h.strip() for h in args.hosts.split(",") if h.strip()]
+        if args.strategy:defaults_override["strategy"]=args.strategy
+        if args.model:defaults_override["model"]=args.model
+        if args.models:
+            try:defaults_override["models"]=json.loads(args.models)
+            except json.JSONDecodeError as exc:raise EgoError("INVALID_MODEL",str(exc),2) from exc
     from .usecases.replan import run_with_replans
     result=run_with_replans(root,task,host=args.host,apply=args.apply,approve=args.approve,trust_cli=args.trust_cli,
                    run_id=args.run_id,resume=args.action=="resume",progress_stderr=True,
                    autonomy=args.autonomy,isolated=args.attest_external_sandbox,
                    worktree=args.worktree,cleanup_worktree=args.cleanup_worktree,planner_usage=planner_usage,
-                   seed_from=getattr(args,"seed_from",None),task_file=args.task)
+                   seed_from=getattr(args,"seed_from",None),task_file=args.task,
+                   route_override=route_override,defaults_override=defaults_override)
     _print(shape(result));return 0 if result["final_status"] in ("PASSED","COMPARISON_READY") else 5
 
 
@@ -670,7 +684,8 @@ def build_parser()->argparse.ArgumentParser:
     ac=ap.add_parser("sync");ac.add_argument("run_id");ac.add_argument("--task",required=True)
     r=s.add_parser("watch",help="Stream a run's progress events (JSON lines) until it ends");r.add_argument("run_id");r.add_argument("--after",type=int,default=0)
     for name in ("run","resume"):
-        r=s.add_parser(name);r.add_argument("--task",required=True);r.add_argument("--host",choices=["mock","claude","codex","opencode","agy"],default="mock")
+        r=s.add_parser(name);r.add_argument("--task",required=True)
+        r.add_argument("--host",choices=["mock","claude","codex","opencode","agy"],default="mock" if name=="run" else None)
         r.add_argument("--apply",action="store_true");r.add_argument("--approve",action="store_true");r.add_argument("--trust-cli",action="store_true")
         r.add_argument("--hosts", help="Comma-separated task default hosts; per-node settings take precedence")
         r.add_argument("--strategy",choices=["single","fallback","compare"])
@@ -681,7 +696,9 @@ def build_parser()->argparse.ArgumentParser:
         r.add_argument("--worktree",action="store_true",default=None,help="Execute task in an isolated Git worktree")
         r.add_argument("--keep-worktree",dest="cleanup_worktree",action="store_false",default=None,help="Keep the Git worktree after task completion")
         r.add_argument("--verbose",action="store_true",help="Print the full run record instead of the compact summary")
-        if name=="resume":r.add_argument("run_id")
+        if name=="resume":
+            r.add_argument("run_id")
+            r.add_argument("--node",action="append",dest="nodes",help="Limit resume routing overrides (--host/--model/...) to these node IDs (repeatable or comma-separated)")
         else:
             r.add_argument("--run-id",help="Fixed run ID, so `ego work watch <id>` can follow the run")
             r.add_argument("--from",dest="seed_from",metavar="RUN_ID",
