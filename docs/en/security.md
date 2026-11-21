@@ -22,7 +22,7 @@
 - **Processes started by an AI CLI.** Allowed command names and policy hooks are advisory, not a security boundary.
 - **`--yolo` and `bypass`.** `ego run --yolo`, `run_yolo = true` and `--autonomy bypass` remove the CLI's own permission prompts. Use them only where that is acceptable.
 - **AGY write runs.** AGY's print mode cannot answer a permission prompt, so managed write runs pass `--dangerously-skip-permissions` even without `--attest-external-sandbox`; read-only nodes and `--autonomy safe` use plan mode. Edits still land in the staging copy, but commands AGY runs are not contained. Whether your AGY plan permits automated CLI use is yours to confirm.
-- **Costs.** Reported costs are the CLI's own estimates after the fact, not a hard cap. `max_run_tokens` (default 500000, `cache_read` excluded) stops a run between steps once its billable tokens reach the cap.
+- **Costs.** Reported costs are the CLI's own estimates after the fact, not a hard cap. `max_run_tokens` (default `0` = unlimited; `cache_read` excluded), when explicitly configured (`>= 1000`) or passed via `--max-run-tokens`, stops an invocation between steps once its billable tokens reach the cap (and resets on `resume`).
 - **Secrets in content.** Redaction is best-effort; credentials inside source files, diagrams or unusual formats may not be detected.
 - **Server-side rules.** Branch protection and required checks must be configured on GitHub.
 - **`relaxed` policy.** It tells the AI it may push and edit configuration on request, and turns off most hook checks.

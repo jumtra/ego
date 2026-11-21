@@ -73,6 +73,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `--run-id <id>` | （`run` のみ）実行 ID を固定し、`ego work watch <id>` で追えるようにします |
 | `--from <run_id>` | （`run` のみ）失敗した run を、修正したタスクで続けます。その run の検証済みの変更から始め、定義と上流が変わっていない検証済み agent ノードは再実行しません |
 | `--worktree` / `--keep-worktree` | Git worktree を使う。終了後も残す |
+| `--max-run-tokens <N>` | この実行における `max_run_tokens` を上書き（`0` で無制限、または `1000` 以上） |
 | `--verbose` | 要約ではなく、完全な run の記録を表示 |
 
 ### 結果
@@ -117,7 +118,7 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 
 **`/work-plan` はこの経路で実行されます。** 計画を承認すると、AI は計画を Task JSON にし、`ego work run --run-id ...` を起動して、届いたイベントを順にあなたへ伝えます（Claude Code は Monitor、他のホストは `ego work status`）。適用の前には確認を取ります。
 
-**ワーカーのコンテキスト上限。** Claude ワーカーは `worker_segment_turns` ターンごとの区間で実行されます。区間の間に ego がセッションの実測コンテキストを測り、`clear_suggest_tokens` 未満なら同じセッションを `--resume` で続け、以上ならチェックポイントを保存させて、新しいセッションでそこから続きを実行します（`worker_segment` イベントの `action: rotate`）。他のホストと読み取り専用ノードは従来どおり 1 回で実行します。
+**ワーカーのコンテキスト上限。** 全ホスト（`claude`、`codex`、`opencode`、`agy`）の書き込み可能なワーカーは `clear_suggest_tokens` で自動的にローテーションします。Claude ワーカーは `worker_segment_turns` ターンごとの区間で実行して区間間に計測し、Codex / OpenCode / AGY は実行中のストリームとセッション記録を監視して上限で中断します。Claude で `clear_suggest_tokens` 未満なら同じセッションを `--resume` で続け、以上ならチェックポイントを保存させて新しいセッションで続きを実行します（`worker_segment` イベントの `action: rotate`）。Claude 以外のホストでチェックポイントが未保存だった場合は、ワークスペースの変更ファイル一覧と直前出力から機械的フォールバック引き継ぎ文を生成して新セッションで続行します（`fallback: true`）。読み取り専用ノードと `mock` は従来どおり 1 回で実行します。
 
 ### タスク JSON
 
@@ -209,7 +210,7 @@ task の `max_replans` は、計画全体を作り直せる回数です（既定
 
 ## トークン上限
 
-`max_run_tokens`（既定 500000）は run 全体の使用トークンの上限です。`cache_read` トークンは数えません。上限に達すると、run はステップの区切りで止まり、`final_status` は `BUDGET_EXHAUSTED` になります。run 全体の時間制限はありません。
+`max_run_tokens`（既定 `0` = 無制限、通常は途中で停止しません）は、設定または `--max-run-tokens` で `1000` 以上を明示指定した場合にのみ、1 回の `run` または `resume` 実行あたりの使用トークンの上限として機能します。`cache_read` トークンは数えず、`resume` ごとに上限枠がリセットされます。上限に達すると、run はステップの区切りで止まり、`final_status` は `BUDGET_EXHAUSTED` になります。run 全体の時間制限はありません。
 
 ## 補助コマンド
 

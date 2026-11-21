@@ -266,11 +266,14 @@ def test_config_pydantic_schema_rejects_out_of_range_and_wrong_types():
     for bad_cfg in (
         replace(default_config(), max_turns=201),
         replace(default_config(), clear_suggest_tokens=500),
+        replace(default_config(), max_run_tokens=500),
+        replace(default_config(), max_run_tokens=-1),
         replace(default_config(), cleanup_worktree="yes"),
     ):
         with pytest.raises(EgoError) as exc_info:
             bad_cfg.validate()
         assert exc_info.value.code == "INVALID_CONFIG"
+    replace(default_config(), max_run_tokens=0).validate()
 
 
 def test_plan_schema_limits_from_config_override_validation_and_prompt_schema(tmp_path):

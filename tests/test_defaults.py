@@ -60,5 +60,20 @@ def test_existing_config_without_new_keys_uses_package_defaults(tmp_path):
     cfg = load_config(tmp_path)
 
     # Assert
-    assert (cfg.max_rounds, cfg.max_replans, cfg.max_run_tokens) == (2, 1, 500000)
+    assert (cfg.max_rounds, cfg.max_replans, cfg.max_run_tokens) == (2, 1, 0)
     assert cfg.tuning.max_summary_chars == 800
+
+
+def test_max_run_tokens_zero_is_accepted_by_load_config(tmp_path):
+    # Arrange
+    (tmp_path / ".ego").mkdir()
+    (tmp_path / ".ego" / "config.toml").write_text("max_run_tokens = 0\n", encoding="utf-8")
+
+    # Act
+    cfg_zero = load_config(tmp_path)
+    (tmp_path / ".ego" / "config.toml").write_text("max_run_tokens = 250000\n", encoding="utf-8")
+    cfg_pos = load_config(tmp_path)
+
+    # Assert
+    assert cfg_zero.max_run_tokens == 0
+    assert cfg_pos.max_run_tokens == 250000

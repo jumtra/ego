@@ -99,6 +99,20 @@ class RoleConfigSpec(BaseModel):
 
 
 
+def validate_max_run_tokens(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not (value == 0 or value >= 1000):
+        raise ValueError("max_run_tokens must be 0 (off) or >= 1000")
+    return value
+
+
+def resolve_max_run_tokens(cfg: Config, override: int | None) -> int:
+    value = cfg.max_run_tokens if override is None else override
+    try:
+        return validate_max_run_tokens(value)
+    except ValueError as exc:
+        raise EgoError("INVALID_CONFIG", str(exc), 2) from exc
+
+
 class ConfigSpec(BaseModel):
     """Pydantic schema for validating Config attributes mechanically."""
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -114,7 +128,7 @@ class ConfigSpec(BaseModel):
     max_attempts: Annotated[int, Field(ge=1, le=5)]
     max_rounds: Annotated[int, Field(ge=0, le=5)]
     max_replans: Annotated[int, Field(ge=0, le=5)]
-    max_run_tokens: Annotated[int, Field(ge=1000)]
+    max_run_tokens: int
     timeout_seconds: Annotated[int, Field(ge=5, le=7200)]
     max_turns: Annotated[int, Field(ge=1, le=200)]
     worker_context: Literal["lean", "inherit"]
@@ -139,6 +153,11 @@ class ConfigSpec(BaseModel):
         if len(set(v)) != len(v):
             raise ValueError("Invalid/duplicate hosts")
         return v
+
+    @field_validator("max_run_tokens")
+    @classmethod
+    def _validate_max_run_tokens(cls, v: int) -> int:
+        return validate_max_run_tokens(v)
 
     @field_validator("clear_suggest_tokens")
     @classmethod
@@ -231,7 +250,7 @@ class Config:
     max_attempts: int
     max_rounds: int  # reviewer rejections allowed per node
     max_replans: int  # plan revisions allowed per task
-    max_run_tokens: int  # whole-run token cap; cache_read tokens are excluded
+    max_run_tokens: int  # per-invocation billable token cap (resets on resume; cache_read excluded; 0 = off)
     timeout_seconds: int
     max_turns: int  # agentic turns per managed worker invocation
     worker_context: str  # "lean" (no inherited MCP servers) or "inherit"
@@ -312,7 +331,10 @@ def dump_config(cfg: Config) -> str:
         "# Managed worker のコンテキスト (max_turns, worker_context):\n"
         "#   max_turns = 30             # worker 1 回あたりの最大ターン数\n"
         "#   worker_context = \"lean\"   # \"lean\": ユーザーの MCP サーバーを継承しない / \"inherit\": 継承する\n"
-        "#   worker_segment_turns = 10  # Claude worker をこのターン数ごとに区切り、clear_suggest_tokens 超過時はチェックポイントから新セッションで再開\n"
+        "#   worker_segment_turns = 10  # Claude worker をこのターン数ごとに区切り、全ホストで clear_suggest_tokens 超過時はチェックポイントから新セッションで再開\n"
+        "#\n"
+        "# 1回の実行（run / resume）あたりのトークン上限 (max_run_tokens。既定 0 = 無制限。設定時は 1000 以上。cache_read は除外。resume ごとにリセット):\n"
+        "#   max_run_tokens = 0\n"
         "#\n"
         "# /clear 後の自動再開 (auto_resume, Claude Code / Codex / AGY / OpenCode。既定 true。SessionStart hook が保存済みチェックポイントを注入):\n"
         "#   auto_resume = true\n"
