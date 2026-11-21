@@ -1721,3 +1721,430 @@ def test_auto_isolation_uses_worktree_only_for_parallel_writers(tmp_path: Path):
 
     assert serial_res["final_status"] == "PASSED" and serial_res["worktree"] is False
     assert parallel_res["final_status"] == "PASSED" and parallel_res["worktree"] is True
+
+
+def test_fallback_carries_partial_edits_and_progress_on_rate_limit(tmp_path: Path, monkeypatch):
+    (tmp_path / "seed.txt").write_text("seed\n")
+    seen_calls: list[dict] = []
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        seen_calls.append({"host": host, "model": kw.get("model"), "prompt": prompt,
+                           "a_exists": (Path(cwd) / "a.txt").exists(),
+                           "a_text": (Path(cwd) / "a.txt").read_text() if (Path(cwd) / "a.txt").exists() else ""})
+        if host == "claude":
+            (Path(cwd) / "a.txt").write_text("part-1\n")
+            return RunResult("RATE_LIMIT", "Finished part 1 in a.txt", "429 rate limit", 1, 0.1, host, model=kw.get("model"))
+        (Path(cwd) / "b.txt").write_text("part-2\n")
+        return RunResult("PASS", "Finished part 2", "", 0, 0.1, host, model=kw.get("model"))
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    spec = {
+        "goal": "Two-part edit",
+        "defaults": {"hosts": ["claude", "codex"], "strategy": "fallback", "models": {"claude": "sonnet", "codex": "gpt-5-codex"}},
+        "nodes": [{"id": "n1", "kind": "agent", "prompt": "Write a.txt and b.txt", "write_allowlist": ["a.txt", "b.txt"], "max_attempts": 1}],
+    }
+    res = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="fb-partial")
+    assert res["final_status"] == "PASSED"
+    assert [c["host"] for c in seen_calls] == ["claude", "codex"]
+    assert seen_calls[1]["a_exists"] is True and seen_calls[1]["a_text"] == "part-1\n"
+    assert "RATE_LIMIT" in seen_calls[1]["prompt"] and "a.txt" in seen_calls[1]["prompt"]
+    assert "Finished part 1 in a.txt" in seen_calls[1]["prompt"]
+    staging = tmp_path / ".ego/state/runs/fb-partial/staging"
+    assert (staging / "a.txt").read_text() == "part-1\n"
+    assert (staging / "b.txt").read_text() == "part-2\n"
+
+
+def test_rate_limit_persists_partial_and_cli_resume_switches_host_and_model(tmp_path: Path, monkeypatch, capsys):
+    from ego.cli import main as cli_main
+    (tmp_path / "seed.txt").write_text("seed\n")
+    task_path = tmp_path / "task.json"
+    spec = {
+        "goal": "Persist partial on limit",
+        "nodes": [{
+            "id": "n1",
+            "kind": "agent",
+            "host": "claude",
+            "model": "sonnet",
+            "prompt": "Write part1.txt and part2.txt",
+            "write_allowlist": ["part1.txt", "part2.txt"],
+            "max_attempts": 1,
+        }],
+    }
+    task_path.write_text(json.dumps(spec))
+    seen: list[dict] = []
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        p1 = Path(cwd) / "part1.txt"
+        seen.append({"host": host, "model": kw.get("model"), "prompt": prompt, "part1": p1.read_text() if p1.exists() else None})
+        if host == "claude":
+            p1.write_text("draft-by-claude\n")
+            return RunResult("RATE_LIMIT", "Completed step 1", "usage limit reached", 1, 0.1, host, model=kw.get("model"))
+        (Path(cwd) / "part2.txt").write_text("finished-by-codex\n")
+        return RunResult("PASS", "Completed step 2", "", 0, 0.1, host, model=kw.get("model"))
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    first = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="rl-resume", task_file=str(task_path))
+    assert first["final_status"] == "FAILED"
+    assert first["results"]["n1"]["partial_files"] == ["part1.txt"]
+    staging = tmp_path / ".ego/state/runs/rl-resume/staging"
+    partial_file = tmp_path / ".ego/state/runs/rl-resume/partial/n1/files/part1.txt"
+    assert not (staging / "part1.txt").exists()  # staging stays clean until verified
+    assert partial_file.read_text() == "draft-by-claude\n"
+    compact = compact_result(first, task_file=str(task_path))
+    assert compact["nodes"]["n1"]["partial_files"] == ["part1.txt"]
+    assert "ego work resume rl-resume" in (compact.get("next_action") or "")
+
+    # Resume via CLI with a different CLI host and model; must not trigger RESUME_MISMATCH.
+    code = cli_main([
+        "work", "resume", "rl-resume",
+        "--root", str(tmp_path),
+        "--task", str(task_path),
+        "--host", "codex",
+        "--model", "gpt-5-codex",
+        "--trust-cli",
+    ])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["final_status"] == "PASSED"
+    assert seen[1]["host"] == "codex" and seen[1]["model"] == "gpt-5-codex"
+    assert seen[1]["part1"] == "draft-by-claude\n"
+    assert "Completed step 1" in seen[1]["prompt"] and "part1.txt" in seen[1]["prompt"]
+    assert (staging / "part1.txt").read_text() == "draft-by-claude\n"
+    assert (staging / "part2.txt").read_text() == "finished-by-codex\n"
+    assert not (tmp_path / ".ego/state/runs/rl-resume/partial/n1").exists()
+
+
+def test_disallowed_writes_are_not_carried_or_persisted_on_rate_limit(tmp_path: Path, monkeypatch):
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        (Path(cwd) / "secret.txt").write_text("disallowed\n")
+        return RunResult("RATE_LIMIT", "oops", "rate limit", 1, 0.1, host)
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    spec = {
+        "goal": "Guard allowlist on partial",
+        "nodes": [{"id": "n1", "kind": "agent", "prompt": "Edit allowed.txt", "write_allowlist": ["allowed.txt"], "max_attempts": 1}],
+    }
+    res = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="rl-denied")
+    assert res["final_status"] == "FAILED"
+    assert "partial_files" not in res["results"]["n1"]
+    assert not (tmp_path / ".ego/state/runs/rl-denied/partial/n1").exists()
+
+
+def test_runner_detects_extended_rate_limit_messages(tmp_path: Path, monkeypatch):
+    from ego.adapters import runner
+    monkeypatch.setattr(runner, "build_command", lambda *a, **kw: ["fake"])
+    for msg in ("usage limit reached", "Quota exceeded", "Too Many Requests", "You hit your limit", "Server overloaded"):
+        monkeypatch.setattr(runner, "run_process", lambda *a, _m=msg, **kw: (1, "", _m, 0.05))
+        r = runner.run_agent("codex", "hi", tmp_path)
+        assert r.status == "RATE_LIMIT", f"Expected RATE_LIMIT for {msg!r}, got {r.status}"
+
+
+def test_worker_merge_preserves_prior_segment_output_on_rate_limit(tmp_path: Path):
+    from ego.usecases.worker import run_worker
+    calls = 0
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return RunResult("PASS", "Segment 1 progress", "", 0, 0.1, host, session_id="s1", stop_reason="error_max_turns", usage={"turns": 2})
+        return RunResult("RATE_LIMIT", "", "rate limit exceeded", 1, 0.1, host, session_id="s1")
+
+    res = run_worker("claude", "do work", tmp_path, 60, agent=fake_agent, threshold=100000, segment_turns=2,
+                     tag="t1", max_turns=10, read_only=False, project_root=tmp_path)
+    assert res.status == "RATE_LIMIT"
+    assert res.output == "Segment 1 progress"
+
+
+def test_cli_run_with_model_override_can_resume_with_different_host_and_model(tmp_path: Path, monkeypatch, capsys):
+    from ego.cli import main as cli_main
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text('knowledge = "file"\n')
+    (tmp_path / "seed.txt").write_text("seed\n")
+    task_path = tmp_path / "task.json"
+    spec = {
+        "goal": "Run with --model then resume with and without overrides",
+        "nodes": [{
+            "id": "n1",
+            "kind": "agent",
+            "prompt": "Write part1.txt and part2.txt",
+            "write_allowlist": ["part1.txt", "part2.txt"],
+            "max_attempts": 1,
+        }],
+    }
+    task_path.write_text(json.dumps(spec))
+    seen: list[dict] = []
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        p1 = Path(cwd) / "part1.txt"
+        seen.append({"host": host, "model": kw.get("model"), "prompt": prompt, "part1": p1.read_text() if p1.exists() else None})
+        if host == "claude":
+            if not p1.exists():
+                p1.write_text("draft-by-claude\n")
+            return RunResult("RATE_LIMIT", "Completed step 1", "usage limit reached", 1, 0.1, host, model=kw.get("model"))
+        (Path(cwd) / "part2.txt").write_text("finished-by-codex\n")
+        return RunResult("PASS", "Completed step 2", "", 0, 0.1, host, model=kw.get("model"))
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    code1 = cli_main([
+        "work", "run",
+        "--root", str(tmp_path),
+        "--task", str(task_path),
+        "--host", "claude",
+        "--model", "sonnet",
+        "--run-id", "run-ov",
+        "--trust-cli",
+    ])
+    capsys.readouterr()
+    assert code1 == 5
+    assert seen[0]["host"] == "claude" and seen[0]["model"] == "sonnet"
+
+    # Plain resume (no host/model flags) must not hit RESUME_MISMATCH and must retain initial cli_defaults.
+    code2 = cli_main([
+        "work", "resume", "run-ov",
+        "--root", str(tmp_path),
+        "--task", str(task_path),
+        "--trust-cli",
+    ])
+    capsys.readouterr()
+    assert code2 == 5
+    assert seen[1]["host"] == "claude" and seen[1]["model"] == "sonnet"
+    assert seen[1]["part1"] == "draft-by-claude\n"
+
+    # Resume switching CLI and model completes the node from partial edits.
+    code3 = cli_main([
+        "work", "resume", "run-ov",
+        "--root", str(tmp_path),
+        "--task", str(task_path),
+        "--host", "codex",
+        "--model", "gpt-5-codex",
+        "--trust-cli",
+    ])
+    out3 = json.loads(capsys.readouterr().out)
+    assert code3 == 0
+    assert out3["final_status"] == "PASSED"
+    assert seen[2]["host"] == "codex" and seen[2]["model"] == "gpt-5-codex"
+    assert seen[2]["part1"] == "draft-by-claude\n"
+    staging = tmp_path / ".ego/state/runs/run-ov/staging"
+    assert (staging / "part1.txt").read_text() == "draft-by-claude\n"
+    assert (staging / "part2.txt").read_text() == "finished-by-codex\n"
+
+
+def test_runner_rate_limit_regex_avoids_false_positives(tmp_path: Path, monkeypatch):
+    from ego.adapters import runner
+    monkeypatch.setattr(runner, "build_command", lambda *a, **kw: ["fake"])
+    for normal_msg in (
+        "Fixed buffer capacity bug",
+        "disk quota info",
+        "C++ overloaded function error",
+        "recursion limit reached",
+    ):
+        monkeypatch.setattr(runner, "run_process", lambda *a, _m=normal_msg, **kw: (1, _m, "", 0.05))
+        r = runner.run_agent("codex", "hi", tmp_path)
+        assert r.status == "FAIL", f"False positive RATE_LIMIT for {normal_msg!r}"
+
+    for rl_msg in (
+        "insufficient_quota",
+        "server is overloaded",
+        "capacity limit",
+        "daily limit reached",
+        "usage limit reached",
+    ):
+        monkeypatch.setattr(runner, "run_process", lambda *a, _m=rl_msg, **kw: (1, "", _m, 0.05))
+        r = runner.run_agent("codex", "hi", tmp_path)
+        assert r.status == "RATE_LIMIT", f"Expected RATE_LIMIT for {rl_msg!r}, got {r.status}"
+
+
+def test_partial_restore_skips_files_modified_in_staging_since_attempt(tmp_path: Path, monkeypatch):
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text('knowledge = "file"\n')
+    (tmp_path / "shared.txt").write_text("base\n")
+    seen_calls: list[dict] = []
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        p = Path(cwd)
+        seen_calls.append({
+            "prompt": prompt,
+            "shared": (p / "shared.txt").read_text() if (p / "shared.txt").exists() else None,
+            "own": (p / "own.txt").read_text() if (p / "own.txt").exists() else None,
+        })
+        if len(seen_calls) == 1:
+            (p / "shared.txt").write_text("n1-draft\n")
+            (p / "own.txt").write_text("own-draft\n")
+            return RunResult("RATE_LIMIT", "Partial progress", "rate limit", 1, 0.1, host)
+        return RunResult("PASS", "Resumed cleanly", "", 0, 0.1, host)
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    spec = {
+        "goal": "Guard partial restore against stale staging",
+        "nodes": [{
+            "id": "n1",
+            "kind": "agent",
+            "prompt": "Update shared.txt and own.txt",
+            "write_allowlist": ["shared.txt", "own.txt"],
+            "max_attempts": 1,
+        }],
+    }
+    first = execute(tmp_path, spec, host="claude", trust_cli=True, run_id="rl-conflict")
+    assert first["final_status"] == "FAILED"
+
+    staging = tmp_path / ".ego/state/runs/rl-conflict/staging"
+    (staging / "shared.txt").write_text("updated-by-other\n")
+
+    resumed = execute(tmp_path, spec, host="codex", trust_cli=True, run_id="rl-conflict", resume=True)
+    assert resumed["final_status"] == "PASSED"
+    assert seen_calls[1]["own"] == "own-draft\n"
+    assert seen_calls[1]["shared"] == "updated-by-other\n"
+    assert "Skipped stale partial edits" in seen_calls[1]["prompt"]
+    assert "shared.txt" in seen_calls[1]["prompt"]
+    assert (staging / "shared.txt").read_text() == "updated-by-other\n"
+    assert (staging / "own.txt").read_text() == "own-draft\n"
+
+
+def test_resume_host_override_drops_role_flat_model_and_supports_node_filter(tmp_path: Path, monkeypatch, capsys):
+    from ego.cli import main as cli_main
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text(
+        'knowledge = "file"\n'
+        '[roles.coder]\n'
+        'model = "config-legacy-model"\n'
+    )
+    task_path = tmp_path / "task.json"
+    spec = {
+        "goal": "Role flat model drop and --node filter",
+        "defaults": {"roles": {"coder": {"host": "claude", "model": "sonnet"}}},
+        "nodes": [
+            {"id": "n1", "kind": "agent", "role": "coder", "prompt": "step 1", "write_allowlist": ["a.txt"], "max_attempts": 1},
+            {"id": "n2", "kind": "agent", "host": "agy", "depends_on": ["n1"], "prompt": "step 2", "write_allowlist": ["b.txt"], "max_attempts": 1},
+        ],
+    }
+    task_path.write_text(json.dumps(spec))
+    calls: list[dict] = []
+
+    def fake_agent(host, prompt, cwd, timeout=180, **kw):
+        calls.append({"host": host, "model": kw.get("model"), "a_exists": (Path(cwd) / "a.txt").exists()})
+        if len(calls) == 1:
+            (Path(cwd) / "a.txt").write_text("from-claude\n")
+            return RunResult("RATE_LIMIT", "Part A done", "429 rate limit", 1, 0.1, host, model=kw.get("model"))
+        if len(calls) == 2:
+            return RunResult("PASS", "Done A", "", 0, 0.1, host, model=kw.get("model"))
+        (Path(cwd) / "b.txt").write_text("from-agy\n")
+        return RunResult("PASS", "Done B", "", 0, 0.1, host, model=kw.get("model"))
+
+    monkeypatch.setattr(work, "run_agent", fake_agent)
+    code1 = cli_main(["work", "run", "--root", str(tmp_path), "--task", str(task_path), "--run-id", "rl-role", "--trust-cli"])
+    capsys.readouterr()
+    assert code1 == 5
+    assert calls[0]["host"] == "claude" and calls[0]["model"] == "sonnet"
+
+    bad_code = cli_main([
+        "work", "resume", "rl-role",
+        "--root", str(tmp_path),
+        "--task", str(task_path),
+        "--host", "codex",
+        "--node", "nonexistent",
+        "--trust-cli",
+    ])
+    bad_err = capsys.readouterr().err
+    assert bad_code == 2 and '"INVALID_NODE"' in bad_err
+
+    code2 = cli_main([
+        "work", "resume", "rl-role",
+        "--root", str(tmp_path),
+        "--task", str(task_path),
+        "--host", "codex",
+        "--node", "n1",
+        "--trust-cli",
+    ])
+    out2 = json.loads(capsys.readouterr().out)
+    assert code2 == 0 and out2["final_status"] == "PASSED"
+    assert calls[1]["host"] == "codex" and calls[1]["model"] is None and calls[1]["a_exists"] is True
+    assert calls[2]["host"] == "agy"
+
+
+def test_stale_partial_is_cleared_and_interrupt_and_segment_persist_partial(tmp_path: Path, monkeypatch):
+    (tmp_path / ".ego").mkdir(exist_ok=True)
+    (tmp_path / ".ego/config.toml").write_text(
+        'knowledge = "file"\n'
+        'clear_suggest_tokens = 100000\n'
+        'worker_segment_turns = 2\n'
+    )
+
+    # (a) Reverted edits + empty output on retry clears stale partial/<node_id>.
+    (tmp_path / "f.txt").write_text("orig\n")
+    phase_a = 0
+
+    def fake_a(host, prompt, cwd, timeout=180, **kw):
+        nonlocal phase_a
+        phase_a += 1
+        p = Path(cwd) / "f.txt"
+        if phase_a == 1:
+            p.write_text("dirty\n")
+            return RunResult("RATE_LIMIT", "step 1", "rate limit", 1, 0.1, host)
+        p.write_text("orig\n")
+        return RunResult("FAIL", "", "plain failure", 1, 0.1, host)
+
+    monkeypatch.setattr(work, "run_agent", fake_a)
+    spec_a = {
+        "goal": "Clear stale partial",
+        "nodes": [{"id": "n1", "kind": "agent", "prompt": "Edit f.txt", "write_allowlist": ["f.txt"], "max_attempts": 1}],
+    }
+    res_a1 = execute(tmp_path, spec_a, host="claude", trust_cli=True, run_id="rl-clear")
+    assert res_a1["final_status"] == "FAILED"
+    assert (tmp_path / ".ego/state/runs/rl-clear/partial/n1").is_dir()
+    res_a2 = execute(tmp_path, spec_a, host="codex", trust_cli=True, run_id="rl-clear", resume=True)
+    assert res_a2["final_status"] == "FAILED"
+    assert not (tmp_path / ".ego/state/runs/rl-clear/partial/n1").exists()
+
+    # (b) KeyboardInterrupt inside attempt_one persists allowed edits for resume.
+    phase_b = 0
+
+    def fake_b(host, prompt, cwd, timeout=180, **kw):
+        nonlocal phase_b
+        phase_b += 1
+        p = Path(cwd) / "wip.txt"
+        if phase_b == 1:
+            p.write_text("saved-on-interrupt\n")
+            raise KeyboardInterrupt("ctrl-c")
+        assert p.read_text() == "saved-on-interrupt\n"
+        return RunResult("PASS", "resumed", "", 0, 0.1, host)
+
+    monkeypatch.setattr(work, "run_agent", fake_b)
+    spec_b = {
+        "goal": "Persist partial on interrupt",
+        "nodes": [{"id": "n2", "kind": "agent", "prompt": "Write wip.txt", "write_allowlist": ["wip.txt"], "max_attempts": 1}],
+    }
+    with pytest.raises(KeyboardInterrupt):
+        execute(tmp_path, spec_b, host="claude", trust_cli=True, run_id="rl-int")
+    assert (tmp_path / ".ego/state/runs/rl-int/partial/n2/files/wip.txt").read_text() == "saved-on-interrupt\n"
+    res_b = execute(tmp_path, spec_b, host="codex", trust_cli=True, run_id="rl-int", resume=True)
+    assert res_b["final_status"] == "PASSED"
+    assert (tmp_path / ".ego/state/runs/rl-int/staging/wip.txt").read_text() == "saved-on-interrupt\n"
+
+    # (c) Segment checkpoint persists partial on worker_segment while excluding overlay CLAUDE.md and handoffs.
+    phase_c = 0
+    partial_root = tmp_path / ".ego/state/runs/rl-seg/partial/n3/files"
+
+    def fake_c(host, prompt, cwd, timeout=180, **kw):
+        nonlocal phase_c
+        phase_c += 1
+        p = Path(cwd)
+        if phase_c == 1:
+            (p / "seg.txt").write_text("seg-1\n")
+            h = p / ".ego/memory/handoffs/fake.json"
+            h.parent.mkdir(parents=True, exist_ok=True)
+            h.write_text('{"task_id": "t1"}\n')
+            return RunResult("PASS", "seg1", "", 0, 0.1, host, session_id="s1", stop_reason="error_max_turns", usage={"turns": 2})
+        assert (partial_root / "seg.txt").read_text() == "seg-1\n"
+        assert not (partial_root / "CLAUDE.md").exists()
+        assert not (partial_root / ".ego/memory/handoffs/fake.json").exists()
+        return RunResult("PASS", "done", "", 0, 0.1, host, session_id="s1")
+
+    monkeypatch.setattr(work, "run_agent", fake_c)
+    spec_c = {
+        "goal": "Persist partial on segment",
+        "nodes": [{"id": "n3", "kind": "agent", "prompt": "Write seg.txt", "write_allowlist": ["**"], "max_turns": 6, "max_attempts": 1}],
+    }
+    res_c = execute(tmp_path, spec_c, host="claude", trust_cli=True, run_id="rl-seg")
+    assert res_c["final_status"] == "PASSED"
+    assert not (tmp_path / ".ego/state/runs/rl-seg/partial/n3").exists()

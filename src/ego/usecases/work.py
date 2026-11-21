@@ -14,7 +14,7 @@ from ..domain.defaults import package_defaults
 from ..domain.policy import check_write, check_role_write
 from ..adapters.runner import run_agent, run_checked_command
 from .worker import run_worker
-from .overlay import overlaid
+from .overlay import overlaid, instruction_target
 from ..shared.util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
                    filehash, safe_path, exclusive_lock, git_is_repo, git_head, git_worktree_add, git_worktree_remove, git_branch_delete,
                    copy_worktree_extras, git_commit_paths, git_merge_branch, sha256, json_text, is_locked, atomic_bytes)
@@ -214,11 +214,189 @@ def _worktree_mode(cfg, nodes:list[dict], worktree:bool|None)->bool:
     return cfg.isolation=="worktree"
 
 
+def _apply_defaults_override(spec:dict, cli_defaults:dict|None)->dict:
+    """Merge CLI runtime defaults (`--hosts`/`--strategy`/`--model`/`--models`) without mutating persisted spec."""
+    if not cli_defaults:
+        return spec
+    merged_defaults={**(spec.get("defaults") or {}),**cli_defaults}
+    return {**spec,"defaults":merged_defaults}
+
+
+def _strip_flat_role_models(roles_map:dict|None)->dict:
+    if not isinstance(roles_map,dict):
+        return {}
+    return {
+        rk:({k:v for k,v in rv.items() if k!="model"} if isinstance(rv,dict) else rv)
+        for rk,rv in roles_map.items()
+    }
+
+
+def _resolve_node_routes(node:dict, spec:dict, default_host:str, cfg, route_override:dict|None=None):
+    """Resolve routes for an agent node, applying explicit runtime overrides (e.g. on resume) over node/role defaults."""
+    if not route_override:
+        return resolve_routes(node,spec,default_host,default_models=cfg.models,default_roles=cfg.roles)
+    target_nodes=route_override.get("nodes")
+    if target_nodes is not None and node.get("id") not in target_nodes:
+        return resolve_routes(node,spec,default_host,default_models=cfg.models,default_roles=cfg.roles)
+    eff_node=dict(node)
+    eff_spec=spec
+    eff_default_roles=cfg.roles
+    host_changed=bool(route_override.get("hosts") or route_override.get("host"))
+    if route_override.get("hosts"):
+        eff_node.pop("host",None)
+        eff_node["hosts"]=list(route_override["hosts"])
+        if not route_override.get("strategy"):
+            eff_node["strategy"]="fallback" if len(eff_node["hosts"])>1 else "single"
+    elif route_override.get("host"):
+        eff_node.pop("hosts",None)
+        eff_node["host"]=route_override["host"]
+        if not route_override.get("strategy"):
+            eff_node["strategy"]="single"
+    if route_override.get("strategy"):
+        eff_node["strategy"]=route_override["strategy"]
+    if route_override.get("models"):
+        eff_node.pop("model",None)
+        eff_node["models"]=dict(route_override["models"])
+    elif route_override.get("model"):
+        eff_node.pop("models",None)
+        eff_node["model"]=route_override["model"]
+    elif host_changed:
+        # Switching CLI without pinning a model drops the previous host's flat model pins so the new host uses its own model.
+        eff_node.pop("model",None)
+        eff_node.pop("models",None)
+        if isinstance(spec.get("defaults"),dict):
+            eff_defaults={k:v for k,v in spec["defaults"].items() if k!="model"}
+            if isinstance(eff_defaults.get("roles"),dict):
+                eff_defaults["roles"]=_strip_flat_role_models(eff_defaults["roles"])
+            eff_spec={**spec,"defaults":eff_defaults}
+        eff_default_roles=_strip_flat_role_models(cfg.roles)
+    return resolve_routes(eff_node,eff_spec,route_override.get("host") or default_host,
+                          default_models=cfg.models,default_roles=eff_default_roles)
+
+
+def _partial_dir(runroot:Path, node_id:str)->Path:
+    return safe_path(runroot,f"partial/{node_id}")
+
+
+def _clear_partial(runroot:Path, node_id:str)->None:
+    pdir=_partial_dir(runroot,node_id)
+    if pdir.exists():
+        shutil.rmtree(pdir,ignore_errors=True)
+
+
+def _is_handoff_artifact(rel:str)->bool:
+    return rel==".ego/memory/handoffs" or rel.startswith(".ego/memory/handoffs/")
+
+
+def _snapshot_allowed_partial(work:Path, before:dict[str,str], node:dict, *, exclude_paths:set[str]|None=None)->tuple[bool,dict[str,bytes|None],dict[str,str|None]]:
+    """Capture policy-allowed edits vs `before` with base hashes, excluding runtime overlay/handoff paths."""
+    excluded=set(exclude_paths or ())
+    def _filter(snap:dict[str,str])->dict[str,str]:
+        return {k:v for k,v in snap.items() if k not in excluded and not _is_handoff_artifact(k)}
+    changed=_changed(_filter(before),_filter(snapshot(work)))
+    if not changed:
+        return True,{},{}
+    kind=node.get("kind","agent")
+    try:
+        for rel in changed:
+            check_role_write(node.get("role"),rel)
+            check_write(work,rel,node.get("write_allowlist",[]))
+        if kind=="gate":
+            raise EgoError("GATE_WRITE","A gate may not modify source")
+    except EgoError:
+        return False,{},{}
+    edits:dict[str,bytes|None]={}
+    base_hashes:dict[str,str|None]={}
+    for rel in changed:
+        path=safe_path(work,rel)
+        edits[rel]=path.read_bytes() if path.exists() else None
+        base_hashes[rel]=before.get(rel)
+    return True,edits,base_hashes
+
+
+def _save_partial(runroot:Path, node_id:str, edits:dict[str,bytes|None], meta:dict)->None:
+    """Persist allowed in-progress edits of a failed/interrupted node outside staging so resume can continue from them."""
+    _clear_partial(runroot,node_id)
+    if not edits and not meta.get("output"):
+        return
+    pdir=_partial_dir(runroot,node_id)
+    files_dir=pdir/"files"
+    modified:list[str]=[]
+    deleted:list[str]=[]
+    for rel,data in sorted(edits.items()):
+        if data is None:
+            deleted.append(rel)
+        else:
+            atomic_bytes(safe_path(files_dir,rel),data)
+            modified.append(rel)
+    write_json(pdir/"manifest.json",{
+        "node_id":node_id,
+        "saved_at":now(),
+        "modified":modified,
+        "deleted":deleted,
+        **meta,
+    })
+
+
+def _load_partial(runroot:Path, node_id:str, *, staging:Path|None=None)->tuple[dict[str,bytes|None], dict|None, list[str]]:
+    pdir=_partial_dir(runroot,node_id)
+    manifest=read_json(pdir/"manifest.json")
+    if not isinstance(manifest,dict):
+        return {},None,[]
+    files_dir=pdir/"files"
+    base_hashes=manifest.get("base_hashes") if isinstance(manifest.get("base_hashes"),dict) else {}
+    edits:dict[str,bytes|None]={}
+    conflicts:list[str]=[]
+
+    def _matches_base(rel:str)->bool:
+        if staging is None or rel not in base_hashes:
+            return True
+        cur_path=safe_path(staging,rel)
+        cur_hash=filehash(cur_path) if cur_path.is_file() else None
+        return cur_hash==base_hashes[rel]
+
+    for rel in manifest.get("modified") or []:
+        if not _matches_base(rel):
+            conflicts.append(rel)
+            continue
+        path=safe_path(files_dir,rel)
+        if path.is_file():
+            edits[rel]=path.read_bytes()
+    for rel in manifest.get("deleted") or []:
+        if not _matches_base(rel):
+            conflicts.append(rel)
+            continue
+        edits[rel]=None
+    return edits,manifest,conflicts
+
+
+def _handoff_feedback(prev_host:str, prev_model:str|None, exec_status:str, changed:list[str], prev_output:str, limit:int, *, conflicts:list[str]|None=None)->str:
+    model_label=prev_model or "native-default"
+    if changed:
+        head=(f"Previous attempt ({prev_host}/{model_label}) stopped with {exec_status}. "
+              f"Its allowed edits are already present in the workspace ({', '.join(changed[:20])}). "
+              "Inspect the current workspace and finish the remaining work without redoing completed edits.")
+    else:
+        head=(f"Previous attempt ({prev_host}/{model_label}) stopped with {exec_status} before modifying any files. "
+              "Continue from the current workspace state.")
+    parts=[head]
+    if conflicts:
+        parts.append("Skipped stale partial edits because staging changed since the previous attempt: "
+                     + ", ".join(conflicts[:20])
+                     + ". Re-apply any needed changes on top of the latest files.")
+    summary=prev_output.strip()
+    if summary:
+        parts.append(f"Last progress output:\n{summary}")
+    return clip_output("\n\n".join(parts),limit)
+
+
 def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout:int, *, feedback:str="", trust_cli:bool=False,
               autonomy: str="auto", isolated:bool=False, handoff:dict|None=None,
               token_budget:TokenBudget|None=None, progress:Progress|None=None, project_root:Path,
-              alter_rules:list[str]|None=None, use_worktree: bool = False, run_id: str = "run")->dict:
-    """A task node sees a private copy; a same-host retry continues from the previous attempt's allowed edits, fallback never reuses failed edits.
+              alter_rules:list[str]|None=None, use_worktree: bool = False, run_id: str = "run",
+              initial_carry:dict[str,bytes|None]|None=None, route_override:dict|None=None,
+              runroot:Path|None=None)->dict:
+    """A task node sees a private copy; retries, fallbacks and resumes continue from the previous attempt's allowed edits.
 
     Compare runs have their own isolated copies and never merge any candidate.
     """
@@ -228,7 +406,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     if kind in ("code","gate"):
         strategy,routes,fallback_on="single",[],frozenset()
     else:
-        strategy,routes,fallback_on=resolve_routes(node,spec,default_host,default_models=cfg.models,default_roles=cfg.roles)
+        strategy,routes,fallback_on=_resolve_node_routes(node,spec,default_host,cfg,route_override=route_override)
     attempts=[]
     max_attempts=int(node.get("max_attempts",cfg.max_attempts))
     verdict_info={}
@@ -278,21 +456,52 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     mcp_servers=list(node.get("mcp") or [])
                     if cfg.knowledge=="alter" and "alter" not in mcp_servers:
                         mcp_servers.append("alter")
+                    def _on_worker_event(**f):
+                        progress.emit("worker_segment",node=node["id"],attempt=iteration,**f)
+                        if runroot is not None and kind not in ("code","gate"):
+                            try:
+                                ok_p,seg_edits,seg_hashes=_snapshot_allowed_partial(
+                                    work,before,node,exclude_paths={instruction_target(chosen_host)[0]}
+                                )
+                                if ok_p and seg_edits:
+                                    _save_partial(runroot,node["id"],seg_edits,{
+                                        "host":chosen_host,
+                                        "model":chosen_model or "native-default",
+                                        "execution_status":"IN_PROGRESS",
+                                        "base_hashes":seg_hashes,
+                                    })
+                            except Exception:
+                                pass
                     # `ego apply` no longer writes the managed block, so the worker's private copy gets it for its session.
-                    with overlaid(work,chosen_host,cfg):
-                        try:
-                            r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,project_root=project_root,threshold=cfg.clear_suggest_tokens,
-                                         segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
-                                         on_event=lambda **f:progress.emit("worker_segment",node=node["id"],attempt=iteration,**f),
-                                         model=chosen_model,effort=chosen_effort,
-                                         read_only=kind=="splitter" or node.get("role")=="reviewer",autonomy=autonomy,isolated=isolated,
-                                         max_turns=int(node.get("max_turns",cfg.max_turns)),
-                                         lean=cfg.worker_context=="lean",mcp_servers=mcp_servers or None,token_budget=token_budget)
-                        except EgoError as exc:
-                            if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
-                                raise
-                            from ..adapters.runner import RunResult
-                            r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model,effort=chosen_effort)
+                    try:
+                        with overlaid(work,chosen_host,cfg):
+                            try:
+                                r=run_worker(chosen_host,prompt,work,timeout,agent=run_agent,project_root=project_root,threshold=cfg.clear_suggest_tokens,
+                                             segment_turns=cfg.worker_segment_turns,tag=f"{node['id']}-{iteration}-{uuid.uuid4().hex[:8]}",
+                                             on_event=_on_worker_event,
+                                             model=chosen_model,effort=chosen_effort,
+                                             read_only=kind=="splitter" or node.get("role")=="reviewer",autonomy=autonomy,isolated=isolated,
+                                             max_turns=int(node.get("max_turns",cfg.max_turns)),
+                                             lean=cfg.worker_context=="lean",mcp_servers=mcp_servers or None,token_budget=token_budget)
+                            except EgoError as exc:
+                                if exc.code not in ("CLI_INCOMPATIBLE","HOST_UNAVAILABLE"):
+                                    raise
+                                from ..adapters.runner import RunResult
+                                r=RunResult("UNAVAILABLE","",str(exc),127,0,chosen_host,reason=exc.code,model=chosen_model,effort=chosen_effort)
+                    except BaseException:
+                        if runroot is not None and kind not in ("code","gate") and work.is_dir():
+                            try:
+                                ok_p,int_edits,int_hashes=_snapshot_allowed_partial(work,before,node)
+                                if ok_p and int_edits:
+                                    _save_partial(runroot,node["id"],int_edits,{
+                                        "host":chosen_host,
+                                        "model":chosen_model or "native-default",
+                                        "execution_status":"INTERRUPTED",
+                                        "base_hashes":int_hashes,
+                                    })
+                            except Exception:
+                                pass
+                        raise
                 if token_budget is not None:token_budget.charge(r.usage)
                 checks=[]
                 if r.status=="PASS":
@@ -322,10 +531,12 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                         "checks":[{**c,"output":clip_output(c.get("output",""),cfg.tuning.max_record_chars),"stderr":clip_output(c.get("stderr",""),cfg.tuning.max_record_chars)} for c in checks],
                         "changed":changed,"feedback":feedback}
                 edits={}
+                base_hashes={}
                 if writes_ok:
                     for rel in changed:
                         path=safe_path(work,rel)
                         edits[rel]=path.read_bytes() if path.exists() else None
+                        base_hashes[rel]=before.get(rel)
                 if ok and node_wt and changed and strategy!="compare":
                     with _STAGING_LOCK:
                         keep_branch=git_commit_paths(work,changed,f"ego node {node['id']} attempt {iteration}")
@@ -333,7 +544,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                               status=record["status"],checks=[{"argv":c["argv"],"status":c["status"]} for c in checks],
                               feedback=clip_output(feedback or "",cfg.tuning.max_summary_chars),changed=changed[:20],
                               tokens=tokens_of(r.usage or {}),segments=getattr(r,"segments",1),rotations=getattr(r,"rotations",0))
-                return {"ok":ok,"record":record,"edits":edits,"output":r.output,"execution_status":r.status,
+                return {"ok":ok,"record":record,"edits":edits,"base_hashes":base_hashes,"writes_ok":writes_ok,"output":r.output,"execution_status":r.status,
                         "branch":node_branch if keep_branch else None}
             finally:
                 if node_wt:
@@ -354,7 +565,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                 "review_required":True,"output":"Compare finished; no candidate automatically selected"}
 
     route_pos=0
-    success=False;edits={};last_output="";winning_branch=None;carry={}
+    success=False;edits={};last_output="";winning_branch=None
+    carry=dict(initial_carry) if (initial_carry and kind not in ("code","gate")) else {}
+    latest_partial=dict(carry)
+    latest_meta:dict={}
     budget_exhausted=False
     for iteration in range(1,max_attempts+len(routes)+1):
         if token_budget is not None and token_budget.exhausted():
@@ -365,10 +579,26 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
         last_output=r["output"]
         if r["ok"]:
             success=True;edits=r["edits"];winning_branch=r.get("branch");break
+        if r["writes_ok"] and kind not in ("code","gate"):
+            latest_partial=dict(r["edits"])
+            latest_meta={
+                "host":chosen.host if chosen else "local",
+                "model":(chosen.model if chosen else None) or "native-default",
+                "execution_status":r["execution_status"],
+                "output":clip_output(r["output"],cfg.tuning.max_feedback_chars),
+                "base_hashes":r.get("base_hashes") or {},
+            }
         if strategy=="fallback" and r["execution_status"] in fallback_on and route_pos<len(routes)-1:
             route_pos+=1
-            carry={}
-            feedback="Previous host was unavailable; start from the original task state."
+            carry=dict(latest_partial)
+            feedback=_handoff_feedback(
+                chosen.host if chosen else "local",
+                chosen.model if chosen else None,
+                r["execution_status"],
+                sorted(carry.keys()),
+                r["output"],
+                cfg.tuning.max_feedback_chars,
+            )
             continue
         if node.get("role")=="reviewer":
             # A reviewer's verdict is final; only an unavailable or timed-out host is worth another attempt.
@@ -379,11 +609,14 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             break
         if r["execution_status"] in ("UNAVAILABLE","TIMEOUT","RATE_LIMIT"):
             break
-        carry=r["edits"] if kind not in ("code","gate") else {}
+        carry=dict(latest_partial) if kind not in ("code","gate") else {}
         feedback=r["record"].get("feedback") or r["record"]["execution"].get("stderr") or "Verification failed"
     out={"id":node["id"],"status":"PASSED" if success else "FAILED", "attempts":attempts,
          "edits":edits,"elapsed":round(time.monotonic()-start,4),"output":clip_output(last_output,cfg.tuning.max_record_chars),
          "branch":winning_branch}
+    if not success and kind not in ("code","gate") and (latest_partial or latest_meta.get("output")):
+        out["partial_edits"]=latest_partial
+        out["partial_meta"]=latest_meta
     if verdict_info:out["verdict"]=verdict_info["verdict"];out["findings"]=verdict_info["findings"]
     if budget_exhausted:out["budget_exhausted"]=True
     return out
@@ -432,6 +665,13 @@ def next_action(result:dict, task_file:str="<task-file>")->str|None:
     task_ref=(task_file if task_file!="<task-file>" else None) or result.get("task_file") or "<task-file>"
     if result.get("final_status")=="INTERRUPTED":
         return f"ego work resume {result['run_id']} --root . --task {task_ref} --host {result.get('host','<host>')} --trust-cli"
+    if result.get("final_status")=="FAILED":
+        for nid,data in (result.get("results") or {}).items():
+            if (result.get("node_status") or {}).get(nid)=="PASSED":continue
+            last=(data.get("attempts") or [{}])[-1]
+            if (last.get("execution") or {}).get("status") in ("RATE_LIMIT","TIMEOUT","UNAVAILABLE"):
+                return f"ego work resume {result['run_id']} --root . --task {task_ref} --host <other-host> --trust-cli"
+        return None
     if result.get("final_status")!="PASSED" or result.get("applied"):return None
     return (f"ego work resume {result['run_id']} --root . --task {task_ref} --host {result.get('host','<host>')} "
             "--trust-cli --apply --approve")
@@ -457,6 +697,7 @@ def compact_result(result:dict, *, summary_limit:int|None=None, max_files:int=40
         last=(data.get("attempts") or [{}])[-1]
         entry={"status":data.get("status"),"attempts":len(data.get("attempts",[])),
                "checks":[{"argv":c.get("argv"),"status":c.get("status")} for c in last.get("checks",[])]}
+        if data.get("partial_files"):entry["partial_files"]=data["partial_files"][:20]
         if data.get("verdict"):entry["verdict"]=data["verdict"];entry["findings"]=_brief_findings(data.get("findings"),summary_limit)
         nodes[nid]=entry
     if nodes:out["nodes"]=nodes
@@ -472,11 +713,11 @@ def compact_result(result:dict, *, summary_limit:int|None=None, max_files:int=40
     return out
 
 
-def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:bool=False,approve:bool=False,
+def _execute(root:Path, spec:dict, progress:Progress, *, host:str|None="mock",apply:bool=False,approve:bool=False,
             trust_cli:bool=False,run_id:str|None=None,resume:bool=False,autonomy:str="auto",isolated:bool=False,
             worktree:bool|None=None,cleanup_worktree:bool|None=None,seed_from:str|None=None,
             extra_allow:list[str]|None=None,token_budget:TokenBudget|None=None,planner_usage:dict|None=None,
-            task_file:str|None=None)->dict:
+            task_file:str|None=None,route_override:dict|None=None,defaults_override:dict|None=None)->dict:
     root=root.resolve();cfg=load_config(root)
     from ..domain.retention import prune_state
     prune_state(root)  # bounded state: fail-open, before this run adds to it
@@ -492,15 +733,21 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         seed_record=read_json(seed_dir.parent/"record.json")
         if not seed_dir.is_dir() or not seed_record:raise EgoError("SEED_MISSING",f"No staging for run {seed_from}",3)
     should_cleanup = cleanup_worktree if cleanup_worktree is not None else cfg.cleanup_worktree
-    nodes=validate_task(spec, limits=cfg.plan_schema_limits(), caps=cfg)
+    if resume:
+        validate_task_schema(spec, limits=cfg.plan_schema_limits())
+        nodes=spec["nodes"]
+        cli_defaults=None
+        routing_spec=spec
+    else:
+        cli_defaults=dict(defaults_override) if defaults_override else None
+        routing_spec=_apply_defaults_override(spec, cli_defaults)
+        nodes=validate_task(routing_spec, limits=cfg.plan_schema_limits(), caps=cfg)
     use_worktree=_worktree_mode(cfg,nodes,worktree)
     if seed_from:
         use_worktree=use_worktree and bool(seed_record.get("worktree")) and git_is_repo(seed_dir)
     if apply and not approve:raise EgoError("APPROVAL_REQUIRED", "--apply requires --approve")
     if autonomy=="bypass" and not isolated:
         raise EgoError("ISOLATION_REQUIRED","Bypass requires explicit external sandbox attestation",3)
-    if any(resolve_routes(n,spec,host,default_models=cfg.models,default_roles=cfg.roles)[0]=="compare" for n in nodes if n.get("kind","agent") not in ("gate","code")) and apply:
-        raise EgoError("COMPARE_NO_APPLY","Compare never applies unreviewed changes",3)
     run_id=run_id or ident("run")
     if not all(c.isalnum() or c in "-_" for c in run_id):raise EgoError("INVALID_ID",run_id,2)
     runroot=root/".ego"/"state"/"runs"/run_id
@@ -511,6 +758,25 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             record=read_json(record_path)
             if not record:raise EgoError("RUN_NOT_FOUND",run_id,3)
             if record["spec"]!=spec:raise EgoError("RESUME_MISMATCH","Task specification changed")
+            cli_defaults=record.get("cli_defaults") if isinstance(record.get("cli_defaults"),dict) else None
+            routing_spec=_apply_defaults_override(spec, cli_defaults)
+            nodes=validate_task(routing_spec, limits=cfg.plan_schema_limits(), caps=cfg)
+            node_ids={n["id"] for n in nodes}
+            target_nodes=route_override.get("nodes") if route_override else None
+            if target_nodes:
+                missing=[nid for nid in target_nodes if nid not in node_ids]
+                if missing:
+                    raise EgoError("INVALID_NODE",f"Unknown node id(s) in --node: {', '.join(missing)}",2)
+            base_host=record.get("host") or "mock"
+            if route_override and not target_nodes:
+                override_host=route_override.get("host") or ((route_override.get("hosts") or [None])[0])
+                effective_host=override_host or host or base_host
+            elif target_nodes:
+                effective_host=base_host
+            else:
+                effective_host=host or base_host
+            if any(_resolve_node_routes(n,routing_spec,effective_host,cfg,route_override=route_override)[0]=="compare" for n in nodes if n.get("kind","agent") not in ("gate","code")) and apply:
+                raise EgoError("COMPARE_NO_APPLY","Compare never applies unreviewed changes",3)
             # An explicit resume supersedes an earlier cancel request; otherwise the run could never continue.
             (runroot/"cancel.flag").unlink(missing_ok=True)
             # A verified, unapplied run may be approved and applied on resume
@@ -522,12 +788,17 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             if not staging.is_dir():
                 raise EgoError("STAGING_MISSING", f"No staging directory for run {run_id}", 3)
             if task_file:record["task_file"]=str(task_file)
+            if route_override and not target_nodes and (route_override.get("host") or route_override.get("hosts")):
+                record["host"]=effective_host
             # Nodes that were mid-flight when the process died are not done: they run again.
             for nid in [k for k,v in record["node_status"].items() if v=="RUNNING"]:record["node_status"].pop(nid)
             record["final_status"]="RUNNING"
             write_json(record_path,record)
             managed_checkpoint(root,record,state="IN_PROGRESS",task_file=record.get("task_file"))
         else:
+            effective_host=host or "mock"
+            if any(_resolve_node_routes(n,routing_spec,effective_host,cfg,route_override=route_override)[0]=="compare" for n in nodes if n.get("kind","agent") not in ("gate","code")) and apply:
+                raise EgoError("COMPARE_NO_APPLY","Compare never applies unreviewed changes",3)
             if record_path.exists():raise EgoError("RUN_EXISTS",run_id)
             is_git = git_is_repo(root)
             worktree_created = False
@@ -548,7 +819,8 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
             else:
                 staging.mkdir(parents=True)
                 simple_copy_tree(seed_dir or root,staging)
-            record={"run_id":run_id,"created_at":now(),"spec":spec,"host":host,"node_status":{},"results":{},
+            record={"run_id":run_id,"created_at":now(),"spec":spec,"host":effective_host,"node_status":{},"results":{},
+                    **({"cli_defaults":cli_defaults} if cli_defaults else {}),
                     # Tokens spent by the planning call that produced this task, reported with the run.
                     **({"planner_usage":planner_usage} if planner_usage is not None else {}),
                     # A seeded run keeps the original base: changes are measured against, and
@@ -558,7 +830,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                     "base_snapshot":seed_record["base_snapshot"] if seed_dir else snapshot(staging if worktree_created else root),
                     "final_status":"RUNNING","applied":False,
                     "worktree":worktree_created,
-                    "fingerprints":node_fingerprints(spec)}
+                    "fingerprints":node_fingerprints(routing_spec)}
             if seed_dir:
                 carried=_carry_verified(nodes,record["fingerprints"],seed_record)
                 for nid in carried:
@@ -585,11 +857,12 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         start=time.monotonic()
         amap={n["id"]:n for n in nodes}
         feedbacks:dict[str,str]={}
+        initial_carries:dict[str,dict[str,bytes|None]]={}
         alter_rules: list[str] = []
         has_real_agent = any(
             r.host != "mock"
             for n in nodes if n.get("kind", "agent") not in ("gate", "code")
-            for r in resolve_routes(n, spec, host, default_models=cfg.models, default_roles=cfg.roles)[1]
+            for r in _resolve_node_routes(n, routing_spec, effective_host, cfg, route_override=route_override)[1]
         )
         if cfg.knowledge == "alter" and has_real_agent:
             from .session import alter_project_rules
@@ -612,6 +885,27 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                     for rid in _between(amap,loop["reviews"],loop["id"]):record["node_status"].pop(rid,None)
                 else:
                     feedbacks[nid]=clip_output(str(text),cfg.tuning.max_feedback_chars)
+            # Restore persisted in-progress edits of unfinished nodes so a resumed run (including on another CLI/model) continues where it stopped.
+            for nid,node in amap.items():
+                if record["node_status"].get(nid)=="PASSED" or node.get("kind","agent") in ("code","gate"):
+                    continue
+                p_edits,p_meta,p_conflicts=_load_partial(runroot,nid,staging=staging)
+                if p_edits:
+                    initial_carries[nid]=p_edits
+                if p_meta or p_conflicts:
+                    meta_obj=p_meta or {}
+                    handoff_note=_handoff_feedback(
+                        str(meta_obj.get("host") or effective_host),
+                        meta_obj.get("model"),
+                        str(meta_obj.get("execution_status") or "FAIL"),
+                        sorted(p_edits.keys()),
+                        str(meta_obj.get("output") or ""),
+                        cfg.tuning.max_feedback_chars,
+                        conflicts=p_conflicts,
+                    )
+                    prev_fb=feedbacks.get(nid,"")
+                    combined=f"{handoff_note}\n\n{prev_fb}".strip() if prev_fb and prev_fb not in handoff_note else handoff_note
+                    feedbacks[nid]=clip_output(combined,cfg.tuning.max_feedback_chars)
         if token_budget is None:token_budget=TokenBudget(cfg.max_run_tokens,spent=_billable_spent(record))
         pending={n["id"]:n for n in nodes if record["node_status"].get(n["id"])!="PASSED"}
         failed=[]
@@ -619,7 +913,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
         round_sig=record.setdefault("round_sig",{})
         exhausted=record.setdefault("exhausted",{})
         # Prompt-only knowledge hint; record['spec'] stays the user's spec so resume comparisons are unchanged.
-        prompt_spec=({**spec,'knowledge':cfg.knowledge} if 'knowledge' not in spec else spec)
+        prompt_spec=({**routing_spec,'knowledge':cfg.knowledge} if 'knowledge' not in routing_spec else routing_spec)
         max_workers=max(1,cfg.max_parallel)
         in_flight:dict={}
         running_ids:set[str]=set()
@@ -645,10 +939,11 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                         write_json(record_path,record)
                         for n in to_start:
                             nid=n["id"]
-                            fut=pool.submit(_run_node,n,prompt_spec,staging,host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),
+                            fut=pool.submit(_run_node,n,prompt_spec,staging,effective_host,cfg,min(cfg.timeout_seconds,int(n.get("timeout_seconds",cfg.timeout_seconds))),
                                             feedback=feedbacks.pop(nid,''),trust_cli=trust_cli,autonomy=autonomy,isolated=isolated,
                                             handoff=handoff,token_budget=token_budget,progress=progress,project_root=root,
-                                            alter_rules=alter_rules,use_worktree=bool(record.get("worktree")),run_id=run_id)
+                                            alter_rules=alter_rules,use_worktree=bool(record.get("worktree")),run_id=run_id,
+                                            initial_carry=initial_carries.pop(nid,None),route_override=route_override,runroot=runroot)
                             in_flight[fut]=(nid,staging_seq)
                     done,_=wait(in_flight.keys(),return_when=FIRST_COMPLETED)
                     # Each node is persisted as soon as it finishes: a crash or cancel loses only the unfinished nodes.
@@ -685,8 +980,19 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str="mock",apply:b
                                         else:atomic_bytes(path,data)
                                         version_by_path[rel]=(staging_seq,identifier)
                         record["node_status"][identifier]=result["status"]
+                        if result["status"]=="PASSED":
+                            _clear_partial(runroot,identifier)
+                            persisted_partial:list[str]=[]
+                        else:
+                            partial_edits=result.get("partial_edits") or {}
+                            partial_meta=result.get("partial_meta") or {}
+                            _save_partial(runroot,identifier,partial_edits,partial_meta)
+                            persisted_partial=sorted(partial_edits.keys())
                         # No bytes in persisted JSON, only references to changed paths
-                        record["results"][identifier]={k:v for k,v in result.items() if k!="edits"}
+                        node_record={k:v for k,v in result.items() if k not in ("edits","partial_edits","partial_meta")}
+                        if persisted_partial:
+                            node_record["partial_files"]=persisted_partial
+                        record["results"][identifier]=node_record
                         if result["status"]!="PASSED":failed.append(identifier)
                         pending.pop(identifier)
                         # A rejection, or a gate/code failure inside a reviewer's loop, sends only the reviewed coder back.

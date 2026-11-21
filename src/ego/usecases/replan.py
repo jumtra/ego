@@ -106,7 +106,7 @@ def _out_of_scope(spec: dict, allowed: set[str], cfg) -> bool:
     return False
 
 
-def run_with_replans(root: Path, spec: dict, *, run_id: str | None, host: str, trust_cli: bool, **kw) -> dict:
+def run_with_replans(root: Path, spec: dict, *, run_id: str | None, host: str | None, trust_cli: bool, **kw) -> dict:
     root = root.resolve()
     cfg = load_config(root)
     budget = TokenBudget(cfg.max_run_tokens)
