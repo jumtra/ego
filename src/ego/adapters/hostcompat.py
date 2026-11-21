@@ -65,6 +65,26 @@ def inspect_host(host: str, *, refresh: bool = False, timeout: int = 5) -> dict:
     return result
 
 
+def host_versions(hosts: list[str] | tuple[str, ...], timeout: int = 5) -> dict[str, dict]:
+    """Installed CLI version of each selected host, for the install summary: {host: {installed, version, note}}.
+
+    Only `<cli> --version` runs (bounded; no cache write, no network). ego never refuses on a version: the
+    generated hooks and status lines are inert until the CLI is installed, and the note says so. A host
+    that fails to answer is reported as such; it never stops the install."""
+    out: dict[str, dict] = {}
+    for host in hosts:
+        executable = shutil.which(BINARIES.get(host, ""))
+        if not executable:
+            out[host] = {"installed": False, "version": None, "note": "CLI not installed: its generated files stay inert until it is installed"}
+            continue
+        ok, text = _bounded([executable, "--version"], timeout)
+        lines = [x.strip() for x in text.splitlines() if x.strip()] if ok else []
+        version = lines[0][:180] if lines else None
+        out[host] = {"installed": True, "version": version,
+                     "note": "ok" if version else "installed, but `--version` gave no answer: check the CLI before relying on the hooks"}
+    return out
+
+
 def require_flags(info: dict, *names: str) -> None:
     missing=sorted(set(names)-set(info.get("flags",[])))
     if not info.get("supported") or missing:

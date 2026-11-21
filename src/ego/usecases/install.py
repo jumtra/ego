@@ -125,12 +125,16 @@ def ensure_git_exclude(root: Path, rels: list[str]) -> dict:
         old = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
         have = {line.strip() for line in old.splitlines()}
         add = [w for w in wanted if w not in have]
-        if not add: return {"status": "unchanged"}
+        # An exclude rule never untracks: report .ego/ files git still tracks so the user can `git rm --cached` them.
+        ls_ego = subprocess.run(["git", "ls-files", "-z", "--", ".ego"], cwd=root, capture_output=True, text=True, timeout=30)
+        tracked_ego = sorted(x for x in ls_ego.stdout.split("\0") if x)
+        extra = {"tracked_ego": tracked_ego} if tracked_ego else {}
+        if not add: return {"status": "unchanged", **extra}
         text = old if not old or old.endswith("\n") else old + "\n"
         if EXCLUDE_HEADER not in have: text += EXCLUDE_HEADER + "\n"
         exclude.parent.mkdir(parents=True, exist_ok=True)
         exclude.write_text(text + "\n".join(add) + "\n", encoding="utf-8")
-        return {"status": "updated", "added": add}
+        return {"status": "updated", "added": add, **extra}
     except (OSError, subprocess.SubprocessError) as exc:
         return {"status": "error", "reason": str(exc)}
 
@@ -182,7 +186,8 @@ def apply_install(root: Path, cfg: Config) -> dict:
             raise
     register_quietly(root)
     out = {"status": "APPLIED", "snapshot_id": snapshot_id, "changes": [x for x in plan["changes"] if x["action"] != "unchanged"]}
-    out["git_exclude"] = ensure_git_exclude(root, [r for r in plan["wanted"] if r not in ("CLAUDE.md", "AGENTS.md")])
+    out["git_exclude"] = (ensure_git_exclude(root, [r for r in plan["wanted"] if r not in ("CLAUDE.md", "AGENTS.md")])
+                          if cfg.git_exclude else {"status": "disabled"})
     if cfg.knowledge == "alter":
         from ..adapters.memory import ensure_alter_project_quietly, ensure_alter_skills_quietly
         out["alter_project"] = ensure_alter_project_quietly(root, force=True)

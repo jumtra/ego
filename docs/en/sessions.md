@@ -11,7 +11,7 @@ Long conversations get expensive and less reliable. ego keeps the essential stat
 | Continue in another CLI | [`ego session resume --from` / `ego session handoff`](#continue-in-another-cli) |
 | Have clearing and resuming done for you, in any CLI | [`ego run`](#ego-run-automatic-rotation) |
 | Be reminded to clear in plain Claude Code, Codex, OpenCode or AGY | [`clear_suggest_tokens` hooks](#claude-code-hooks) |
-| Switch CLI when a Claude or Codex usage limit is near | [`usage_switch_percent`](#usage-limit-switch-claude-code-and-codex) |
+| Switch CLI when a Claude, Codex or AGY usage limit is near | [`usage_switch_percent`](#usage-limit-switch-claude-code-codex-and-agy) |
 
 In everyday use the AI runs these commands itself: ask it to "save a checkpoint" or to "continue from codex".
 
@@ -122,7 +122,7 @@ Guarantees and limits:
 | Claude Code | `~/.claude/projects/<project>/*.jsonl` |
 | Codex | `~/.codex/sessions/**/rollout-*.jsonl` (`token_count`) |
 | OpenCode | `~/.local/share/opencode/opencode.db` |
-| AGY | Status line input (`context_window`), through a session-only `--settings` |
+| AGY | Status line input (`context_window`, and `quota` for `usage_switch_percent`), through a session-only `--settings` |
 
 - **No checkpoint, no clear.** If no new checkpoint appears within 5 minutes the rotation is abandoned and not retried until the context has grown another 25%.
 - **No loop after resume.** A resumed session that is already above the threshold is not rotated again until it has grown 25% beyond its size right after the resume.
@@ -162,7 +162,7 @@ The same `clear_suggest_tokens` setting also generates hooks for the other CLIs 
 
 Inside `ego run` these hooks stand down, as the Claude Code ones do. The Codex, AGY and OpenCode hooks are written against each CLI's documented hook interface; the AGY and OpenCode ones were run against the installed CLIs, the Codex Stop payload was not exercised end to end.
 
-## Usage-limit switch (Claude Code and Codex)
+## Usage-limit switch (Claude Code, Codex and AGY)
 
 ```toml
 usage_switch_percent = 99    # then: ego sync --apply
@@ -178,7 +178,14 @@ This adds a `Stop` hook and a status line (`ego hook statusline`) to `.claude/se
 
 **Codex:** the same setting adds a `Stop` hook to `.codex/hooks.json`. Codex writes both usage windows into its session record, so no status line is needed; the hook reads them from there and behaves as above (it proposes the other configured CLIs).
 
-**OpenCode and AGY** report no usage limit to hooks or plugins, so `usage_switch_percent` has nothing to act on there: no hook is generated for it, and ego never estimates usage.
+**AGY:** the same setting adds a `Stop` hook to `.agents/hooks.json`. AGY reports its quota (`quota.<bucket>.remaining_fraction` and `reset_time`) only in its status line input, so the hook acts on what a status line recorded in `.ego/state/usage_limits.agy.json`.
+
+- **Under `ego run agy`** this is automatic: the session-only status line that measures context also records the quota (`ego · ctx 120k · 5h 42% · 7d 12%`).
+- **In a plain `agy` session** AGY has no project-level status line. Add one to your user settings (`~/.gemini/antigravity-cli/settings.json`) so that AGY hands its input to ego: `"statusLine": {"type": "command", "command": "ego hook statusline", "enabled": true, "stack_with_default": true}`. Without it the hook has no measurement and stays silent.
+- **Which bucket counts:** the ones the session's model draws from. A Gemini model uses `gemini-5h` and `gemini-weekly` (plus `gemini-argon-wtu-weekly` for an Argon model); any other model uses `3p-5h` and `3p-weekly`. If the model name is missing nothing is acted on. This mapping follows the quota names AGY reports; it is not documented by AGY.
+- AGY reports the *remaining* fraction; ego shows and compares the used percentage (`100 - remaining`).
+
+**OpenCode** reports no usage limit to plugins (it fronts many providers, and API keys have no 5-hour window), so `usage_switch_percent` has nothing to act on there: no hook is generated for it, and ego never estimates usage.
 
 ## Good practice
 

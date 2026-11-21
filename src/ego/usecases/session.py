@@ -468,6 +468,13 @@ def clear_advice(root: Path, payload: dict[str, Any], threshold: int, host: str 
 
 
 USAGE_STATE = ".ego/state/usage_limits.json"
+
+
+def usage_state_path(host: str) -> str:
+    """Where a host's last usage reading lives. One file per host: a Claude session must never act on AGY's quota (or the reverse)."""
+    return USAGE_STATE if host == "claude" else USAGE_STATE.replace(".json", f".{host}.json")
+
+
 USAGE_ADVICE_STATE = ".ego/state/usage_advice.json"
 USAGE_FRESH = 900
 _WINDOWS = (("five_hour", "5h", "5時間枠"), ("seven_day", "7d", "7日枠"))
@@ -487,11 +494,56 @@ def _windows(limits: Any) -> list[tuple[str, str, str, float, float]]:
     return out
 
 
+def _agy_reset(window: dict[str, Any]) -> float | None:
+    try:
+        return dt.datetime.fromisoformat(str(window["reset_time"]).replace("Z", "+00:00")).timestamp()
+    except (KeyError, TypeError, ValueError):
+        pass
+    try:
+        return time.time() + float(window["reset_in_seconds"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def agy_limits(payload: dict[str, Any]) -> dict[str, Any]:
+    """AGY reports `quota.<bucket>.{remaining_fraction, reset_time}` in its status line input.
+
+    A bucket counts only when it is the one the session's model draws from: Gemini models use the
+    `gemini-*` buckets (plus `gemini-argon-wtu-weekly` for an Argon model), every other model the `3p-*`
+    ones. Without a model name nothing is guessed. Returns {five_hour|seven_day: {used_percentage, resets_at}}."""
+    quota = payload.get("quota") if isinstance(payload, dict) else None
+    model = payload.get("model") if isinstance(payload, dict) else None
+    name = str((model.get("display_name") or model.get("id") or "") if isinstance(model, dict) else model or "").lower()
+    if not isinstance(quota, dict) or not name:
+        return {}
+    if "gemini" in name:
+        slots = {"five_hour": ("gemini-5h",), "seven_day": ("gemini-weekly", *(("gemini-argon-wtu-weekly",) if "argon" in name else ()))}
+    else:
+        slots = {"five_hour": ("3p-5h",), "seven_day": ("3p-weekly",)}
+    out: dict[str, Any] = {}
+    for slot, buckets in slots.items():
+        for bucket in buckets:
+            window = quota.get(bucket)
+            if not isinstance(window, dict):
+                continue
+            try:
+                used = (1.0 - float(window["remaining_fraction"])) * 100
+            except (KeyError, TypeError, ValueError):
+                continue
+            resets = _agy_reset(window)
+            if resets is None or not 0 <= used <= 100:
+                continue
+            if slot not in out or used > out[slot]["used_percentage"]:
+                out[slot] = {"used_percentage": round(used, 2), "resets_at": resets}
+    return out
+
+
 def record_usage(payload: dict[str, Any], fallback_root: Path | None = None) -> str:
     """Status line command: keep the host-reported usage limits for the Stop hook; return the line to show.
 
     Claude Code reports `rate_limits` only here (subscription plans, after the first
-    response). Nothing is estimated: without that field the line is empty and nothing is stored.
+    response); AGY reports `quota` here too. Nothing is estimated: without those fields
+    the line is empty and nothing is stored.
     """
     if not isinstance(payload, dict):
         return ""
@@ -501,11 +553,15 @@ def record_usage(payload: dict[str, Any], fallback_root: Path | None = None) -> 
         if candidate and (Path(str(candidate)) / ".ego").is_dir():
             root = Path(str(candidate)).resolve()
             break
-    windows = _windows(payload.get("rate_limits"))
+    host = "claude"
+    reported = payload.get("rate_limits")
+    if reported is None and "quota" in payload:
+        host, reported = "agy", agy_limits(payload)
+    windows = _windows(reported)
     if not windows:
         return ""
     if root is not None:
-        path = safe_path(root, USAGE_STATE)
+        path = safe_path(root, usage_state_path(host))
         limits = {key: {"used_percentage": used, "resets_at": resets} for key, _, _, used, resets in windows}
         prev = read_json(path)
         # The status line refreshes constantly: rewrite only on change, or to keep the reading fresh.
@@ -528,7 +584,7 @@ def usage_advice(root: Path, payload: dict[str, Any], percent: int, hosts: list[
         return {}
     root = root.resolve()
     if limits is None:
-        state = read_json(safe_path(root, USAGE_STATE))
+        state = read_json(safe_path(root, usage_state_path(host)))
         if not isinstance(state, dict) or time.time() - float(state.get("at") or 0) > USAGE_FRESH:
             return {}  # no recent measurement: stay silent rather than guess
         limits = state.get("rate_limits")

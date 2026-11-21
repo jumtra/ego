@@ -113,6 +113,10 @@ ego apply --interactive --dry-run  # try different choices without writing
 | `BLOCKED` | A file ego would write was edited by you; nothing is written. See `conflicts` |
 | `CANCELLED` | You declined or cancelled the wizard |
 
+### Host CLI versions
+
+`apply`, `init` and `sync` also report `host_versions` for the hosts you selected: whether each CLI is installed and what `<cli> --version` answers, e.g. `{"codex": {"installed": true, "version": "codex-cli 0.167.0", "note": "ok"}}`. The wizard shows the same before you pick hosts and again in the confirmation. A host that is not installed, or does not answer `--version`, gets a `note`; the files are still generated (they stay inert until the CLI is installed) and ego never refuses on a version. Only `--version` runs: nothing is cached or sent anywhere.
+
 ## What gets generated
 
 | Path | Content | When |

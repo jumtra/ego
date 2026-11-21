@@ -26,6 +26,7 @@ run_yolo = true
 models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto", effort = "medium"}, opencode = "auto", agy = {model = "auto", effort = "auto"}}
 isolation = "auto"
 cleanup_worktree = true
+git_exclude = true
 tests = []
 allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"]
 ```
@@ -73,6 +74,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `worker_segment_turns` | `10` | 1〜200 | Claude ワーカーをこのターン数ごとの区間で実行し、区間の間に実測コンテキストを `clear_suggest_tokens` と比べます（Codex / OpenCode / AGY はストリーム/セッション監視）。上限に達すると checkpoint を保存（他ホストで未保存時は機械的フォールバック）し、新しいセッションで続きから再開します |
 | `isolation` | `"auto"` | `auto`、`copy`、`worktree` | run の作業場所。`auto` は同時に書き込むノード（互いに依存関係のない coder/tester/code/worker ノード）が 2 つ以上ある run だけ Git worktree、それ以外はステージング用コピー。`worktree` は常に worktree、`copy` は常にコピー。`--worktree` で run ごとに上書き |
 | `cleanup_worktree` | `true` | bool | run 後に worktree を削除。`--keep-worktree` で run ごとに上書き |
+| `git_exclude` | `true` | bool | `apply`/`sync`/`update` が `.ego/` と生成ファイルを `.git/info/exclude`（ローカルのみ・コミットされない）に追加します。すでに追跡されているファイルは追跡されたままなので、外すには `git rm -r --cached` を使います。`false` にすると git の無視設定に触れず、`.ego/config.toml` や spec を自分でコミットできます |
 | `allow_commands` | 一般的なツールチェーン | コマンド名のリスト | `checks` と `--done-check` が起動してよい実行ファイル。シェルと `python -c` は常に拒否されます |
 
 ### セッション
@@ -80,7 +82,7 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | キー | 既定値 | 範囲 | 効果 |
 |---|---|---|---|
 | `clear_suggest_tokens` | `200000` | `0` または 20000〜2000000 | このコンテキストサイズに達したらセッションをチェックポイント保存してクリアします。各 CLI の生成フック（[セッション](sessions.md) を参照）と `ego run` が使います |
-| `usage_switch_percent` | `99` | `0` または 50〜99 | Claude Code と Codex（使用上限を報告する CLI）のみ。5 時間枠または 7 日枠の使用量がこの割合に達したら、チェックポイントを保存し、別の CLI への切り替えを提案します（`0` でオフ） |
+| `usage_switch_percent` | `99` | `0` または 50〜99 | Claude Code・Codex・AGY（使用上限を報告する CLI。OpenCode は報告しない）のみ。5 時間枠または 7 日枠の使用量がこの割合に達したら、チェックポイントを保存し、別の CLI への切り替えを提案します（`0` でオフ） |
 | `run_yolo` | `true` | bool | `ego run` が CLI を権限確認スキップのスイッチ付きで起動します。`--yolo` / `--no-yolo` で run ごとに上書き |
 
 詳細は [セッション](sessions.md) を参照してください。

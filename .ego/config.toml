@@ -32,6 +32,7 @@ models = {claude = {model = "sonnet", effort = "auto"}, codex = {model = "auto",
 roles = {coder = {claude = {model = "haiku", effort = ["low", "medium"]}, codex = {model = "auto", effort = "medium"}, agy = {model = "gemini-4-hydrogen-medium", effort = "medium"}, opencode = {model = "auto", effort = "medium"}}, tester = {claude = {model = "haiku", effort = "low"}, codex = {model = "auto", effort = "low"}, agy = {model = "gemini-4-hydrogen-low", effort = "low"}, opencode = {model = "auto", effort = "low"}}, reviewer = {claude = {model = "haiku", effort = "high"}, codex = {model = "auto", effort = "high"}, agy = {model = "gemini-4-hydrogen-medium", effort = "high"}, opencode = {model = "auto", effort = "high"}}}
 isolation = "auto"
 cleanup_worktree = true
+git_exclude = false
 tests = []
 allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "yarn", "bun", "node", "deno", "tsc", "cargo", "rustc", "go", "dotnet", "swift", "swiftc", "cmake", "ctest", "mvn", "gradle", "gradlew", "java", "javac", "ruby", "bundle", "php", "composer"]
 clear_suggest_tokens = 150000

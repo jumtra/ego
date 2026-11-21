@@ -119,6 +119,8 @@ def select_options(cfg: Config, args, root: Path) -> bool:
     if args.profile is None:
         cfg.profile = _choose("プロファイル（minimal=軽量、balanced=標準、full=追加Hook）", ("minimal", "balanced", "full"), cfg.profile)
     if args.hosts is None:
+        from ..adapters.hostcompat import host_versions
+        _write("検出したHost CLI: " + "; ".join(_host_label(h, v) for h, v in host_versions(HOSTS).items()))
         cfg.hosts = _multiple("設定を生成するHost（複数選択可）", HOSTS, cfg.hosts)
     if args.graph is None:
         cfg.code_intelligence = _choose("コード解析Provider（外部Providerは別途セットアップが必要）", PROVIDERS, cfg.code_intelligence)
@@ -133,7 +135,13 @@ def select_options(cfg: Config, args, root: Path) -> bool:
     return detect_tests
 
 
-def confirm_apply(cfg: Config, changes: list[dict], root: Path) -> bool:
+def _host_label(host: str, info: dict) -> str:
+    if not info["installed"]:
+        return f"{host}=未インストール"
+    return f"{host}={info['version'] or 'バージョン不明'}"
+
+
+def confirm_apply(cfg: Config, changes: list[dict], root: Path, host_versions: dict | None = None) -> bool:
     """Only called when there is a real diff, no conflicts and no dry-run."""
     by_action: dict[str, int] = {}
     for change in changes:
@@ -141,6 +149,11 @@ def confirm_apply(cfg: Config, changes: list[dict], root: Path) -> bool:
     _write("\n=== 変更内容の確認 ===")
     _write(f"対象: {root}")
     _write(f"設定: profile={cfg.profile}; policy={cfg.policy_mode}; hosts={','.join(cfg.hosts)}; graph={cfg.code_intelligence}; knowledge={cfg.knowledge}; runtime={cfg.runtime_mode}")
+    if host_versions:
+        _write("Host CLI: " + "; ".join(_host_label(h, v) for h, v in host_versions.items()))
+        for host, info in host_versions.items():
+            if info["note"] != "ok":
+                _write(f"  注意 {host}: {info['note']}")
     _write("変更件数: " + ", ".join(f"{name}={count}" for name, count in sorted(by_action.items())))
     for change in changes:
         _write(f"  {change['action']}: {change['path']}")
