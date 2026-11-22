@@ -212,6 +212,35 @@ task の `max_replans` は、計画全体を作り直せる回数です（既定
 
 `max_run_tokens`（既定 `0` = 無制限、通常は途中で停止しません）は、設定または `--max-run-tokens` で `1000` 以上を明示指定した場合にのみ、1 回の `run` または `resume` 実行あたりの使用トークンの上限として機能します。`cache_read` トークンは数えず、`resume` ごとに上限枠がリセットされます。上限に達すると、run はステップの区切りで止まり、`final_status` は `BUDGET_EXHAUSTED` になります。run 全体の時間制限はありません。
 
+## セッション後の自動学習と LoopGuard
+
+### LoopGuard（停滞検知と段階的介入）
+
+管理実行の `claude` ワーカーでは、セグメントごとに LoopGuard がトレースを畳み込み、堂々巡りを検知します（`[loopguard]` で設定）。
+
+1. **dry-run 観測（既定 `dry_run = true`）:** 停滞条件（`min_turns`、編集チャーン、エラー回数、失敗シグネチャの反復率、またはリポジトリ固有のターンエンベロープ超過）を判定し、`loopguard` 進捗イベントのみを出力します。実行は止めません。
+2. **1 回の nudge（`dry_run = false` 時）:** 最初の停滞検知では、繰り返している失敗シグネチャと試行済みコマンド（最大 3 件）をミラーリングする短い方向転換プロンプトを 1 回だけ（`max_nudges_per_node = 1`）次のセグメントに注入します。
+3. **`STAGNATION` 停止:** nudge 後も停滞が続く場合、ワーカーを `FAIL`（理由 `STAGNATION`）で終了し、`stagnation` 要約を `record.json` とフィードバックに残します。
+4. **再計画 / alter への報告:** ノードの失敗を受けて `max_replans` に従い再計画（replan）へ進むか、alter 連携プランの場合は `alter ego-plan report` 経由で失敗・停滞状態を報告します。
+
+### EnvFacts ライフサイクルと `alter_knowledge_feedback`
+
+環境ファクト（成功したビルド・テストコマンドや利用可能なツールなど）は、`.ego/state/envfacts.json` で証拠ベースの状態遷移を行います。
+
+1. **`candidate` → `active`:** 異なるセッションで `min_confirmations` 回（既定 2）成功が確認されると `active` に昇格し、以降のセッション開始時・プロンプト末尾へ最大 `max_injected_facts` 件（`max_injected_chars` 文字まで）注入されます。
+2. **`active` → `demoted`:** 失敗（矛盾）が `contradiction_demote_threshold` 回（既定 2）に達すると `demoted` に降格し、注入対象から外れます。
+3. **`ego knowledge facts` / `forget <id>`:** `ego knowledge facts` で状態を確認し、`ego knowledge forget <id>` で `forgotten` にすると以後二度と注入されません。
+4. **`alter_knowledge_feedback`:** `knowledge = "alter"` かつ `lifecycle.alter_feedback = true` の場合、`demoted` への降格時または `ego knowledge forget <id>` 実行時に `alter_knowledge_feedback` を送信します（送信失敗時は `.ego/state/alter-feedback-pending.jsonl` に保留し、次回送信時に再送します）。
+
+### セッション終了後の非同期 fold
+
+session end フックは重い後処理を直接実行せず、`ego fold` を切り離したバックグラウンドプロセスで起動します（fail-open）。
+
+- 非ブロッキングロック（`.ego/locks/fold.lock`）を取得し、二重実行を防ぎます。
+- トランスクリプトのトークン使用量を集計して使用量台帳（`ego usage summary`）に追記します。
+- EnvFacts を抽出・更新し、必要なら `alter_knowledge_feedback` を送ります。
+- トランスクリプト欠損や破損などのエラーは `.ego/state/fold-errors.jsonl` に記録して終了し、セッション終了をブロックしません。
+
 ## 補助コマンド
 
 | コマンド | 用途 |

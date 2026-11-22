@@ -89,7 +89,9 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 
 ## 細かいパラメーター（`.ego/defaults.toml`）
 
-上限と既定値の多くは、パッケージ同梱の `src/ego/defaults.toml` から読み込まれます。プロジェクトごとに変えるには `.ego/defaults.toml` に `[tuning]` テーブルを書きます。このファイルで上書きできるのは `[tuning]` のキーだけです。CLI フラグでこれらを上書きすることはできません。`.ego/config.toml` に新しいキーがなくても、パッケージの既定値で動きます。
+上限と既定値の多くは、パッケージ同梱の `src/ego/defaults.toml` から読み込まれます。プロジェクトごとに変えるには `.ego/defaults.toml` に `[tuning]` や各機能セクション（`[usage]`、`[lifecycle]`、`[loopguard]`、`[toolprune]`、`[mcp]`、`[analysis]`）を書きます。CLI フラグでこれらを上書きすることはできません。`.ego/config.toml` に新しいキーがなくても、パッケージの既定値で動きます。
+
+### `[tuning]`
 
 | キー | 既定値 | 用途 |
 |---|---|---|
@@ -102,6 +104,69 @@ allow_commands = ["python", "python3", "pytest", "git", "ruff", "npm", "pnpm", "
 | `max_role_candidates` | `8` | 役割ごとのルーティング候補数の上限 |
 | `[tuning.plan_schema]` | 同梱の `defaults.toml` を参照 | 計画・タスクスキーマの文字数・項目数の上限（`max_goal_chars` など 12 キー） |
 | `[tuning.session_schema]` | `max_goal_chars` 800、`max_item_chars` 350、`max_notes` 8、`max_prompt_chars` 1600 | チェックポイントと再開プロンプトの上限 |
+
+### `[usage]`
+
+| キー | 既定値 | 効果 |
+|---|---|---|
+| `track_cache_tiers` | `true` | キャッシュ作成トークンを 5m / 1h の層ごとに分けて集計する |
+| `track_overhead_separately` | `true` | 使用量台帳で `agent` と `overhead`（ego 制御側）を分けて記録する |
+| `session_cost_warning_usd` | `5.0` | セッションコストの警告しきい値（USD） |
+
+### `[lifecycle]`
+
+| キー | 既定値 | 効果 |
+|---|---|---|
+| `enable_envfacts` | `true` | セッション終了後の fold で環境ファクト（EnvFacts）の抽出とライフサイクル更新を有効にする |
+| `min_confirmations` | `2` | `candidate` から `active` に昇格するために必要な別セッションでの成功回数 |
+| `contradiction_demote_threshold` | `2` | `active` から `demoted` に降格する失敗（矛盾）回数 |
+| `max_injected_facts` | `12` | プロンプト末尾に注入する `active` ファクトの最大件数 |
+| `max_injected_chars` | `2400` | プロンプト末尾に注入する `active` ファクトの最大文字数 |
+| `alter_feedback` | `true` | `demoted` または `forgotten` 時に `alter_knowledge_feedback` を送信する（`knowledge = "alter"` 時） |
+
+### `[loopguard]`
+
+既定では `dry_run = true` で出荷されます（停滞を検知して `loopguard` 進捗イベントを記録するだけで、nudge や `STAGNATION` 停止は行いません）。実際に介入させるには、`.ego/defaults.toml` で次のように上書きします。
+
+```toml
+[loopguard]
+dry_run = false
+```
+
+| キー | 既定値 | 効果 |
+|---|---|---|
+| `enabled` | `true` | LoopGuard による停滞検知を有効にする |
+| `dry_run` | `true` | `true` の場合は観測とイベント出力のみを行い、nudge や停止を行わない |
+| `envelope_min_samples` | `5` | リポジトリ固有のターン数エンベロープ（パーセンタイル）を使うために必要な最小サンプル数 |
+| `envelope_percentile` | `95` | エンベロープ上限の算出に使うパーセンタイル |
+| `min_turns` | `20` | 停滞判定を開始する最小アシスタントターン数（サンプル不足時のフォールバック基準も兼ねる） |
+| `edit_churn` | `4` | 同一ファイルの繰り返し編集回数しきい値 |
+| `distinct_edit_files` | `3` | 編集が分散した別ファイル数のしきい値 |
+| `error_outputs` | `6` | エラー出力回数のしきい値 |
+| `stagnation_ratio` | `0.2` | 失敗シグネチャの重複率（`1 - distinct / total`）しきい値 |
+| `envelope_margin` | `1.25` | エンベロープ上限に掛ける余裕倍率（超過で判定対象） |
+| `backstop_mult` | `2.5` | 強制停止のバックストップ倍率 |
+| `max_nudges_per_node` | `1` | 1 ノードあたりに送る方向転換 nudge の最大回数 |
+| `escalate_to_replan` | `true` | `STAGNATION` 到達時に再計画（replan）へのエスカレーションを許可する |
+
+### `[toolprune]`
+
+| キー | 既定値 | 効果 |
+|---|---|---|
+| `unused_days` | `14` | 未使用とみなす期間（日数） |
+| `min_sessions` | `5` | 整理候補を提案するために必要な直近セッション数の最小値 |
+
+### `[mcp]`
+
+| キー | 既定値 | 効果 |
+|---|---|---|
+| `alter_worker_profile` | `"ego-worker"` | ワーカー起動時に alter MCP サーバーへ渡すツールプロファイル名 |
+
+### `[analysis]`
+
+| キー | 既定値 | 効果 |
+|---|---|---|
+| `min_user_chars` | `400` | セッション後分析の対象とするユーザー発話の最小文字数 |
 
 ## ポリシーモード
 

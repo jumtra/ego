@@ -426,6 +426,31 @@ def _cmd_code(args):
     _print(res);return 0
 
 
+def _cmd_fold(args):
+    from .usecases.fold import run_fold
+    _print(run_fold(_root(args), args.session, args.transcript))
+    return 0
+
+
+def _cmd_tools(args):
+    from .usecases.toolprune import apply, propose, restore
+    root=_root(args)
+    if args.action=="propose":
+        _print(propose(root))
+        return 0
+    if args.action=="apply":
+        candidates=propose(root)
+        if not args.yes:
+            _print(candidates)
+            return 0
+        _print(apply(root,candidates,args.host))
+        return 0
+    if args.action=="restore":
+        _print(restore(root,args.tool))
+        return 0
+    return 0
+
+
 def _cmd_hook(args):
     from .domain.policy import check_hook_payload
     from .domain.config import load_config
@@ -471,7 +496,17 @@ def _cmd_hook(args):
         print(json.dumps(adapt_output(args.host,"user-prompt",out),ensure_ascii=False));return 0
     if args.event=="session-end":
         # Kept so hooks installed by older versions exit cleanly; the session ends with the ego run wrapper.
-        print("{}");return 0
+        print("{}")
+        try:
+            obj=json.loads(raw)
+            sid=obj.get("session_id") if isinstance(obj,dict) else None
+            tpath=obj.get("transcript_path") if isinstance(obj,dict) else None
+            if isinstance(sid,str) and sid and isinstance(tpath,str) and tpath:
+                from .usecases.fold import spawn_fold
+                spawn_fold(root,sid,tpath)
+        except Exception:
+            pass
+        return 0
     if args.event in ("stop","session-start"):
         # Advisory hooks never fail the host turn: any problem means "say nothing".
         host=args.host
@@ -798,6 +833,12 @@ def build_parser()->argparse.ArgumentParser:
     r=s.add_parser("index");r.add_argument("--execute",action="store_true",help="Index using installed provider after manual review")
     sp.set_defaults(func=_cmd_code)
     sp=sub.add_parser("hook");common(sp);sp.add_argument("event",choices=["pre-tool","stop","session-start","session-end","user-prompt","statusline","context-probe"]);sp.add_argument("--host",choices=["claude","codex","opencode","agy"],default="claude",help="Host CLI whose hook payload arrives on stdin");sp.set_defaults(func=_cmd_hook)
+    sp=sub.add_parser("tools",help="Propose, apply, or restore reversible MCP tool pruning");common(sp);s=sp.add_subparsers(dest="action",required=True)
+    s.add_parser("propose",help="List unused mcp__ tools eligible for pruning")
+    r=s.add_parser("apply",help="Apply proposed mcp__ tool pruning to host settings");r.add_argument("--yes",action="store_true");r.add_argument("--host",default="claude")
+    r=s.add_parser("restore",help="Restore a pruned tool and pin it");r.add_argument("tool")
+    sp.set_defaults(func=_cmd_tools)
+    sp=sub.add_parser("fold",help=argparse.SUPPRESS);common(sp);sp.add_argument("--session",required=True);sp.add_argument("--transcript",required=True);sp.set_defaults(func=_cmd_fold)
     return p
 
 def _correct_update_typo(args_list:list[str],parser:argparse.ArgumentParser)->None:

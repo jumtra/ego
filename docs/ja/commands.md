@@ -70,7 +70,9 @@
 | コマンド | 用途 |
 |---|---|
 | `ego knowledge add <text> [--topic <slug>] [--summary <text>] [--keyword <w>]...` | `knowledge = "file"`: 検証済みのナレッジを記録。先に index を読み、合致するトピックファイルに統合し、合致がないときだけ新規作成 |
-| `ego knowledge index` / `search <words>` / `get <slug>...` | `knowledge = "file"`: index を読む、トピックを探す、トピックファイルを表示。`knowledge = "alter"` では `ego knowledge` はすべてエラー |
+| `ego knowledge index` / `search <words>` / `get <slug>...` | `knowledge = "file"`: index を読む、トピックを探す、トピックファイルを表示。`knowledge = "alter"` では上記 4 コマンドはエラー |
+| `ego knowledge facts` | 学習済みの環境ファクト（EnvFacts）とライフサイクル状態（`candidate` / `active` / `demoted` / `forgotten`）を一覧表示 |
+| `ego knowledge forget <id>` | 指定 ID の環境ファクトを `forgotten` にし、以後注入されないようにする（`knowledge = "alter"` 時は `alter_knowledge_feedback` も送信） |
 | `ego memory add <text> [--tags <t>]... [--evidence <ref>]...` | 処理に関する事実を保存（常にローカル、`.ego/memory/items.json`） |
 | `ego memory search <query>` / `list` / `delete <id>` | 処理に関する事実を検索、または管理 |
 | `ego memory install-skills [--scope global\|project] [--clients <list>] [--no-agents] [--dry-run]` | `npx` 経由で外部ツール `alter-skills`（`github:jumtra/alter-skills`）をインストール |
@@ -78,6 +80,20 @@
 | `ego code search <query>` / `symbol <name>` | 検索。組み込みのテキスト検索にフォールバック |
 | `ego code impact <name>` / `affected <files>...` | 影響範囲と影響を受けるテスト（プロバイダが必要） |
 | `ego code index [--execute]` | プロバイダのインデックス作成コマンドを表示。`--execute` を付けると実行 |
+
+## 使用量
+
+| コマンド | 用途 |
+|---|---|
+| `ego usage summary [--days N]` | 直近 `N` 日間（既定 `7`）の使用量台帳を集計し、`category`（`agent` / `overhead`）および `caller` ごとのトークン数とコストを表示 |
+
+## ツール（MCP ツール整理）
+
+| コマンド | 用途 |
+|---|---|
+| `ego tools propose` | 直近のセッションで使われていない `mcp__` ツールを抽出し、整理候補として一覧表示 |
+| `ego tools apply [--yes] [--host <cli>]` | `--yes` なしでは候補をプレビューのみ。`--yes` を付けると整理候補をホスト設定（`claude` の `.claude/settings.local.json` の `permissions.deny`）に適用 |
+| `ego tools restore <tool>` | 整理された `mcp__` ツールを `permissions.deny` から外して復元し、再提案されないようピン留めする |
 
 ## 拡張と内部
 
