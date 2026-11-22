@@ -13,8 +13,12 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 from ..adapters.runner import RunResult
-from ..adapters.transcript import claude_transcript_path
+from ..adapters.transcript import claude_transcript_path, read_events
+from ..domain import loopguard as Envelope
 from ..domain.config import load_config
+from ..domain.loopguard import LoopState, nudge_text, stagnation_summary, update as lg_update
+from ..domain.policy import stagnation_action
+from ..domain.settings import load_settings
 from ..domain.usage import billable_tokens
 from .session import RUN_ID_ENV, context_tokens, latest_open_checkpoint, opencode_context_tokens, resume_prompt
 from ..shared.util import ALTER_ROOT_ENV, clip_output, read_json, snapshot
@@ -103,7 +107,7 @@ def _merge(results: list[RunResult], *, status: str | None = None, reason: str |
         usage=usage or None, cost_usd=None if any(c is None for c in costs) else round(sum(costs), 6),
         tokens=sum(r.tokens or 0 for r in results) or last.tokens,
         elapsed_seconds=round(sum(r.elapsed_seconds for r in results), 4),
-        segments=len(results), rotations=rotations)
+        segments=len(results), rotations=rotations, stagnation=last.stagnation)
 
 
 def _drop_handoffs(cwd: Path, tag: str) -> None:
@@ -112,6 +116,21 @@ def _drop_handoffs(cwd: Path, tag: str) -> None:
         record = read_json(path)
         if isinstance(record, dict) and record.get("run") == tag:
             path.unlink(missing_ok=True)
+
+
+def _advance_loopguard(
+    cwd: Path, session_id: str | None, last_session: str | None, seq: int, lg: LoopState
+) -> tuple[str | None, int, LoopState]:
+    if session_id != last_session:
+        seq = 0
+        last_session = session_id
+    tpath = claude_transcript_path(cwd, session_id)
+    if tpath is not None:
+        evs = read_events(tpath, after_seq=seq)
+        if evs:
+            lg = lg_update(lg, evs)
+            seq = max(e.seq for e in evs)
+    return last_session, seq, lg
 
 
 def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callable[..., RunResult], threshold: int,
@@ -138,6 +157,18 @@ def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callab
     consumed: dict[str, int] = {}
     base_snap = _workspace_snapshot(cwd) if host != "claude" else {}
     max_rotations = max(3, min(20, max_turns))
+    lg = LoopState()
+    seq = 0
+    nudges = 0
+    last_session: str | None = None
+    s = None
+    lim = None
+    if host == "claude":
+        try:
+            s = load_settings(project_root).loopguard
+            lim = Envelope.limit(project_root, s)
+        except Exception:
+            s = None
 
     def out_of_tokens() -> bool:
         # Segments of this worker are not charged to the shared budget until the node returns, so include them here.
@@ -163,13 +194,40 @@ def run_worker(host: str, prompt: str, cwd: Path, timeout: int, *, agent: Callab
                 results.append(r)
                 used += int((r.usage or {}).get("turns") or turns)
                 if r.status != "PASS" or r.stop_reason != "error_max_turns":
-                    return _merge(results, rotations=rotations)
+                    if r.status == "PASS":
+                        try:
+                            last_session, seq, lg = _advance_loopguard(cwd, r.session_id, last_session, seq, lg)
+                        except Exception:
+                            pass
+                    merged = _merge(results, rotations=rotations)
+                    if merged.status == "PASS":
+                        try:
+                            Envelope.record(project_root, lg.turns)
+                        except Exception:
+                            pass
+                    return merged
                 if used >= max_turns:
                     return _merge(results, status="FAIL", reason="MAX_TURNS", rotations=rotations)
+                nudge_msg: str | None = None
+                if s is not None:
+                    try:
+                        last_session, seq, lg = _advance_loopguard(cwd, r.session_id, last_session, seq, lg)
+                        d = stagnation_action(lg, lim, s, nudges)
+                        emit(segment=len(results), action="loopguard", decision=d, dry_run=s.dry_run)
+                        if not s.dry_run:
+                            if d == "escalate":
+                                m = _merge(results, status="FAIL", reason="STAGNATION", rotations=rotations)
+                                return dataclasses.replace(m, stagnation=stagnation_summary(lg))
+                            if d == "nudge":
+                                nudges += 1
+                                nudge_msg = nudge_text(lg)
+                    except Exception:
+                        nudge_msg = None
                 tokens = worker_context_tokens(cwd, r.session_id)
                 if tokens is None or tokens < threshold:
                     emit(segment=len(results), tokens=tokens, action="continue")
-                    session, text = r.session_id, CONTINUE_PROMPT
+                    session = r.session_id
+                    text = f"{CONTINUE_PROMPT}\n\n{nudge_msg}" if nudge_msg else CONTINUE_PROMPT
                     continue
                 if out_of_tokens():
                     return _merge(results, status="FAIL", reason="BUDGET_EXHAUSTED", rotations=rotations)

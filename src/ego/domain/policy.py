@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import shutil
+from typing import Literal
 from ..shared.util import EgoError, safe_path
+from .loopguard import LoopState, is_stuck, over_envelope
+from .settings import LoopGuardSettings
 
 BLOCK_PATTERNS = [
     r"(?<!\w)(?:sudo\s+)?rm\s+(?=(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[rR])(?=(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[fF])(?:-[a-zA-Z]+\s+)+(?:/|~|\$HOME)(?:\s|$)",
@@ -72,3 +75,22 @@ def check_hook_payload(event: str, payload: dict, policy_mode: str = "strict") -
     if tool == "Bash" and any(re.search(p, command, re.I) for p in BLOCK_PATTERNS):
         return {"decision": "deny", "reason": "destructive shell command"}
     return {"decision": "allow", "reason": "no high-risk operation detected"}
+
+
+def stagnation_action(
+    state: LoopState,
+    lim: float | None,
+    s: LoopGuardSettings,
+    nudges_used: int,
+) -> Literal["observe", "nudge", "escalate"]:
+    """Decide whether to observe, nudge, or escalate based on loop state and envelope."""
+    if not s.enabled:
+        return "observe"
+    stuck = is_stuck(state, s)
+    if lim and state.turns > lim * s.backstop_mult and stuck:
+        return "escalate"
+    if not (stuck and over_envelope(state, lim, s)):
+        return "observe"
+    if nudges_used < s.max_nudges_per_node:
+        return "nudge"
+    return "escalate" if s.escalate_to_replan else "observe"

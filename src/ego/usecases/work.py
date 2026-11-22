@@ -474,6 +474,9 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     if cfg.knowledge=="alter" and "alter" not in mcp_servers:
                         mcp_servers.append("alter")
                     def _on_worker_event(**f):
+                        if f.get("action")=="loopguard":
+                            progress.emit("loopguard",node=node["id"],attempt=iteration,**f)
+                            return
                         progress.emit("worker_segment",node=node["id"],attempt=iteration,**f)
                         if runroot is not None and kind not in ("code","gate"):
                             try:
@@ -562,6 +565,12 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     if kind=="gate" and changed:raise EgoError("GATE_WRITE","A gate may not modify source")
                 except EgoError as exc:
                     ok=False;writes_ok=False;feedback=str(exc)
+                stag=getattr(r,"stagnation",None)
+                if stag is not None:
+                    pattern=stag.get("pattern","")
+                    count=stag.get("count",0)
+                    commands=stag.get("commands") or []
+                    feedback=f"STAGNATION: {pattern} x{count}; tried: {', '.join(commands)}\n"+(feedback or "")
                 record={"attempt":iteration,"host":chosen_host,"model":chosen_model or "native-default",
                         "effort":chosen_effort or "auto",
                         "status":"PASS" if ok else "FAIL",
@@ -569,6 +578,8 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                         "execution":{**r.as_dict(),"output":clip_output(r.output,cfg.tuning.max_record_chars),"stderr":clip_output(r.stderr,cfg.tuning.max_record_chars)},
                         "checks":[{**c,"output":clip_output(c.get("output",""),cfg.tuning.max_record_chars),"stderr":clip_output(c.get("stderr",""),cfg.tuning.max_record_chars)} for c in checks],
                         "changed":changed,"feedback":feedback}
+                if stag is not None:
+                    record["stagnation"]=stag
                 edits={}
                 base_hashes={}
                 if writes_ok:
@@ -662,6 +673,22 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     if verdict_info:out["verdict"]=verdict_info["verdict"];out["findings"]=verdict_info["findings"]
     if budget_exhausted:out["budget_exhausted"]=True
     return out
+
+
+def _node_cost_usd(attempts:list[dict])->float|None:
+    total=0.0
+    any_known=False
+    for attempt in attempts:
+        ex=attempt.get("execution",{})
+        if ex.get("host") in (None,"local","mock"):continue
+        host_cost=ex.get("cost_usd")
+        usage=ex.get("usage") or {}
+        model=_run_model(usage,ex.get("model"))
+        cost=float(host_cost) if isinstance(host_cost,(int,float)) and not isinstance(host_cost,bool) else price_cost(usage,model)
+        if cost is None:return None
+        total+=cost
+        any_known=True
+    return round(total,6) if any_known else None
 
 
 def _run_model(usage:dict,requested:object)->str:
@@ -1112,6 +1139,12 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str|None="mock",ap
                             write_json(record_path,record)
                             cp=managed_checkpoint(root,record,state="BLOCKED" if failed else "IN_PROGRESS",task_file=record.get("task_file"))
                         extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"),cfg.tuning.max_summary_chars)} if result.get("verdict") else {}
+                        last_attempt=(result.get("attempts") or [{}])[-1]
+                        if last_attempt.get("stagnation") is not None:
+                            extra["stagnation"]=last_attempt["stagnation"]
+                        node_cost=_node_cost_usd(result.get("attempts") or [])
+                        if node_cost is not None:
+                            extra["cost_usd"]=node_cost
                         progress.emit("node_finished",node=identifier,status=result["status"],attempts=len(result["attempts"]),
                                       changed=sorted(result["edits"])[:20],checkpoint_revision=cp["revision"],**extra)
                     # A failure stops only its dependents: independent nodes still finish, so a
@@ -1192,7 +1225,12 @@ def _alter_reporter(root:Path,ref:dict,run_id:str,runroot:Path):
             nodes[node]={"status":"RUNNING","attempts":0,"failure":""}
         elif event=="node_finished":
             failed=fields["status"]!="PASSED"
-            nodes[node]={"status":fields["status"],"attempts":fields["attempts"],"failure":failures.get(node,"") if failed else ""}
+            entry={"status":fields["status"],"attempts":fields["attempts"],"failure":failures.get(node,"") if failed else ""}
+            if fields.get("stagnation") is not None:
+                entry["stagnation"]=fields["stagnation"]
+            if fields.get("cost_usd") is not None:
+                entry["cost_usd"]=fields["cost_usd"]
+            nodes[node]=entry
         elif event=="attempt_finished" and fields.get("status")!="PASS":
             failures[node]=clip_output(fields.get("feedback") or "",summary_limit)
         if event in ("run_started","node_started","node_finished","attempt_finished"):state="running"
