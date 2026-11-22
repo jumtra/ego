@@ -16,7 +16,7 @@ from ..adapters.runner import run_agent, run_checked_command
 from .worker import run_worker
 from .overlay import overlaid, instruction_target
 from ..shared.util import (EgoError, ident, now, read_json, write_json, snapshot, simple_copy_tree,
-                   filehash, safe_path, exclusive_lock, git_is_repo, git_head, git_worktree_add, git_worktree_remove, git_branch_delete,
+                   filehash, safe_path, exclusive_lock, git_is_repo, git_head, git_ignored, git_worktree_add, git_worktree_remove, git_branch_delete,
                    copy_worktree_extras, git_commit_paths, git_merge_branch, sha256, json_text, is_locked, atomic_bytes)
 from ..domain.task_routing import validate_task_context, resolve_routes, build_task_prompt
 from ..domain.task_schema import PlanSchemaLimits, validate_task_schema
@@ -422,6 +422,7 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     outputs=[]
     def attempt_one(chosen_host:str, chosen_model:str|None, chosen_effort:str|None, iteration:int, carry:dict|None=None) -> dict:
         nonlocal feedback
+        prior_feedback=feedback
         with tempfile.TemporaryDirectory(prefix="ego-node-") as tmp:
             work=Path(tmp)/"src"
             node_wt=False
@@ -557,6 +558,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     if verdict_info["verdict"]=="INVALID":ok=False;feedback="Reviewer output has no VERDICT line"
                     elif verdict_info["verdict"]=="REJECT":ok=False;feedback=format_findings(verdict_info["findings"],cfg.tuning.max_feedback_chars)
                 changed=_changed(before,snapshot(work))
+                if kind=="gate" and changed:
+                    # Build output a gate's own command writes (e.g. a gitignored dist/) is not a source edit.
+                    ignored=git_ignored(staging,changed)
+                    changed=[rel for rel in changed if rel not in ignored]
                 writes_ok=True
                 try:
                     for rel in changed:
@@ -564,7 +569,10 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                         check_write(work,rel,node.get("write_allowlist",[]))
                     if kind=="gate" and changed:raise EgoError("GATE_WRITE","A gate may not modify source")
                 except EgoError as exc:
-                    ok=False;writes_ok=False;feedback=str(exc)
+                    violation=f"[{exc.code}] {exc}"
+                    # Keep the failing command's own output: a bare path hides why the node really failed.
+                    feedback=f"{feedback}\n{violation}" if (not ok and feedback and feedback!=prior_feedback) else violation
+                    ok=False;writes_ok=False
                 stag=getattr(r,"stagnation",None)
                 if stag is not None:
                     pattern=stag.get("pattern","")
@@ -659,6 +667,9 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
             continue
         # A task evaluation failure must not silently switch vendors.
         if iteration>=max_attempts+route_pos:
+            break
+        # A code or gate node reruns the same command on the same input, so a retry can only repeat the failure.
+        if kind in ("code","gate"):
             break
         if r["execution_status"] in ("UNAVAILABLE","TIMEOUT","RATE_LIMIT"):
             break

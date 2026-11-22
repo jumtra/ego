@@ -2645,3 +2645,36 @@ def test_simple_copy_tree_keeps_only_origin_identity_without_history(tmp_path: P
     simple_copy_tree(tmp_path / "copy2", tmp_path / "copy4")
     stub = (tmp_path / "copy4" / ".git" / "config").read_text()
     assert "origin" not in stub and f"sourcePath = {bare.resolve()}" in stub
+
+
+def test_gate_failure_keeps_the_command_output_next_to_the_write_violation(tmp_path):
+    (tmp_path / "check.py").write_text("from pathlib import Path\nimport sys\nPath('stray.txt').write_text('x')\n"
+                                       "print('REAL FAILURE: 3 tests failed')\nsys.exit(1)\n")
+    result = execute(tmp_path, {"nodes": [{"id": "gate", "kind": "gate", "argv": ["python3", "check.py"]}]})
+    attempts = result["results"]["gate"]["attempts"]
+    feedback = attempts[-1]["feedback"]
+    assert "REAL FAILURE: 3 tests failed" in feedback
+    assert "[OUT_OF_SCOPE] stray.txt" in feedback
+
+
+def test_gate_and_code_nodes_are_not_retried_on_the_same_input(tmp_path):
+    (tmp_path / "check.py").write_text("import sys\nsys.exit(1)\n")
+    task = {"nodes": [{"id": "gate", "kind": "gate", "argv": ["python3", "check.py"], "max_attempts": 3},
+                      {"id": "code", "kind": "code", "argv": ["python3", "check.py"], "write_allowlist": ["*"], "max_attempts": 3}]}
+    result = execute(tmp_path, task)
+    assert result["final_status"] == "FAILED"
+    assert len(result["results"]["gate"]["attempts"]) == 1
+    assert len(result["results"]["code"]["attempts"]) == 1
+
+
+def test_gate_may_write_gitignored_build_output_but_not_tracked_source(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_git_repo(root, {".gitignore": "dist/\n", "src.txt": "a\n",
+                          "build.py": "from pathlib import Path\nPath('dist').mkdir(exist_ok=True)\nPath('dist/out.js').write_text('built')\n",
+                          "edit.py": "from pathlib import Path\nPath('src.txt').write_text('b')\n"})
+    built = execute(root, {"nodes": [{"id": "gate", "kind": "gate", "argv": ["python3", "build.py"]}]})
+    assert built["final_status"] == "PASSED"
+    edited = execute(root, {"nodes": [{"id": "gate", "kind": "gate", "argv": ["python3", "edit.py"]}]})
+    assert edited["final_status"] == "FAILED"
+    assert edited["results"]["gate"]["attempts"][-1]["feedback"] == "[OUT_OF_SCOPE] src.txt"
