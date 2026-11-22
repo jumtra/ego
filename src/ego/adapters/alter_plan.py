@@ -7,7 +7,7 @@ from ..shared.util import EgoError, alter_project_root
 from ..domain.task_schema import PlanSchemaLimits, validate_alter_plan_spec
 from .memory import MCPStdio, _alter_mcp_spec, ALTER_HOST_HINT
 
-NODE_EXTRA_KEYS=('kind','role','reviews','host','hosts','model','models','agent','mcp','max_rounds','on_exhausted','max_turns','strategy','fallback_on','argv','outputs','notes','timeout_seconds')
+NODE_EXTRA_KEYS=('kind','role','reviews','host','hosts','model','models','agent','mcp','max_rounds','on_exhausted','max_turns','strategy','fallback_on','argv','outputs','notes','timeout_seconds','budget_usd')
 TASK_EXTRA_KEYS=('defaults','instructions_file')
 
 def task_to_spec(task: dict, slug: str, *, limits: PlanSchemaLimits | None = None) -> dict:
@@ -47,6 +47,7 @@ def _spec_to_node(s: dict) -> dict:
     if s.get('requirement'): node['requirement']=s['requirement']
     if s.get('steps'): node['steps']=s['steps']
     if s.get('done_when'): node['done_when']=s['done_when']
+    if s.get('budget_usd') is not None: node['budget_usd']=s['budget_usd']
     for k in ('non_goals','assumptions','provides'):
         if s.get(k): node[k]=s[k]
     if kind not in ('code','gate') and 'role' not in extra: node['role']='coder'

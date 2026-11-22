@@ -25,6 +25,11 @@ from ..shared.util import clip_output
 from ..domain.review import parse_verdict, format_findings
 from ..domain.usage import CACHE_TIER_KEYS, CATEGORIES, TOKEN_KEYS, billable_tokens, tokens_of, summary_line, usage_row
 from ..domain.pricing import cost_usd as price_cost
+from ..domain.settings import load_settings
+from ..domain.envfacts import extract as extract_envfacts
+from ..domain.fact_lifecycle import Fact, fact_id, observe as observe_envfact
+from ..adapters.envfact_store import active_facts, load as load_envfacts, notify_alter, save as save_envfacts
+from ..adapters.transcript import claude_transcript_path, read_events
 from . import ledger
 
 # Serializes copies out of and writes into a run's staging tree across parallel node threads.
@@ -457,6 +462,14 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     prompt=build_task_prompt(spec,node,work,feedback=feedback,handoff=handoff,
                                              project_root=project_root,alter_rules=alter_rules,alter_context=alter_ctx,
                                              feedback_limit=cfg.tuning.max_feedback_chars,handoff_limit=cfg.tuning.max_handoff_chars)
+                    try:
+                        lifecycle_settings=load_settings(project_root).lifecycle
+                        if lifecycle_settings.enable_envfacts:
+                            lines=active_facts(project_root,lifecycle_settings)
+                            if lines:
+                                prompt+="\n\n## Observed environment facts\n"+"\n".join("- "+l for l in lines)
+                    except Exception:
+                        pass
                     mcp_servers=list(node.get("mcp") or [])
                     if cfg.knowledge=="alter" and "alter" not in mcp_servers:
                         mcp_servers.append("alter")
@@ -506,6 +519,28 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                             except Exception:
                                 pass
                         raise
+                    try:
+                        lifecycle_settings=load_settings(project_root).lifecycle
+                        if chosen_host=="claude" and r.session_id and lifecycle_settings.enable_envfacts:
+                            tpath=claude_transcript_path(work,r.session_id)
+                            if tpath is not None:
+                                observations=extract_envfacts(read_events(tpath),r.session_id)
+                                if observations:
+                                    facts=load_envfacts(project_root)
+                                    newly_demoted=[]
+                                    for obs in observations:
+                                        fid=fact_id(obs.category,obs.key)
+                                        prev=facts.get(fid)
+                                        cur=prev if prev is not None else Fact(id=fid,key=obs.key,category=obs.category)
+                                        nxt=observe_envfact(cur,obs,lifecycle_settings)
+                                        facts[fid]=nxt
+                                        if cur.state!="demoted" and nxt.state=="demoted":
+                                            newly_demoted.append(nxt)
+                                    save_envfacts(project_root,facts)
+                                    for df in newly_demoted:
+                                        notify_alter(project_root,df,"contradiction")
+                    except Exception:
+                        pass
                 if token_budget is not None:token_budget.charge(r.usage)
                 checks=[]
                 if r.status=="PASS":

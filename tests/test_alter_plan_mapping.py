@@ -32,3 +32,17 @@ def test_prompt_over_limit_is_rejected():
 def test_pulled_task_passes_validate_task():
     restored=spec_to_task(task_to_spec(sample_task(),'login'),'plan-1','hash-1')
     validate_task(restored)
+
+def test_round_trip_keeps_budget_usd():
+    task=sample_task()
+    task['nodes'][0]['budget_usd']=0.5
+    spec=task_to_spec(task,'login')
+    assert spec['nodes'][0]['extra']['budget_usd']==0.5
+    restored=spec_to_task(spec,'plan-1','hash-1')
+    assert restored['nodes'][0]['budget_usd']==0.5
+
+def test_spec_to_task_copies_top_level_node_budget_usd():
+    spec=task_to_spec(sample_task(),'login')
+    spec['nodes'][0]['budget_usd']=0.5
+    restored=spec_to_task(spec,'plan-1','hash-1')
+    assert restored['nodes'][0]['budget_usd']==0.5

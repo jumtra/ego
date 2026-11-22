@@ -14,9 +14,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..domain.settings import load_settings
 from ..shared.util import exclusive_lock, now, read_json, safe_path, write_json
 
 MIN_TURNS = 4
+SIGNAL_RE = re.compile(r"決定|方針|理由|なぜ|しない|やめ|避け|優先|because|decide|prefer|avoid|must|instead", re.I)
 ANALYZER_ENV = "EGO_ALTER_ANALYZER"
 ANALYZER_TOOLS = ["Read", "Skill", "ToolSearch", "mcp__alter"]
 ANALYZER_MAX_TURNS = 12
@@ -87,6 +89,14 @@ def _spawn_analysis(root: Path, sid: str) -> bool:
     return True
 
 
+def has_signal(turns: list[dict[str, Any]], min_user_chars: int) -> bool:
+    """Return True when user turns meet min_user_chars and contain a decision/rationale signal."""
+    user_texts = [str(t.get("text") or "") for t in turns if isinstance(t, dict) and t.get("role") == "user"]
+    if sum(len(text) for text in user_texts) < min_user_chars:
+        return False
+    return any(SIGNAL_RE.search(text) for text in user_texts)
+
+
 def launch_analysis(root: Path, sid: str) -> dict[str, Any]:
     """Called when an `ego run` wrapper ends, for its logical session. Never raises."""
     try:
@@ -105,6 +115,9 @@ def launch_analysis(root: Path, sid: str) -> dict[str, Any]:
             timeout = _limit(root)
             if _up_to_date(entry, len(turns["turns"])) or (isinstance(entry, dict) and _running(entry, timeout)):
                 return {"status": "skipped", "reason": entry.get("status"), "session_id": sid}
+            if not has_signal(turns["turns"], load_settings(root).analysis.min_user_chars):
+                _write_entry(root, sid, {"status": "skipped_no_signal", "turns": len(turns["turns"])})
+                return {"status": "skipped_no_signal", "session_id": sid}
             _write_entry(root, sid, {"status": "running"})
             _spawn_analysis(root, sid)
         return {"status": "launched", "session_id": sid}

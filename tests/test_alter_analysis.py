@@ -67,15 +67,18 @@ def popen(monkeypatch):
     return FakePopen.calls
 
 
-def _turns(n: int = 4) -> list[dict]:
-    return [{"id": f"t{i}", "sequence": i, "role": "user" if i % 2 == 0 else "assistant", "text": f"msg {i}"}
+def _turns(n: int = 4, user_text: str | None = None) -> list[dict]:
+    default_user = f"方針を決める " + ("x" * 220)
+    return [{"id": f"t{i}", "sequence": i, "role": "user" if i % 2 == 0 else "assistant",
+             "text": (default_user if user_text is None else user_text) if i % 2 == 0 else f"msg {i}"}
             for i in range(n)]
 
 
 def _write_turns(root: Path, sid: str, host: str = "claude", n: int = 4, conv: str | None = CONV,
-                 age_seconds: float = 0.0) -> Path:
+                 age_seconds: float = 0.0, user_text: str | None = None) -> Path:
     path = memory.alter_turns_path(root, sid)
-    write_json(path, {"session_id": sid, "host": host, "conversation_id": conv, "turns": _turns(n)})
+    write_json(path, {"session_id": sid, "host": host, "conversation_id": conv,
+                      "turns": _turns(n, user_text=user_text)})
     if age_seconds:
         t = time.time() - age_seconds
         os.utime(path, (t, t))
@@ -199,6 +202,24 @@ def test_launch_fails_open_when_spawn_raises(root, set_cfg, monkeypatch):
     monkeypatch.setattr(aa.subprocess, "Popen", boom)
     res = aa.launch_analysis(root, SID)
     assert res["status"] == "error" and "no exec" in res["reason"]
+
+
+def test_launch_skipped_no_signal_for_chitchat(root, popen, set_cfg):
+    _write_turns(root, SID, n=4, user_text="hello")
+    set_cfg(_cfg())
+    res = aa.launch_analysis(root, SID)
+    assert res == {"status": "skipped_no_signal", "session_id": SID}
+    assert popen == []
+    assert _state(root)[SID]["status"] == "skipped_no_signal"
+    assert _state(root)[SID]["turns"] == 4
+
+
+def test_launch_passes_signal_gate_with_keyword_and_min_user_chars(root, popen, set_cfg):
+    _write_turns(root, SID, n=4, user_text="方針 " + ("a" * 200))
+    set_cfg(_cfg())
+    res = aa.launch_analysis(root, SID)
+    assert res == {"status": "launched", "session_id": SID}
+    assert len(popen) == 1
 
 
 # ---------- 3. analyze_session per host ----------
