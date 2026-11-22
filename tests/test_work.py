@@ -2637,8 +2637,11 @@ def test_simple_copy_tree_keeps_only_origin_identity_without_history(tmp_path: P
     # a copy of a copy (staging -> node copy) keeps the identity too
     simple_copy_tree(dst, tmp_path / "copy3")
     assert "https://example.com/o/r.git" in (tmp_path / "copy3" / ".git" / "config").read_text()
-    # a repository without a remote leaves no .git at all
+    assert f"sourcePath = {src.resolve()}" in cfg and f"sourcePath = {src.resolve()}" in (tmp_path / "copy3" / ".git" / "config").read_text()
+    # without a remote only the source path is kept, and it survives a second copy
     bare = tmp_path / "norepo"
     bare.mkdir()
     simple_copy_tree(bare, tmp_path / "copy2")
-    assert not (tmp_path / "copy2" / ".git").exists()
+    simple_copy_tree(tmp_path / "copy2", tmp_path / "copy4")
+    stub = (tmp_path / "copy4" / ".git" / "config").read_text()
+    assert "origin" not in stub and f"sourcePath = {bare.resolve()}" in stub
