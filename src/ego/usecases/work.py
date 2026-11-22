@@ -23,7 +23,9 @@ from ..domain.task_schema import PlanSchemaLimits, validate_task_schema
 from .session import managed_checkpoint, load_checkpoint, completion_message, handoff_relpath
 from ..shared.util import clip_output
 from ..domain.review import parse_verdict, format_findings
-from ..domain.usage import TOKEN_KEYS, billable_tokens, tokens_of, summary_line
+from ..domain.usage import CACHE_TIER_KEYS, CATEGORIES, TOKEN_KEYS, billable_tokens, tokens_of, summary_line, usage_row
+from ..domain.pricing import cost_usd as price_cost
+from . import ledger
 
 # Serializes copies out of and writes into a run's staging tree across parallel node threads.
 _STAGING_LOCK=threading.Lock()
@@ -627,22 +629,41 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
     return out
 
 
+def _run_model(usage:dict,requested:object)->str:
+    """The model that produced the usage: the one Claude reported, else the one requested. Empty when neither is known."""
+    return str(usage.get("model") or requested or "")
+
+
 def usage_summary(record:dict)->dict:
     """Aggregate model traffic of a run, by phase: plan (planner call) and work (per task node).
 
     cost_known is False when a host reported no cost. by_task maps each node id
     to its own token count, so a reader can see where the tokens went.
+    by_category splits the run into agent bodies (node attempts) and overhead (planner).
+    estimated_cost_usd uses the host cost when given, else the shared price table; it is None
+    when any call has no known price, because an unknown price is never guessed.
     """
     total={"model_calls":0,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,
-           "cache_creation_tokens":0,"cost_usd":0.0,"cost_known":True,"planned":False,"plan_tokens":0,"work_tokens":0,"by_task":{}}
+           "cache_creation_tokens":0,"cache_write_5m_tokens":0,"cache_write_1h_tokens":0,
+           "cost_usd":0.0,"cost_known":True,"planned":False,"plan_tokens":0,"work_tokens":0,"by_task":{},
+           "by_category":{name:{"tokens":0,"cost_usd":0.0} for name in CATEGORIES},"estimated_cost_usd":0.0}
+    unpriced={name:0 for name in CATEGORIES}
+    def _book(category:str,usage:dict,host_cost:object,model:str)->None:
+        bucket=total["by_category"][category]
+        bucket["tokens"]+=tokens_of(usage)
+        cost=float(host_cost) if isinstance(host_cost,(int,float)) and not isinstance(host_cost,bool) else price_cost(usage,model)
+        if cost is None:unpriced[category]+=1
+        else:bucket["cost_usd"]+=cost
     planner=record.get("planner_usage")
     if isinstance(planner,dict):
         total["model_calls"]+=1
         total["planned"]=True
         total["plan_tokens"]=tokens_of(planner)
         for key in TOKEN_KEYS:total[key]+=int(planner.get(key,0) or 0)
+        for key in CACHE_TIER_KEYS:total[key]+=int(planner.get(key,0) or 0)
         if isinstance(planner.get("cost_usd"),(int,float)):total["cost_usd"]+=float(planner["cost_usd"])
         else:total["cost_known"]=False
+        _book("overhead",planner,planner.get("cost_usd"),_run_model(planner,None))
     for nid,result in record.get("results",{}).items():
         for attempt in result.get("attempts",[]):
             ex=attempt.get("execution",{})
@@ -651,13 +672,41 @@ def usage_summary(record:dict)->dict:
             usage=ex.get("usage") or {}
             for key in TOKEN_KEYS:
                 total[key]+=int(usage.get(key,0) or 0)
+            for key in CACHE_TIER_KEYS:
+                total[key]+=int(usage.get(key,0) or 0)
             count=tokens_of(usage)
             total["work_tokens"]+=count
             total["by_task"][nid]=total["by_task"].get(nid,0)+count
             if isinstance(ex.get("cost_usd"),(int,float)):total["cost_usd"]+=float(ex["cost_usd"])
             else:total["cost_known"]=False
+            _book("agent",usage,ex.get("cost_usd"),_run_model(usage,ex.get("model")))
     total["cost_usd"]=round(total["cost_usd"],4)
+    for name,bucket in total["by_category"].items():
+        bucket["cost_usd"]=None if unpriced[name] else round(bucket["cost_usd"],6)
+    total["estimated_cost_usd"]=None if any(unpriced.values()) else round(sum(b["cost_usd"] for b in total["by_category"].values()),6)
     return total
+
+
+def _write_ledger(root:Path,record:dict,run_id:str)->None:
+    """Append this run's model calls to the usage ledger, once per call. Fail-open: the run never stops for accounting."""
+    try:
+        written=record.setdefault("_ledger_written",[])
+        rows=[]
+        planner=record.get("planner_usage")
+        if isinstance(planner,dict) and "planner" not in written:
+            rows.append(usage_row(planner,model=_run_model(planner,None),category="overhead",caller="planner",run_id=run_id))
+            written.append("planner")
+        for nid,result in record.get("results",{}).items():
+            for index,attempt in enumerate(result.get("attempts",[])):
+                key=f"{nid}#{index}"
+                ex=attempt.get("execution",{})
+                usage=ex.get("usage") or {}
+                if ex.get("host") in (None,"local","mock") or key in written or not usage:continue
+                rows.append(usage_row(usage,model=_run_model(usage,ex.get("model")),category="agent",caller=f"node:{nid}",run_id=run_id,node=nid))
+                written.append(key)
+        ledger.append_rows(root,rows)
+    except Exception:
+        pass
 
 
 def next_action(result:dict, task_file:str="<task-file>")->str|None:
@@ -1024,6 +1073,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str|None="mock",ap
                         with _STAGING_LOCK:
                             record["changed_files"]=_changed(record["base_snapshot"],snapshot(staging))
                             record["usage"]=usage_summary(record)
+                            _write_ledger(root,record,run_id)
                             write_json(record_path,record)
                             cp=managed_checkpoint(root,record,state="BLOCKED" if failed else "IN_PROGRESS",task_file=record.get("task_file"))
                         extra={"verdict":result["verdict"],"findings":_brief_findings(result.get("findings"),cfg.tuning.max_summary_chars)} if result.get("verdict") else {}
@@ -1047,6 +1097,7 @@ def _execute(root:Path, spec:dict, progress:Progress, *, host:str|None="mock",ap
             record["final_status"]="FAILED"
         record["changed_files"]=_changed(record["base_snapshot"],snapshot(staging))
         record["usage"]=usage_summary(record)
+        _write_ledger(root,record,run_id)
         if record["final_status"]=="PASSED" and apply:
             # Actual workspace may not have drifted since start.
             allowed=set(extra_allow or [])

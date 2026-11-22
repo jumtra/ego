@@ -61,3 +61,41 @@ max_goal_chars = 800
 max_item_chars = 350
 max_notes = 8
 max_prompt_chars = 1600
+
+[usage]
+track_cache_tiers = true
+track_overhead_separately = true
+session_cost_warning_usd = 5.0
+
+[lifecycle]
+enable_envfacts = true
+min_confirmations = 2
+contradiction_demote_threshold = 2
+max_injected_facts = 12
+max_injected_chars = 2400
+alter_feedback = true
+
+[loopguard]
+enabled = true
+dry_run = true
+envelope_min_samples = 5
+envelope_percentile = 95
+min_turns = 20
+edit_churn = 4
+distinct_edit_files = 3
+error_outputs = 6
+stagnation_ratio = 0.2
+envelope_margin = 1.25
+backstop_mult = 2.5
+max_nudges_per_node = 1
+escalate_to_replan = true
+
+[toolprune]
+unused_days = 14
+min_sessions = 5
+
+[mcp]
+alter_worker_profile = "ego-worker"
+
+[analysis]
+min_user_chars = 400

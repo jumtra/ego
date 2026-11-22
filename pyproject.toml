@@ -23,7 +23,7 @@ ego = "ego.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ego = ["defaults.toml"]
+ego = ["defaults.toml", "pricing.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

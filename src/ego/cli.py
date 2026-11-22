@@ -310,6 +310,11 @@ def _cmd_state(args):
     _print(prune_state(_root(args)));return 0
 
 
+def _cmd_usage(args):
+    from .usecases import ledger
+    _print(ledger.summarize(_root(args), args.days));return 0
+
+
 def _cmd_memory(args):
     from .domain.config import load_config
     from .adapters.memory import FileMemory, install_alter_skills
@@ -720,6 +725,9 @@ def build_parser()->argparse.ArgumentParser:
     sp.set_defaults(func=_cmd_work)
     sp=sub.add_parser("state",help="Enforce retention limits on .ego/state and related growth paths");common(sp);s=sp.add_subparsers(dest="action",required=True)
     s.add_parser("prune",help="Remove entries beyond the retention limits now (also runs automatically)").set_defaults(func=_cmd_state)
+    sp=sub.add_parser("usage",help="Model usage ledger: cost split between agent bodies (agent) and ego control (overhead)");common(sp);s=sp.add_subparsers(dest="action",required=True)
+    r=s.add_parser("summary",help="Totals by category and caller over the last --days days");r.add_argument("--days",type=int,default=7)
+    r.set_defaults(func=_cmd_usage)
     sp=sub.add_parser("memory");common(sp);s=sp.add_subparsers(dest="action",required=True)
     r=s.add_parser("add");r.add_argument("text");r.add_argument("--tags",action="append");r.add_argument("--evidence",action="append")
     r=s.add_parser("search");r.add_argument("query");s.add_parser("list");r=s.add_parser("delete");r.add_argument("id")
