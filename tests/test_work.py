@@ -2678,3 +2678,31 @@ def test_gate_may_write_gitignored_build_output_but_not_tracked_source(tmp_path)
     edited = execute(root, {"nodes": [{"id": "gate", "kind": "gate", "argv": ["python3", "edit.py"]}]})
     assert edited["final_status"] == "FAILED"
     assert edited["results"]["gate"]["attempts"][-1]["feedback"] == "[OUT_OF_SCOPE] src.txt"
+
+
+def test_gitignored_build_output_from_a_node_is_not_a_write_violation(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _init_git_repo(root, {".gitignore": "dist/\nlocal.cfg\n",
+                          "gen.py": "from pathlib import Path\nPath('result.txt').write_text('done')\n"
+                                    "Path('local.cfg').write_text('cfg')\n",
+                          "build.py": "from pathlib import Path\nPath('dist').mkdir(exist_ok=True)\n"
+                                      "Path('dist/out.js').write_text('built')\n"})
+    task = {"nodes": [{"id": "write", "kind": "code", "argv": ["python3", "gen.py"],
+                       "checks": [["python3", "build.py"]], "write_allowlist": ["result.txt", "local.cfg"]}]}
+    result = execute(root, task, apply=True, approve=True)
+    assert result["final_status"] == "PASSED" and result["applied"]
+    # The ignored build output is dropped; an ignored file the node is allowed to write is kept.
+    assert result["changed_files"] == ["local.cfg", "result.txt"]
+    assert not (root / "dist").exists()
+
+
+def test_parallel_writers_may_not_both_own_the_same_file():
+    def writer(nid, allow, deps=()):
+        return {"id": nid, "prompt": "p", "write_allowlist": allow, "depends_on": list(deps)}
+    with pytest.raises(EgoError, match="a and b can run in parallel and both write src/cli.ts") as exc:
+        validate_task({"nodes": [writer("a", ["src/cli.ts", "src/a.ts"]), writer("b", ["src/cli.ts", "test/**"])]})
+    assert exc.value.code == "PARALLEL_WRITE_OVERLAP"
+    # Serial writers and writers that only share a glob pattern stay valid.
+    validate_task({"nodes": [writer("a", ["src/cli.ts"]), writer("b", ["src/cli.ts"], ["a"])]})
+    validate_task({"nodes": [writer("a", ["*.txt"]), writer("b", ["*.txt"])]})

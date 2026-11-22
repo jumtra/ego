@@ -1,6 +1,7 @@
 """Bounded DAG execution: file-level isolation, verified repairs, checkpoint/resume and opt-in apply."""
 from __future__ import annotations
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+import fnmatch
 import json
 from pathlib import Path
 import shutil
@@ -98,6 +99,7 @@ def validate_task(spec: dict, *, limits: PlanSchemaLimits | None = None, caps: C
         for d in (amap[nid].get("depends_on") or []):visit(d)
         temp.remove(nid);done.add(nid)
     for nid in amap:visit(nid)
+    _reject_parallel_write_overlap(amap)
     validate_task_context(spec, nodes, validated=True, limits=limits)
     if caps is not None:
         for n in nodes:
@@ -123,6 +125,26 @@ def validate_task(spec: dict, *, limits: PlanSchemaLimits | None = None, caps: C
             if _between(amap,a["reviews"],a["id"]) & _between(amap,b["reviews"],b["id"]):
                 raise EgoError("INVALID_TASK", f"loops of {a['id']} and {b['id']} overlap", 2)
     return nodes
+
+
+def _reject_parallel_write_overlap(amap:dict)->None:
+    """Two writers that can run at the same time must not both own the same exact file.
+
+    Both would edit it in separate copies and the run would stop with MERGE_CONFLICT only after paying for both.
+    Glob patterns may still overlap: writers sharing a directory pattern usually touch different files.
+    """
+    def literals(n:dict)->set[str]:
+        return {p for p in (n.get("write_allowlist") or []) if not any(c in p for c in "*?[")}
+    writers=[nid for nid,n in amap.items() if _is_writer(n)]
+    anc={nid:_ancestors(amap,nid) for nid in writers}
+    for i,a in enumerate(writers):
+        for b in writers[i+1:]:
+            if a in anc[b] or b in anc[a]:continue
+            shared=sorted(literals(amap[a])&literals(amap[b]))
+            if shared:
+                raise EgoError("PARALLEL_WRITE_OVERLAP",
+                               f"{a} and {b} can run in parallel and both write {', '.join(shared[:5])}; "
+                               f"make one depend on the other or give the file to one node",2)
 
 
 def _ancestors(amap:dict, nid:str)->set:
@@ -558,10 +580,13 @@ def _run_node(node:dict, spec:dict, staging:Path, default_host:str, cfg, timeout
                     if verdict_info["verdict"]=="INVALID":ok=False;feedback="Reviewer output has no VERDICT line"
                     elif verdict_info["verdict"]=="REJECT":ok=False;feedback=format_findings(verdict_info["findings"],cfg.tuning.max_feedback_chars)
                 changed=_changed(before,snapshot(work))
-                if kind=="gate" and changed:
-                    # Build output a gate's own command writes (e.g. a gitignored dist/) is not a source edit.
+                if changed:
+                    # Build output the node's command or checks write (e.g. a gitignored dist/) is not a source edit.
+                    # An ignored file the node is explicitly allowed to write stays; a gate is never allowed.
                     ignored=git_ignored(staging,changed)
-                    changed=[rel for rel in changed if rel not in ignored]
+                    allow=[] if kind=="gate" else (node.get("write_allowlist") or [])
+                    changed=[rel for rel in changed
+                             if rel not in ignored or any(fnmatch.fnmatch(rel,pat) for pat in allow)]
                 writes_ok=True
                 try:
                     for rel in changed:

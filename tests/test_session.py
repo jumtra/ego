@@ -597,7 +597,7 @@ def test_hook_cli_never_fails_the_host_turn(tmp_path: Path, monkeypatch, capsys)
 
 def test_merge_conflict_does_not_leave_the_run_marked_running(tmp_path: Path):
     (tmp_path / "w.py").write_text("from pathlib import Path\nimport os\nPath('same.txt').write_text(str(os.getpid()))\n")
-    spec = {"goal": "g", "nodes": [{"id": n, "kind": "code", "argv": ["python3", "w.py"], "write_allowlist": ["same.txt"]} for n in ("a", "b")]}
+    spec = {"goal": "g", "nodes": [{"id": n, "kind": "code", "argv": ["python3", "w.py"], "write_allowlist": ["same.*"]} for n in ("a", "b")]}
     with pytest.raises(EgoError) as conflict:
         execute(tmp_path, spec, run_id="run-conflict")
     assert conflict.value.code == "MERGE_CONFLICT"
