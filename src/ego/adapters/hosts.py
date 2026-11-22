@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import shutil
 from typing import Any
+from ..domain.settings import load_settings
 from ..shared.util import EgoError, alter_project_root
 
 @dataclass(frozen=True)
@@ -159,6 +160,14 @@ def build_command(host: str, prompt: str, *, model: str | None = None, effort: s
             argv.append("--strict-mcp-config")
             if mcp_servers and "--mcp-config" in info["flags"]:
                 selected = select_mcp_servers(cwd, mcp_servers, host="claude", project_root=project_root)
+                if "alter" in selected and "ALTER_MCP_TOOL_PROFILE" not in (selected["alter"].get("env") or {}):
+                    selected["alter"] = {
+                        **selected["alter"],
+                        "env": {
+                            **(selected["alter"].get("env") or {}),
+                            "ALTER_MCP_TOOL_PROFILE": load_settings(project_root or cwd).mcp.alter_worker_profile,
+                        },
+                    }
                 if selected:
                     argv += ["--mcp-config", json.dumps({"mcpServers": selected}, ensure_ascii=False)]
         if model:

@@ -89,7 +89,9 @@ Details: [Sessions](sessions.md).
 
 ## Fine-grained parameters (`.ego/defaults.toml`)
 
-Most limits and defaults are read from the packaged `src/ego/defaults.toml`. To change them for one project, add a `[tuning]` table to `.ego/defaults.toml`. Only `[tuning]` keys can be overridden there. No CLI flag overrides these. A `.ego/config.toml` without the new keys still works; the package defaults fill them in.
+Most limits and defaults are read from the packaged `src/ego/defaults.toml`. To change them for one project, add `[tuning]` or any settings section (`[usage]`, `[lifecycle]`, `[loopguard]`, `[toolprune]`, `[mcp]`, `[analysis]`) to `.ego/defaults.toml`. No CLI flag overrides these. A `.ego/config.toml` without the new keys still works; the package defaults fill them in.
+
+### `[tuning]`
 
 | Key | Default | Used for |
 |---|---|---|
@@ -102,6 +104,69 @@ Most limits and defaults are read from the packaged `src/ego/defaults.toml`. To 
 | `max_role_candidates` | `8` | Cap on role routing candidates |
 | `[tuning.plan_schema]` | see the packaged `defaults.toml` | Task and plan schema limits (12 keys, e.g. `max_goal_chars` 6000) |
 | `[tuning.session_schema]` | `max_goal_chars` 800, `max_item_chars` 350, `max_notes` 8, `max_prompt_chars` 1600 | Checkpoint and resume-prompt limits |
+
+### `[usage]`
+
+| Key | Default | Effect |
+|---|---|---|
+| `track_cache_tiers` | `true` | Track 5m and 1h cache creation token tiers separately |
+| `track_overhead_separately` | `true` | Split usage ledger entries between `agent` and `overhead` |
+| `session_cost_warning_usd` | `5.0` | Session cost warning threshold in USD |
+
+### `[lifecycle]`
+
+| Key | Default | Effect |
+|---|---|---|
+| `enable_envfacts` | `true` | Enable EnvFacts extraction and lifecycle updates during post-session fold |
+| `min_confirmations` | `2` | Distinct sessions with successful observations required to promote `candidate` to `active` |
+| `contradiction_demote_threshold` | `2` | Contradictions (failures) required to demote `active` to `demoted` |
+| `max_injected_facts` | `12` | Maximum number of `active` facts injected at the prompt tail |
+| `max_injected_chars` | `2400` | Maximum total characters of `active` facts injected at the prompt tail |
+| `alter_feedback` | `true` | Send `alter_knowledge_feedback` when a fact is `demoted` or `forgotten` (when `knowledge = "alter"`) |
+
+### `[loopguard]`
+
+LoopGuard ships with `dry_run = true` by default: it observes segments and emits `loopguard` progress events without injecting nudges or halting on `STAGNATION`. To enable active intervention, override it in `.ego/defaults.toml`:
+
+```toml
+[loopguard]
+dry_run = false
+```
+
+| Key | Default | Effect |
+|---|---|---|
+| `enabled` | `true` | Enable LoopGuard stagnation detection |
+| `dry_run` | `true` | When `true`, observe and emit events only without nudging or halting |
+| `envelope_min_samples` | `5` | Minimum recorded samples before using the per-repo turn envelope |
+| `envelope_percentile` | `95` | Percentile used to compute the learned turn envelope |
+| `min_turns` | `20` | Minimum assistant turns before stagnation checks trigger (also the fallback when samples are insufficient) |
+| `edit_churn` | `4` | Repeated edits to the same file threshold |
+| `distinct_edit_files` | `3` | Distinct edited files scatter threshold |
+| `error_outputs` | `6` | Error command output count threshold |
+| `stagnation_ratio` | `0.2` | Failure signature repetition ratio (`1 - distinct / total`) threshold |
+| `envelope_margin` | `1.25` | Multiplier on the learned turn envelope |
+| `backstop_mult` | `2.5` | Backstop multiplier |
+| `max_nudges_per_node` | `1` | Maximum redirection nudges per node before escalating |
+| `escalate_to_replan` | `true` | Allow escalation to replan when `STAGNATION` occurs |
+
+### `[toolprune]`
+
+| Key | Default | Effect |
+|---|---|---|
+| `unused_days` | `14` | Days without use before an `mcp__` tool is considered unused |
+| `min_sessions` | `5` | Minimum recent sessions required before proposing tools to prune |
+
+### `[mcp]`
+
+| Key | Default | Effect |
+|---|---|---|
+| `alter_worker_profile` | `"ego-worker"` | Profile name passed to the alter MCP server for worker invocations |
+
+### `[analysis]`
+
+| Key | Default | Effect |
+|---|---|---|
+| `min_user_chars` | `400` | Minimum user-character count before post-session analysis runs |
 
 ## Policy mode
 

@@ -212,6 +212,35 @@ The task's `max_replans` is the number of times the whole plan may be revised (d
 
 `max_run_tokens` (default `0` = unlimited, so runs do not stop mid-way by default) caps the billable tokens of a single `run` or `resume` invocation only when set to `>= 1000` in config or via `--max-run-tokens`; `cache_read` tokens are not counted, and the budget resets on `resume`. When an explicit cap is reached, the run stops between steps and `final_status` is `BUDGET_EXHAUSTED`. There is no whole-run time limit.
 
+## Post-session learning and LoopGuard
+
+### LoopGuard (stagnation detection and staged intervention)
+
+For `claude` workers in managed runs, LoopGuard folds trace events after each segment to detect unproductive loops (configured under `[loopguard]`):
+
+1. **Dry-run observation (default `dry_run = true`):** Evaluates stagnation conditions (`min_turns`, edit churn, error outputs, failure signature repetition ratio, or exceeding the per-repo turn envelope) and emits `loopguard` progress events without interrupting execution.
+2. **One nudge (when `dry_run = false`):** On the first stagnation detection, injects a single redirection nudge (`max_nudges_per_node = 1`) into the next segment mirroring the repeated failure signature and up to 3 tried commands.
+3. **`STAGNATION` halt:** If stagnation persists after the nudge, the worker exits with `FAIL` (`reason: STAGNATION`) and records the `stagnation` summary in `record.json` and retry feedback.
+4. **Replan / alter ego-plan report:** Downstream handling can trigger replanning (`max_replans`) or, for alter-backed plans, report the node failure and stagnation state via `alter ego-plan report`.
+
+### EnvFacts lifecycle and `alter_knowledge_feedback`
+
+Learned environment facts (such as working test/build commands and tools) follow an evidence-based lifecycle stored in `.ego/state/envfacts.json`:
+
+1. **`candidate` → `active`:** Once observed working across `min_confirmations` distinct sessions (default `2`), a fact becomes `active` and is injected at the prompt tail up to `max_injected_facts` items (`max_injected_chars` characters).
+2. **`active` → `demoted`:** When failures reach `contradiction_demote_threshold` (default `2`), the fact is demoted and no longer injected.
+3. **`ego knowledge facts` / `forget <id>`:** Inspect learned facts with `ego knowledge facts`, or mark one `forgotten` with `ego knowledge forget <id>` so it is never injected again.
+4. **`alter_knowledge_feedback`:** When `knowledge = "alter"` and `lifecycle.alter_feedback = true`, demotions and `ego knowledge forget <id>` send `alter_knowledge_feedback` to alter (transient failures queue in `.ego/state/alter-feedback-pending.jsonl` and flush on the next attempt).
+
+### Async fold after session end
+
+The session end hook never blocks on post-processing; it spawns `ego fold` in a detached background process (fail-open):
+
+- Acquires a non-blocking lock (`.ego/locks/fold.lock`) to avoid concurrent folds.
+- Aggregates transcript token usage into the usage ledger (`ego usage summary`).
+- Extracts and updates EnvFacts, sending `alter_knowledge_feedback` when applicable.
+- Logs any transcript or processing error to `.ego/state/fold-errors.jsonl` and exits cleanly without blocking session end.
+
 ## Supporting commands
 
 | Command | Purpose |

@@ -70,7 +70,9 @@ Details: [Sessions](sessions.md).
 | Command | Purpose |
 |---|---|
 | `ego knowledge add <text> [--topic <slug>] [--summary <text>] [--keyword <w>]...` | `knowledge = "file"`: record verified knowledge. Reads the index first and merges into the matching topic file, creating one only when none matches |
-| `ego knowledge index` / `search <words>` / `get <slug>...` | `knowledge = "file"`: read the index, find topics, print topic files. All `ego knowledge` commands are an error with `knowledge = "alter"` |
+| `ego knowledge index` / `search <words>` / `get <slug>...` | `knowledge = "file"`: read the index, find topics, print topic files. Those four `ego knowledge` subcommands error with `knowledge = "alter"` |
+| `ego knowledge facts` | List learned environment facts (EnvFacts) and their lifecycle state (`candidate`, `active`, `demoted`, `forgotten`) |
+| `ego knowledge forget <id>` | Mark an environment fact as `forgotten` so it is never injected again (also sends `alter_knowledge_feedback` when `knowledge = "alter"`) |
 | `ego memory add <text> [--tags <t>]... [--evidence <ref>]...` | Store a process fact (always local, `.ego/memory/items.json`) |
 | `ego memory search <query>` / `list` / `delete <id>` | Recall or manage process facts |
 | `ego memory install-skills [--scope global\|project] [--clients <list>] [--no-agents] [--dry-run]` | Install external `alter-skills` from `github:jumtra/alter-skills` via `npx` |
@@ -78,6 +80,20 @@ Details: [Sessions](sessions.md).
 | `ego code search <query>` / `symbol <name>` | Search; falls back to built-in text search |
 | `ego code impact <name>` / `affected <files>...` | Impact and affected tests (needs a provider) |
 | `ego code index [--execute]` | Show, or with `--execute` run, the provider's indexing command |
+
+## Usage
+
+| Command | Purpose |
+|---|---|
+| `ego usage summary [--days N]` | Aggregate the usage ledger over the last `N` days (default `7`), split by `category` (`agent` / `overhead`) and `caller` |
+
+## Tools (MCP tool pruning)
+
+| Command | Purpose |
+|---|---|
+| `ego tools propose` | List unused `mcp__` tools eligible for reversible pruning |
+| `ego tools apply [--yes] [--host <cli>]` | Preview candidates without `--yes`; with `--yes`, apply them to host settings (`permissions.deny` in `.claude/settings.local.json` for `claude`) |
+| `ego tools restore <tool>` | Remove a pruned `mcp__` tool from `permissions.deny` and pin it so it is not proposed again |
 
 ## Extension and internals
 
