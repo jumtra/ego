@@ -2619,3 +2619,26 @@ time.sleep(3.0)
     assert ok_oc.status == "PASS" and ok_oc.stop_reason is None and ok_oc.output == "oc done"
     assert ok_oc.session_id == "ses-oc-2"
     assert ok_oc.usage == {"input_tokens": 5000, "output_tokens": 50, "cache_read_tokens": 0, "cache_creation_tokens": 0}
+
+
+def test_simple_copy_tree_keeps_only_origin_identity_without_history(tmp_path: Path):
+    from ego.shared.util import simple_copy_tree
+    src = tmp_path / "repo"
+    src.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=src, check=True)
+    subprocess.run(["git", "remote", "add", "origin", "https://user:secret@example.com/o/r.git"], cwd=src, check=True)
+    (src / "a.txt").write_text("x")
+    dst = tmp_path / "copy"
+    simple_copy_tree(src, dst)
+    cfg = (dst / ".git" / "config").read_text()
+    assert "https://example.com/o/r.git" in cfg and "secret" not in cfg
+    assert sorted(p.name for p in (dst / ".git").iterdir()) == ["config"]
+    assert (dst / "a.txt").read_text() == "x"
+    # a copy of a copy (staging -> node copy) keeps the identity too
+    simple_copy_tree(dst, tmp_path / "copy3")
+    assert "https://example.com/o/r.git" in (tmp_path / "copy3" / ".git" / "config").read_text()
+    # a repository without a remote leaves no .git at all
+    bare = tmp_path / "norepo"
+    bare.mkdir()
+    simple_copy_tree(bare, tmp_path / "copy2")
+    assert not (tmp_path / "copy2" / ".git").exists()
