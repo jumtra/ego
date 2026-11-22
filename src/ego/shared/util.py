@@ -103,6 +103,19 @@ def git_head(root: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def git_ignored(root: Path, paths: list[str]) -> set[str]:
+    """The paths git ignores in `root` (tracked files never count as ignored). Outside a git repository: none."""
+    if not paths:
+        return set()
+    try:
+        r = subprocess.run(["git", "check-ignore", "--stdin", "-z"], cwd=root, input="\0".join(paths) + "\0",
+                           capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    # exit 0: some ignored, 1: none ignored, 128: not a repository or a fatal error.
+    return {x for x in r.stdout.split("\0") if x} if r.returncode == 0 else set()
+
+
 ALTER_ROOT_ENV = "EGO_ALTER_PROJECT_ROOT"
 # Shared by ego run (writer) and the adapters that read it; lives below usecases to keep layers acyclic.
 RUN_SESSION_ENV = "EGO_RUN_SESSION"
