@@ -331,9 +331,19 @@ def _cmd_memory(args):
 
 def _cmd_knowledge(args):
     """Project knowledge for `knowledge = "file"`: an index plus one file per topic. With alter the knowledge lives there."""
+    from dataclasses import asdict
+    from .adapters import envfact_store
     from .domain.config import load_config
     from .adapters.knowledge import KnowledgeStore
     root=_root(args)
+    if args.action=="facts":
+        _print([asdict(f) for f in envfact_store.load(root).values()]);return 0
+    if args.action=="forget":
+        f=envfact_store.forget(root,args.id)
+        if f is None:
+            raise EgoError("NOT_FOUND",args.id,1)
+        envfact_store.notify_alter(root,f,"forget")
+        _print(asdict(f));return 0
     if load_config(root).knowledge=="alter":
         raise EgoError("KNOWLEDGE_IS_ALTER","knowledge = \"alter\": project knowledge lives in alter. Use the alter MCP tools (alter_task_context / alter_search / alter_get_note); set knowledge = \"file\" to use .ego/knowledge",2)
     store=KnowledgeStore(root)
@@ -744,6 +754,8 @@ def build_parser()->argparse.ArgumentParser:
     r=s.add_parser("add",help="Record verified knowledge: merged into the matching topic when the index shows one, else a new topic file")
     r.add_argument("text");r.add_argument("--topic",help="Force this topic (slug); created when it does not exist");r.add_argument("--summary",help="One-line topic summary for the index")
     r.add_argument("--keyword",action="append",help="Index keyword for the topic (repeatable)")
+    s.add_parser("facts",help="List learned environment facts")
+    r=s.add_parser("forget",help="Forget a learned environment fact so it is never injected again");r.add_argument("id")
     sp.set_defaults(func=_cmd_knowledge)
     sp=sub.add_parser("session",help="Small durable task checkpoints and manual interactive session rotation");common(sp)
     s=sp.add_subparsers(dest="action",required=True)

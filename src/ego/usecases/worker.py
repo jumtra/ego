@@ -9,11 +9,11 @@ non-Claude hosts if unavailable) and continues in a fresh session.
 from __future__ import annotations
 import dataclasses
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any, Callable
 from ..adapters.runner import RunResult
+from ..adapters.transcript import claude_transcript_path
 from ..domain.config import load_config
 from ..domain.usage import billable_tokens
 from .session import RUN_ID_ENV, context_tokens, latest_open_checkpoint, opencode_context_tokens, resume_prompt
@@ -25,14 +25,8 @@ _MANAGED_HOSTS = ("claude", "codex", "opencode", "agy")
 
 def worker_context_tokens(cwd: Path, session_id: str | None) -> int | None:
     """Measured context size of a worker session, read from Claude's own session record."""
-    if not session_id or not all(c.isalnum() or c in "-_" for c in session_id):
-        return None
-    home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    for base in (str(cwd), str(cwd.resolve())):
-        path = home / "projects" / re.sub(r"[^A-Za-z0-9]", "-", base) / f"{session_id}.jsonl"
-        if path.is_file():
-            return context_tokens(path)
-    return None
+    path = claude_transcript_path(cwd, session_id)
+    return context_tokens(path) if path is not None else None
 
 
 def worker_context_tokens_for_host(host: str, cwd: Path, session_id: str | None) -> int | None:

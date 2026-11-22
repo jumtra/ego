@@ -338,3 +338,41 @@ def test_validate_task_reports_string_too_short_message():
         validate_task(spec)
     assert exc.value.code == "INVALID_TASK"
     assert "must be a nonempty string" in str(exc.value)
+
+
+def test_node_budget_usd_validation():
+    from pydantic import ValidationError
+    from ego.domain.task_schema import AlterPushNodeSpec, NodeSpec, build_task_schema_models
+
+    models = build_task_schema_models(DEFAULT_PLAN_SCHEMA_LIMITS)
+
+    # Valid budget_usd on NodeSpec, AlterPlanNodeSpec, AlterPushNodeSpec
+    n = NodeSpec.model_validate({"id": "impl", "kind": "agent", "prompt": "p", "write_allowlist": ["src/**"], "budget_usd": 0.5})
+    assert n.budget_usd == 0.5
+
+    ap = models.AlterPlanNodeSpec.model_validate({"node_id": "impl", "budget_usd": 0.5})
+    assert ap.budget_usd == 0.5
+
+    push = AlterPushNodeSpec.model_validate({"id": "impl", "prompt": "p", "steps": ["s"], "write_allowlist": ["src/**"], "budget_usd": 0.5})
+    assert push.budget_usd == 0.5
+
+    # Omitted budget_usd defaults to None
+    assert NodeSpec.model_validate({"id": "impl"}).budget_usd is None
+    assert models.AlterPlanNodeSpec.model_validate({"node_id": "impl"}).budget_usd is None
+    assert AlterPushNodeSpec.model_validate({"id": "impl", "prompt": "p", "steps": ["s"], "write_allowlist": ["src/**"]}).budget_usd is None
+
+    # 0, negative, inf, nan raise ValidationError
+    for bad in (0, -1, float("inf"), float("nan")):
+        with pytest.raises(ValidationError):
+            NodeSpec.model_validate({"id": "impl", "budget_usd": bad})
+        with pytest.raises(ValidationError):
+            models.AlterPlanNodeSpec.model_validate({"node_id": "impl", "budget_usd": bad})
+        with pytest.raises(ValidationError):
+            AlterPushNodeSpec.model_validate({"id": "impl", "prompt": "p", "steps": ["s"], "write_allowlist": ["src/**"], "budget_usd": bad})
+
+    # validate_task accepts budget_usd=0.5 and rejects 0 / -1
+    assert len(validate_task({"nodes": [{"id": "impl", "kind": "agent", "prompt": "p", "write_allowlist": ["src/**"], "budget_usd": 0.5}]})) == 1
+    for bad in (0, -1):
+        with pytest.raises(EgoError) as exc:
+            validate_task({"nodes": [{"id": "impl", "kind": "agent", "prompt": "p", "write_allowlist": ["src/**"], "budget_usd": bad}]})
+        assert exc.value.code == "INVALID_TASK"

@@ -189,6 +189,7 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
         on_exhausted: Annotated[Literal["fail", "replan"] | None, Field(default=None, description="For role='reviewer': action when max_rounds is used up")] = None
         max_attempts: Annotated[StrictInt | None, Field(default=None, ge=1)] = None
         max_turns: Annotated[StrictInt | None, Field(default=None, ge=1)] = None
+        budget_usd: Annotated[float | None, Field(default=None, gt=0, allow_inf_nan=False, description='Optional cost ceiling hint in USD')] = None
         source: Annotated[dict[str, Any] | None, Field(default=None)] = None
 
         @model_validator(mode="before")
@@ -269,6 +270,7 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
         non_goals: list[str] = Field(default_factory=list)
         assumptions: list[str] = Field(default_factory=list)
         provides: list[str] = Field(default_factory=list)
+        budget_usd: Annotated[float | None, Field(default=None, gt=0, allow_inf_nan=False, description='Optional cost ceiling hint in USD')] = None
         extra: dict[str, Any] = Field(default_factory=dict)
 
     class AlterPlanSpec(BaseModel):
@@ -318,6 +320,7 @@ class AlterPushNodeSpec(BaseModel):
     prompt: str | None = None
     steps: list[str] | None = None
     write_allowlist: list[str] | None = None
+    budget_usd: Annotated[float | None, Field(default=None, gt=0, allow_inf_nan=False, description='Optional cost ceiling hint in USD')] = None
 
     @model_validator(mode="after")
     def _validate_push_requirements(self) -> AlterPushNodeSpec:
