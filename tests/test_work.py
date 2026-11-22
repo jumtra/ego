@@ -2634,6 +2634,9 @@ def test_simple_copy_tree_keeps_only_origin_identity_without_history(tmp_path: P
     assert "https://example.com/o/r.git" in cfg and "secret" not in cfg
     assert sorted(p.name for p in (dst / ".git").iterdir()) == ["config"]
     assert (dst / "a.txt").read_text() == "x"
+    # a copy of a copy (staging -> node copy) keeps the identity too
+    simple_copy_tree(dst, tmp_path / "copy3")
+    assert "https://example.com/o/r.git" in (tmp_path / "copy3" / ".git" / "config").read_text()
     # a repository without a remote leaves no .git at all
     bare = tmp_path / "norepo"
     bare.mkdir()

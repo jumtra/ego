@@ -322,6 +322,12 @@ def keep_git_identity(src: Path, dst: Path) -> None:
     except (OSError, subprocess.SubprocessError):
         return
     url = res.stdout.strip() if res.returncode == 0 else ""
+    if not url:  # a copy of a copy: its own stub is not a repository, so read the stub's config directly
+        try:
+            m = re.search(r'\[remote "origin"\][^\[]*?\burl\s*=\s*(\S+)', (src / ".git" / "config").read_text(encoding="utf-8"))
+        except OSError:
+            m = None
+        url = m.group(1) if m else ""
     url = re.sub(r"^([a-z][a-z0-9+.-]*://)[^/@]*@", r"\1", url, flags=re.I)
     if not url or any(c in url for c in '\n\r"\\'):
         return
