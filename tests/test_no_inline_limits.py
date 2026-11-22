@@ -16,6 +16,7 @@ SCANNED = [
     "src/ego/domain/task_schema.py",
     "src/ego/domain/config.py",
     "src/ego/domain/settings.py",
+    "src/ego/domain/loopguard.py",
 ]
 LIMIT_KEYWORDS = {"timeout", "max_turns", "limit"}
 LIMIT_CLASSES = {"PlanSchemaLimits", "SessionSchemaLimits", "Config"}

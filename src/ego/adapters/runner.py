@@ -34,6 +34,7 @@ class RunResult:
     segments: int = 1
     rotations: int = 0
     context_tokens: int | None = None
+    stagnation: dict | None = None
 
     def as_dict(self): return asdict(self)
 

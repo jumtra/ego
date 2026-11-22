@@ -774,7 +774,7 @@ def test_below_the_limit_the_same_session_continues(tmp_path, monkeypatch):
     assert r.status == "PASS" and r.segments == 2 and r.rotations == 0
     assert calls[0].get("resume_session") is None and calls[1]["resume_session"] == "s1"
     assert calls[1]["prompt"].startswith("Continue") and calls[0]["max_turns"] == 2
-    assert [e["action"] for e in events] == ["continue"]
+    assert [e["action"] for e in events] == ["loopguard", "continue"]
     assert r.usage["input_tokens"] == 20 and r.cost_usd == 0.2
 
 
@@ -788,7 +788,7 @@ def test_at_the_limit_it_checkpoints_and_resumes_in_a_fresh_session(tmp_path, mo
     assert calls[1]["resume_session"] == "s1" and calls[1]["max_turns"] == 3 and "5000" in calls[1]["prompt"]
     assert calls[2]["resume_session"] is None
     assert "DO IT" in calls[2]["prompt"] and "finish B" in calls[2]["prompt"]
-    assert [e["action"] for e in events] == ["rotate"]
+    assert [e["action"] for e in events] == ["loopguard", "rotate"]
     assert not list((tmp_path / ".ego/memory/handoffs").glob("*.json"))
 
 

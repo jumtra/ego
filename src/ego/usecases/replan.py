@@ -55,7 +55,9 @@ def history_text(iterations: list[dict], *, max_chars: int, feedback_chars: int,
         if it.get("passed"):
             lines.append("  verified nodes (kept, not re-run): " + ", ".join(it["passed"][:12]))
         for failure in it.get("failures", []):
-            lines.append(f"  failed node {failure['node']}:\n" + clip_output(failure["feedback"], feedback_chars))
+            stag = failure.get("stagnation")
+            stag_line = f"  stagnation: {stag}\n" if stag is not None else ""
+            lines.append(f"  failed node {failure['node']}:\n{stag_line}" + clip_output(failure["feedback"], feedback_chars))
     changed = recent[-1].get("changed_files", [])
     if changed:
         lines.append("Files changed so far: " + ", ".join(changed[:20]))
@@ -76,7 +78,10 @@ def _failures(result: dict, limit: int) -> list[dict]:
             continue
         last = (data.get("attempts") or [{}])[-1]
         text = last.get("feedback") or last.get("execution", {}).get("stderr") or data.get("output") or "no output"
-        out.append({"node": nid, "feedback": clip_output(str(text), limit)})
+        entry: dict[str, Any] = {"node": nid, "feedback": clip_output(str(text), limit)}
+        if last.get("stagnation") is not None:
+            entry["stagnation"] = last["stagnation"]
+        out.append(entry)
     return out
 
 
