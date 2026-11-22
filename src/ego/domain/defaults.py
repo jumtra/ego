@@ -5,8 +5,11 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 import copy
+import math
 import tomllib
 from ..shared.util import EgoError
+
+SETTINGS_SECTIONS = ("usage", "lifecycle", "loopguard", "toolprune", "mcp", "analysis")
 
 
 @lru_cache(maxsize=1)
@@ -41,3 +44,47 @@ def tuning_values(root: Path | None) -> dict[str, Any]:
             raise EgoError("INVALID_CONFIG", str(exc), 2) from exc
         _merge(tuning, override, "")
     return tuning
+
+
+def _checked_setting(section: str, key: str, value: Any, default: Any) -> Any:
+    where = f"{section}.{key}"
+    if isinstance(default, bool):
+        if not isinstance(value, bool):
+            raise EgoError("INVALID_CONFIG", f"{where} must be a boolean", 2)
+        return value
+    if isinstance(default, str):
+        if not isinstance(value, str):
+            raise EgoError("INVALID_CONFIG", f"{where} must be a string", 2)
+        return value
+    if isinstance(default, float):
+        numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
+    else:
+        numeric = isinstance(value, int) and not isinstance(value, bool)
+    if not numeric:
+        raise EgoError("INVALID_CONFIG", f"{where} must be a number", 2)
+    if isinstance(value, float) and not math.isfinite(value):
+        raise EgoError("INVALID_CONFIG", f"{where} must be finite", 2)
+    if value < 0:
+        raise EgoError("INVALID_CONFIG", f"{where} must be >= 0", 2)
+    return float(value) if isinstance(default, float) else value
+
+
+def section_values(root: Path | None, name: str) -> dict[str, Any]:
+    if name not in SETTINGS_SECTIONS:
+        raise EgoError("INVALID_CONFIG", f"Unknown settings section: {name}", 2)
+    defaults = package_defaults()[name]
+    values = copy.deepcopy(defaults)
+    path = root / ".ego" / "defaults.toml" if root is not None else None
+    if path is None or not path.exists():
+        return values
+    try:
+        override = tomllib.loads(path.read_text(encoding="utf-8")).get(name, {})
+    except (OSError, ValueError) as exc:
+        raise EgoError("INVALID_CONFIG", str(exc), 2) from exc
+    if not isinstance(override, dict):
+        raise EgoError("INVALID_CONFIG", f"{name} must be a table", 2)
+    for key, value in override.items():
+        if key not in defaults:
+            raise EgoError("INVALID_CONFIG", f"Unknown {name} key: {key}", 2)
+        values[key] = _checked_setting(name, key, value, defaults[key])
+    return values

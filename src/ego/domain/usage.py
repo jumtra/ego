@@ -6,8 +6,58 @@ actually processed, so the figure matches the context the work consumed.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+from .pricing import cache_write_tiers, cost_usd
+
 TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens")
 BILLABLE_KEYS = ("input_tokens", "output_tokens", "cache_creation_tokens")
+CACHE_TIER_KEYS = ("cache_write_5m_tokens", "cache_write_1h_tokens")
+CATEGORIES = ("agent", "overhead")
+SOURCES = ("ego", "alter")
+
+
+def usage_row(
+    usage: dict,
+    *,
+    model: str,
+    category: str,
+    caller: str,
+    source: str = "ego",
+    run_id: str | None = None,
+    node: str | None = None,
+) -> dict:
+    """One ledger row in the C2 shape. cost_usd is None when the model has no known price."""
+    if category not in CATEGORIES:
+        raise ValueError(f"unknown usage category: {category!r}")
+    if source not in SOURCES:
+        raise ValueError(f"unknown usage source: {source!r}")
+    write_5m, write_1h = cache_write_tiers(usage)
+    return {
+        "input_tokens": int(usage.get("input_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or 0),
+        "cache_read_tokens": int(usage.get("cache_read_tokens") or 0),
+        "cache_write_5m_tokens": write_5m,
+        "cache_write_1h_tokens": write_1h,
+        "cost_usd": cost_usd(usage, model),
+        "category": category,
+        "caller": caller,
+        "model": model,
+        "source": source,
+        "run_id": run_id,
+        "node": node,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def cache_hit_rate(tokens: dict) -> float | None:
+    """cache_read / (input + cache_read + 5m write + 1h write); None when there was no input at all."""
+    read = int(tokens.get("cache_read_tokens") or 0)
+    write_5m, write_1h = cache_write_tiers(tokens)
+    denominator = int(tokens.get("input_tokens") or 0) + read + write_5m + write_1h
+    if denominator == 0:
+        return None
+    return read / denominator
 
 
 def tokens_of(usage: object) -> int:

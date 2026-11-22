@@ -162,6 +162,16 @@ def _extract_usage(obj: object, host: str) -> dict | None:
         # OpenAI-style usage counts cached tokens inside input_tokens; keep the two
         # disjoint (as Claude reports them) so a token total does not count them twice.
         found["input_tokens"] = max(0, found["input_tokens"] - found["cache_read_tokens"])
+    cache_creation = u.get("cache_creation")
+    if isinstance(cache_creation, dict) and ("ephemeral_5m_input_tokens" in cache_creation or "ephemeral_1h_input_tokens" in cache_creation):
+        # Claude splits cache writes into 5-minute and 1-hour tiers, which are priced differently.
+        # Without tier keys, cache_write_tiers() prices cache_creation_tokens as 5m.
+        found["cache_write_5m_tokens"] = _int_num(cache_creation, "ephemeral_5m_input_tokens")
+        found["cache_write_1h_tokens"] = _int_num(cache_creation, "ephemeral_1h_input_tokens")
+    model_usage = obj.get("modelUsage")
+    if isinstance(model_usage, dict) and model_usage:
+        # Claude lists every model it called; the one that produced the most output is the agent's model.
+        found["model"] = max(model_usage, key=lambda name: _int_num(model_usage[name], "outputTokens"))
     if isinstance(obj.get("num_turns"), int): found["turns"] = obj["num_turns"]
     return found
 
