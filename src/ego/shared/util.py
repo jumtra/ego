@@ -309,30 +309,43 @@ def simple_copy_tree(src: Path, dst: Path) -> None:
     keep_git_identity(src, dst)
 
 
-def keep_git_identity(src: Path, dst: Path) -> None:
-    """Leave a minimal `.git/config` (origin URL only, credentials stripped) in a copy made without history.
+def _stub_value(src: Path, pattern: str) -> str:
+    try:
+        m = re.search(pattern, (src / ".git" / "config").read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+    return m.group(1) if m else ""
 
-    Without it alter sees a bare temp folder and registers a new project per run. The stub is deliberately not
-    a valid repository (no HEAD/objects/refs), so git itself still treats the copy as a plain directory."""
+
+def keep_git_identity(src: Path, dst: Path) -> None:
+    """Leave a minimal `.git/config` in a copy made without history, so alter can map the copy back to its project.
+
+    It holds the credential-stripped origin URL (when there is one) and the absolute path the copy came from
+    (`[alter] sourcePath`; a copy of a copy keeps the original). alter identifies the project by the URL, and by
+    that path for a repository without an origin. The stub is deliberately not a valid repository (no
+    HEAD/objects/refs), so git itself still treats the copy as a plain directory."""
     if (dst / ".git").exists():
         return
     try:
         res = subprocess.run(["git", "-C", str(src), "config", "--get", "remote.origin.url"],
                              capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
-        return
-    url = res.stdout.strip() if res.returncode == 0 else ""
+        res = None
+    url = res.stdout.strip() if res is not None and res.returncode == 0 else ""
     if not url:  # a copy of a copy: its own stub is not a repository, so read the stub's config directly
-        try:
-            m = re.search(r'\[remote "origin"\][^\[]*?\burl\s*=\s*(\S+)', (src / ".git" / "config").read_text(encoding="utf-8"))
-        except OSError:
-            m = None
-        url = m.group(1) if m else ""
+        url = _stub_value(src, r'\[remote "origin"\][^\[]*?\burl\s*=\s*(\S+)')
     url = re.sub(r"^([a-z][a-z0-9+.-]*://)[^/@]*@", r"\1", url, flags=re.I)
-    if not url or any(c in url for c in '\n\r"\\'):
+    source = _stub_value(src, r"\[alter\][^\[]*?\bsourcePath\s*=\s*(.+)").strip() or str(src.resolve())
+    bad = '\n\r"\\'
+    lines = []
+    if url and not any(c in url for c in bad):
+        lines.append(f'[remote "origin"]\n\turl = {url}\n')
+    if source and not any(c in source for c in bad):
+        lines.append(f'[alter]\n\tsourcePath = {source}\n')
+    if not lines:
         return
     (dst / ".git").mkdir(parents=True, exist_ok=True)
-    (dst / ".git" / "config").write_text(f'[remote "origin"]\n\turl = {url}\n', encoding="utf-8")
+    (dst / ".git" / "config").write_text("".join(lines), encoding="utf-8")
 
 
 # `git worktree add` checks out only tracked files, so gitignored project state (ego memory, host
