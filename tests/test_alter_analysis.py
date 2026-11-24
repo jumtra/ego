@@ -748,3 +748,14 @@ def test_alter_reporter_records_fail_status(tmp_path: Path, monkeypatch):
 
     # Assert: fail-open without raising
     assert True
+
+
+def test_an_ai_usage_instruction_counts_as_a_signal():
+    from ego.usecases.alter_analysis import has_signal
+    turns = [{"role": "user", "text": "スモークテストでは必ずHaikuを使って。" + "x" * 50}]
+    assert has_signal(turns, 20)
+
+
+def test_the_analyzer_prompt_asks_for_usages():
+    from ego.usecases.alter_analysis import _analyzer_prompt
+    assert "usages" in _analyzer_prompt("c1", [])

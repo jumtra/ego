@@ -739,3 +739,61 @@ def test_knowledge_health_returns_no_hint_when_resolved(tmp_path: Path, monkeypa
     # Assert
     assert health["mcp_resolved"] is True
     assert health["hint"] is None
+
+
+def _write_host_memory(home: Path, root: Path) -> Path:
+    import re as _re
+    folder = home / ".claude" / "projects" / _re.sub(r"[^A-Za-z0-9]", "-", str(root.resolve())) / "memory"
+    folder.mkdir(parents=True)
+    (folder / "use-haiku.md").write_text(
+        "---\nname: use-haiku\ndescription: \"Smoke runs use the Haiku model\"\nmetadata:\n  type: feedback\n---\n\n"
+        "Pass model haiku for smoke checks.\n\n**Why:** cheap enough.\n", encoding="utf-8")
+    (folder / "ci-billing.md").write_text(
+        "---\nname: ci-billing\ndescription: CI is blocked by billing\nmetadata:\n  type: project\n---\n\nRed checks are billing.\n",
+        encoding="utf-8")
+    (folder / "MEMORY.md").write_text(
+        "- [Use Haiku](use-haiku.md) — smoke\n- [CI billing](ci-billing.md) — ci\n- [Other](other.md) — keep\n", encoding="utf-8")
+    return folder
+
+
+def test_host_memory_is_proposed_to_alter_and_moved_out(tmp_path: Path, monkeypatch):
+    from ego.adapters.memory import migrate_host_memory
+    home, log_path = _setup_fake_alter_mcp(tmp_path, monkeypatch)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    folder = _write_host_memory(home, root)
+
+    result = migrate_host_memory(root)
+
+    assert result["status"] == "submitted", result
+    calls = _read_calls(log_path)
+    assert calls[0]["name"] == "alter_session_digest"
+    args = calls[0]["arguments"]
+    assert args["action"] == "patch" and args["session_id"].startswith("ego-host-memory-")
+    assert {item["kind"] for item in args["add"]} == {"ai_usage"}
+    usages = {item["usage"]["title"]: item["usage"] for item in args["add"]}
+    assert usages["use haiku"]["level"] == "project"
+    assert "Haiku" in usages["use haiku"]["body"] and len(usages["use haiku"]["body"]) <= 200
+    assert "billing" in usages["ci billing"]["body"]
+    assert sorted(p.name for p in folder.glob("*.md")) == ["MEMORY.md"]
+    assert (folder / "MEMORY.md").read_text(encoding="utf-8") == "- [Other](other.md) — keep\n"
+    assert (Path(result["backup"]) / "use-haiku.md").is_file()
+
+
+def test_host_memory_stays_when_alter_fails(tmp_path: Path, monkeypatch):
+    from ego.adapters.memory import migrate_host_memory
+    home, _ = _setup_fake_alter_mcp(tmp_path, monkeypatch, fail=True)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    root = tmp_path / "proj"
+    root.mkdir()
+    folder = _write_host_memory(home, root)
+
+    assert migrate_host_memory(root)["status"] == "error"
+    assert (folder / "use-haiku.md").is_file() and "use-haiku.md" in (folder / "MEMORY.md").read_text(encoding="utf-8")
+
+
+def test_host_memory_migration_can_be_turned_off(tmp_path: Path, monkeypatch):
+    from ego.adapters.memory import migrate_host_memory
+    monkeypatch.setenv("EGO_ALTER_HOST_MEMORY", "0")
+    assert migrate_host_memory(tmp_path)["status"] == "skipped"

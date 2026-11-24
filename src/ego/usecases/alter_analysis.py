@@ -18,7 +18,9 @@ from ..domain.settings import load_settings
 from ..shared.util import exclusive_lock, now, read_json, safe_path, write_json
 
 MIN_TURNS = 4
-SIGNAL_RE = re.compile(r"決定|方針|理由|なぜ|しない|やめ|避け|優先|because|decide|prefer|avoid|must|instead", re.I)
+# Decision/rationale words, plus AI-usage instructions (how the AI or its tools should work).
+SIGNAL_RE = re.compile(r"決定|方針|理由|なぜ|しない|やめ|避け|優先|必ず|常に|毎回|使って|使わ|ルール|"
+                       r"because|decide|prefer|avoid|must|instead|always|never", re.I)
 ANALYZER_ENV = "EGO_ALTER_ANALYZER"
 ANALYZER_TOOLS = ["Read", "Skill", "ToolSearch", "mcp__alter"]
 ANALYZER_MAX_TURNS = 12
@@ -147,7 +149,9 @@ def _analyzer_prompt(conversation_id: str, turns: list[dict[str, Any]]) -> str:
         "owner-attributed knowledge. Do not record a new conversation.\n"
         "The conversation is already recorded: Skip step 1 (`alter_record_conversation`) and go straight "
         f"to the skill's fallback step: call `alter_extract_cognitive` with `conversation_id: \"{conversation_id}\"` "
-        "and your `{items, cards, terms}`. Cite turns from the JSON below exactly: `turn_id` = the turn's `id`, "
+        "and your `{items, cards, terms, usages}`. `usages` are AI-usage rule proposals (at most 2): durable "
+        "instructions, preferences or prohibitions the owner stated about how AI or its tools should work "
+        "(models, commands, workflow, reply style), each with a verbatim owner quote. Cite turns from the JSON below exactly: `turn_id` = the turn's `id`, "
         "`turn_seq` = its `sequence`, and quote owner (`role: user`) text verbatim.\n\n"
         "When you finish, print exactly one final line and nothing after it:\n"
         f"ALTER_ANALYSIS conversation={conversation_id} result=attached\n"
