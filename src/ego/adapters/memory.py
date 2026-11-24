@@ -599,6 +599,28 @@ def _conversation_id(result: Any) -> str | None:
     return None
 
 
+def _conversation_not_saved(result: Any) -> str | None:
+    """The reason alter declined to store the conversation (`saved: false`), else None.
+
+    alter's capture="important" drops conversations without an important user turn; such a
+    result carries no conversation id and must not be recorded as submitted."""
+    if not isinstance(result, dict):
+        return None
+    containers: list[Any] = [result, result.get("structuredContent")]
+    content = result.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                try:
+                    containers.append(json.loads(item["text"]))
+                except ValueError:
+                    continue
+    for container in containers:
+        if isinstance(container, dict) and container.get("saved") is False:
+            return str(container.get("reason") or "not saved")
+    return None
+
+
 def submit_alter_session_review(
     root: Path,
     *,
@@ -660,6 +682,10 @@ def submit_alter_session_review(
 
         result = MCPStdio(cmd, timeout=timeout, env=env).call_tool("alter_record_conversation", args)
         _raise_if_mcp_error(result)
+        not_saved = _conversation_not_saved(result)
+        if not_saved:
+            # Nothing was stored: keep no digest/turns, so a later important turn is submitted afresh.
+            return {"status": "skipped", "reason": f"alter did not save: {not_saved}", "session_id": sid}
 
         if segments_to_save is not None:
             write_json(alter_segments_path(root, sid), {
