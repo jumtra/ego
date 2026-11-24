@@ -534,6 +534,12 @@ def _cmd_hook(args):
                         )
                     except Exception:
                         pass
+                    if host == "claude":
+                        try:  # alter holds project knowledge: Claude's auto-memory would be a second context
+                            from .adapters.memory import migrate_host_memory
+                            migrate_host_memory(root)
+                        except Exception:
+                            pass
                 # A nearly spent usage limit outranks a large context: there may be no later turn to save in.
                 # Under `ego run` the wrapper saves, clears and resumes: the hooks must not ask for the same again.
                 wrapped=bool(os.environ.get("EGO_RUN"))

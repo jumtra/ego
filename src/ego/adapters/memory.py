@@ -810,6 +810,107 @@ def submit_alter_checkpoint_review(
         return {"status": "error", "reason": str(exc)}
 
 
+def claude_memory_dir(root: Path) -> Path:
+    """Claude Code's auto-memory folder for the project at `root` (`~/.claude/projects/<path-slug>/memory`)."""
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+    return base / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(root.resolve())) / "memory"
+
+
+def _parse_host_memory(text: str) -> dict[str, str] | None:
+    """name / description / type / body of one auto-memory file; None when it has no frontmatter."""
+    m = re.match(r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", text, re.DOTALL)
+    if not m:
+        return None
+    meta: dict[str, str] = {}
+    for line in m.group(1).splitlines():
+        key, sep, value = line.strip().partition(":")
+        if sep and key in ("name", "description", "type") and key not in meta:
+            meta[key] = value.strip().strip("\"'")
+    body = m.group(2).strip()
+    if not (meta.get("description") or body):
+        return None
+    return {"name": meta.get("name", ""), "description": meta.get("description", ""), "type": meta.get("type", ""), "body": body}
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _host_memory_item(entry: dict[str, str]) -> dict[str, Any]:
+    """One auto-memory file as an `ai_usage` proposal: a host memory is guidance for the AI, and alter's review
+    inbox lists AI-usage proposals (not plain digest facts). `user` memories apply everywhere (`common`)."""
+    description, body = redact(entry["description"]), redact(entry["body"])
+    title = _clip(entry["name"].replace("-", " ") or description, 30)
+    first = body.split("\n\n", 1)[0] if body else ""
+    usage_body = _clip(f"{description} — {first}" if description and first else description or first, 200)
+    level = "common" if entry["type"] == "user" else "project"
+    return {"kind": "ai_usage", "text": f"{title}: {usage_body}", "usage": {"title": title, "body": usage_body, "level": level}}
+
+
+def _mcp_payload(result: Any) -> Any:
+    if isinstance(result, dict) and isinstance(result.get("content"), list) and result["content"]:
+        try:
+            return json.loads(result["content"][0].get("text") or "")
+        except (ValueError, TypeError, AttributeError):
+            return result
+    return result
+
+
+def migrate_host_memory(root: Path, *, timeout: int = 10) -> dict[str, Any]:
+    """Move Claude Code's auto-memory for this project into alter as owner-reviewable proposals. Fail-open.
+
+    With knowledge = "alter" the host's auto-memory duplicates alter (two contexts). Each memory file is proposed to
+    alter as an `ai_usage` proposal (`alter_session_digest` patch + finalize);
+    only after alter accepted the batch are the files moved to `.ego/backups/host-memory/` and their `MEMORY.md`
+    pointers removed. `EGO_ALTER_HOST_MEMORY=0` turns it off."""
+    if os.environ.get("EGO_ALTER_HOST_MEMORY", "1").strip().lower() in ("0", "false", "off", "no"):
+        return {"status": "skipped", "reason": "disabled"}
+    try:
+        folder = claude_memory_dir(root)
+        entries: list[tuple[Path, dict[str, str]]] = []
+        for path in sorted(folder.glob("*.md")) if folder.is_dir() else []:
+            if path.name == "MEMORY.md" or not path.is_file():
+                continue
+            parsed = _parse_host_memory(path.read_text(encoding="utf-8", errors="replace"))
+            if parsed:
+                entries.append((path, parsed))
+        if not entries:
+            return {"status": "skipped", "reason": "empty"}
+        spec = _alter_mcp_spec(root)
+        if spec is None:
+            return {"status": "skipped", "reason": "alter MCP not configured"}
+        cmd, env = spec
+        stamp = now().replace(":", "").replace("-", "").replace("+", "")[:15]
+        sid = f"ego-host-memory-{stamp}"
+        add = [{"id": f"mem{i + 1}", **_host_memory_item(e)} for i, (_, e) in enumerate(entries)]
+        client = MCPStdio(cmd, timeout=timeout, env=env)
+        result = client.call_tool("alter_session_digest", {
+            "action": "patch", "cwd": str(alter_project_root(root).resolve()), "session_id": sid,
+            "title": "Claude Code auto-memory (moved by ego)", "add": add})
+        _raise_if_mcp_error(result)
+        payload = _mcp_payload(result)
+        revision = payload.get("revision") if isinstance(payload, dict) else None
+        if isinstance(revision, int):  # draft -> pending_review so the owner sees it now (a draft also finalizes on timeout)
+            done = MCPStdio(cmd, timeout=timeout, env=env).call_tool(
+                "alter_session_digest", {"action": "finalize", "session_id": sid, "base_revision": revision})
+            _raise_if_mcp_error(done)
+        backup = root.resolve() / ".ego" / "backups" / "host-memory" / stamp
+        backup.mkdir(parents=True, exist_ok=True)
+        moved = []
+        for path, _ in entries:
+            shutil.move(str(path), str(backup / path.name))
+            moved.append(path.name)
+        index = folder / "MEMORY.md"
+        if index.is_file():
+            lines = index.read_text(encoding="utf-8").splitlines(keepends=True)
+            kept = [ln for ln in lines if not any(f"({name})" in ln for name in moved)]
+            index.write_text("".join(kept), encoding="utf-8")
+        return {"status": "submitted", "session_id": sid, "count": len(add), "moved": moved, "backup": str(backup)}
+    except Exception as exc:
+        return {"status": "error", "reason": str(exc)[:200]}
+
+
 def memory_health(root: Path) -> dict:
     """Process memory (`ego memory`): always the local file store."""
     fm = FileMemory(root)
