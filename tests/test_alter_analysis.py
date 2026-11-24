@@ -462,6 +462,21 @@ def test_keep_turns_false_writes_no_turn_file(root, alter_submit):
     assert not memory.alter_turns_path(root, SID).exists()
 
 
+def test_unsaved_conversation_is_skipped_and_keeps_no_turns(root, alter_submit, monkeypatch):
+    class UnsavedMCP:
+        def __init__(self, cmd, timeout=10, env=None):
+            pass
+
+        def call_tool(self, name, args):
+            return {"content": [{"type": "text", "text": '{"saved":false,"reason":"not_important","turn_count":5}'}]}
+
+    monkeypatch.setattr(memory, "MCPStdio", UnsavedMCP)
+    res = memory.submit_alter_session_review(root, session_id=SID, host="claude", keep_turns=True)
+    assert res["status"] == "skipped" and "not_important" in res["reason"]
+    assert not memory.alter_turns_path(root, SID).exists()
+    assert SID not in (read_json(memory._alter_session_state_path(root), {}).get("sessions") or {})
+
+
 def test_alter_turns_path_sanitises_session_id(root):
     p = memory.alter_turns_path(root, "../../etc passwd")
     assert p.parent == root.resolve() / ".ego" / "state" / "alter_turns"
