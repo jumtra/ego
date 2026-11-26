@@ -1,3 +1,7 @@
+> [!IMPORTANT]
+> **This repository has moved and is archived.** Development continues in [jumtra/alter-ego](https://github.com/jumtra/alter-ego) under `packages/ego` (from v0.3.0, alter, alter-skills and ego share one version and one release).
+> このリポジトリは [jumtra/alter-ego](https://github.com/jumtra/alter-ego) の `packages/ego` に移動し、アーカイブされました。
+
 <div align="center">
 
 # ego
