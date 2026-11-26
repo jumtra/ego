@@ -75,6 +75,7 @@ def test_work_plan_writes_task_json_first():
     assert section.index('directly as the task JSON') < section.index('この計画で進めてよいですか')
     assert 'Write the approved plan as the task JSON' not in plan
     assert '48747228d089e900c5caae5bfdc0fe7cf1853ffdea6cfd54de2748b6cf85dd74' in LEGACY_WORK_PLAN_HASHES
+    assert '387e881db655af39d59b612ce16026c2dc6d94ecdcdf1ecf2f4526617f10d743' in LEGACY_WORK_PLAN_HASHES
     assert sha256(plan) not in LEGACY_WORK_PLAN_HASHES
 
 
@@ -119,6 +120,7 @@ def test_work_skills_finish_with_yes_no_pr_and_cleanup():
 def test_v0012_work_skill_refreshes():
     from ego.domain.templates import LEGACY_WORK_HASHES
     assert '645c9862f86b9ea4e7db50885ceee9bd10fd98de3225a96f822878b212cd5039' in LEGACY_WORK_HASHES
+    assert '58cabcc1e8e6f8924ba21a00abed0c301c82264a244028ab0d092af6733a86f4' in LEGACY_WORK_HASHES
     assert sha256(skill_md('work')) not in LEGACY_WORK_HASHES
 
 
