@@ -11,11 +11,14 @@ LEGACY_WORK_HASHES = {"b9369f340f37af0f731e8eb03f0c8e1e6529be80ce1b63941bada4b6e
                       "645c9862f86b9ea4e7db50885ceee9bd10fd98de3225a96f822878b212cd5039",
                       "9c7d2f647d0f8e9947994adf02d5cd0a689ed84901608791baa983a713eae399",
                       "d33e88e7daeeb74950ec0e97982ebd6bd5201923276323a23fc219ec97c2af18",
-                      "01dab918a9a9ee9401b691e4dbbfb3c7547055e1eedfa825df312784db45e40d"}
+                      "01dab918a9a9ee9401b691e4dbbfb3c7547055e1eedfa825df312784db45e40d",
+                      # v0.0.49 to v0.0.53, before plan nodes had to be readable on their own.
+                      "58cabcc1e8e6f8924ba21a00abed0c301c82264a244028ab0d092af6733a86f4"}
 # work-plan v0.0.13 to v0.0.15, before execution was delegated to the managed engine;
 # v0.0.16 to v0.0.17, before a corrected plan continued a failed run with `--from`.
 # v0.0.18, before per-node checkpoints, INTERRUPTED resume and the RUN_ACTIVE run lock;
-# later defaults up to v0.0.53, before the plan was written directly as the task JSON.
+# later defaults up to v0.0.53, before the plan was written directly as the task JSON;
+# the default after that change, before plan nodes had to be readable on their own.
 LEGACY_WORK_PLAN_HASHES = {"c57d458fc57843784508be4b6d58b771cc178aa8fbf9d541be49886b141e2306",
                            "d607c0c44245008254c0d4c5e1fe061fcc660946fd9a8db53121d81861cb6db0",
                            "ed88f6a3ac5c1c1372527f1e47c64e1ce393060ce547b6f954fae57a6b2be949",
@@ -28,7 +31,8 @@ LEGACY_WORK_PLAN_HASHES = {"c57d458fc57843784508be4b6d58b771cc178aa8fbf9d541be49
                            "381fac16a5037d559c5969e7d2dc9b23dd1dd7594f2b31b7082210fd34d26cac",
                            "b1847eeccda2611a0aef481442111a0c4b88a7b2d1b342e7812053a2a509f303",
                            "48747228d089e900c5caae5bfdc0fe7cf1853ffdea6cfd54de2748b6cf85dd74",
-                           "9c641bd7526e62e2e4a337f0997b0262a0d575512851c9d1b4951db06edf1b8e"}
+                           "9c641bd7526e62e2e4a337f0997b0262a0d575512851c9d1b4951db06edf1b8e",
+                           "387e881db655af39d59b612ce16026c2dc6d94ecdcdf1ecf2f4526617f10d743"}
 LEGACY_SKILL_HASHES = {"work": LEGACY_WORK_HASHES, "work-plan": LEGACY_WORK_PLAN_HASHES}
 
 SKILLS = {
