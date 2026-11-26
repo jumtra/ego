@@ -14,12 +14,21 @@ LEGACY_WORK_HASHES = {"b9369f340f37af0f731e8eb03f0c8e1e6529be80ce1b63941bada4b6e
                       "01dab918a9a9ee9401b691e4dbbfb3c7547055e1eedfa825df312784db45e40d"}
 # work-plan v0.0.13 to v0.0.15, before execution was delegated to the managed engine;
 # v0.0.16 to v0.0.17, before a corrected plan continued a failed run with `--from`.
-# v0.0.18, before per-node checkpoints, INTERRUPTED resume and the RUN_ACTIVE run lock.
+# v0.0.18, before per-node checkpoints, INTERRUPTED resume and the RUN_ACTIVE run lock;
+# later defaults up to v0.0.53, before the plan was written directly as the task JSON.
 LEGACY_WORK_PLAN_HASHES = {"c57d458fc57843784508be4b6d58b771cc178aa8fbf9d541be49886b141e2306",
                            "d607c0c44245008254c0d4c5e1fe061fcc660946fd9a8db53121d81861cb6db0",
                            "ed88f6a3ac5c1c1372527f1e47c64e1ce393060ce547b6f954fae57a6b2be949",
                            "f8802684b00f3529f9a44a5b15878c62085c0d1d0ea5438164069e02a598baec",
-                           "ced6cedb3c45b740025cf1bcda50329f7673bc268ea20bd3718e079ad971cf25"}
+                           "ced6cedb3c45b740025cf1bcda50329f7673bc268ea20bd3718e079ad971cf25",
+                           "c75439eb6898b39fa2c951bd498fd7d38a7d370d9a585c4cbdb6497a5ea6ae64",
+                           "7f468cd49cafb22cb54e9d6615c2d1a645378a07fceb8f355012356feddca282",
+                           "b6def3d8cc5e99c98856288cc11c3205e745b25ac6dfdd2e90cd193677c5bc92",
+                           "95f5bfa5262b408694ae0ff374fa5fdc0e06e18a514ea8c5546dc9027db828ec",
+                           "381fac16a5037d559c5969e7d2dc9b23dd1dd7594f2b31b7082210fd34d26cac",
+                           "b1847eeccda2611a0aef481442111a0c4b88a7b2d1b342e7812053a2a509f303",
+                           "48747228d089e900c5caae5bfdc0fe7cf1853ffdea6cfd54de2748b6cf85dd74",
+                           "9c641bd7526e62e2e4a337f0997b0262a0d575512851c9d1b4951db06edf1b8e"}
 LEGACY_SKILL_HASHES = {"work": LEGACY_WORK_HASHES, "work-plan": LEGACY_WORK_PLAN_HASHES}
 
 SKILLS = {
@@ -81,25 +90,25 @@ Ask the user about the points that would change what you build. Rules:
 - Ask about: the goal and why, scope (in and out), the acceptance check, constraints (compatibility, files not to touch, deadlines), and risks you see.
 - Stop asking when the remaining points have safe defaults, and state those defaults as assumptions. Use memory and code only to sharpen questions.
 
-## 2. Plan as a node graph (inline, then wait for approval)
+## 2. Plan as a node graph (write the task JSON, then wait for approval)
 
-The graph is both the requirements and the plan. Do not invoke external brainstorming or planning skills, and do not write spec or plan files unless the user asks.
+The graph is both the requirements and the plan. Do not invoke external brainstorming or planning skills, and do not write spec or other plan files unless the user asks.
 
-Write one line for the goal and one for done, then the dependency graph (`N1 ──► N2`). For each node:
+Write the plan **directly as the task JSON** in `.ego/state/tasks/<slug>.json`. It is the only full copy of the plan: never write the node details out as text first and convert them afterwards. One node per graph node, with task-level `goal` and intake answers in task-level `instructions`. For each node:
 
-- **Who / What / When / Where / Why:** one line each. When = the nodes it waits for. Where = exact file paths. Why = why the goal needs this node.
-- **How:** numbered steps written so they can be implemented exactly as written, so whoever implements them cannot drift in a different direction. Each step names the file, the function or section (or line), and the exact change: code, text or command. Leave no design decision open (no "consider" or "as appropriate"); if a step cannot be written concretely, read more code or ask first.
-- **Done when:** 1-4 observable acceptance criteria, each a test, command or behavior that proves it.
-- **Non-goals / Assumptions / Provides:** only where they apply, one short line each. Non-goals = tempting work this node must not do. Assumptions = unverified facts the node relies on. Provides = what dependent nodes rely on.
+- **Who / What / When / Where / Why:** one line each, in `requirement` (5W1H). When = the nodes it waits for, also in `depends_on`. Where = exact file paths, also in `write_allowlist`. Why = why the goal needs this node, also in `intent`.
+- **How** (`steps`): numbered steps written so they can be implemented exactly as written, so whoever implements them cannot drift in a different direction. Each step names the file, the function or section (or line), and the exact change: code, text or command. Leave no design decision open (no "consider" or "as appropriate"); if a step cannot be written concretely, read more code or ask first.
+- **Done when** (`done_when`, commands as argv arrays in `checks`): 1-4 observable acceptance criteria, each a test, command or behavior that proves it.
+- **Non-goals / Assumptions / Provides:** (`non_goals`, `assumptions`, `provides`) only where they apply, one short line each. Non-goals = tempting work this node must not do. Assumptions = unverified facts the node relies on. Provides = what dependent nodes rely on.
 
-Close with plan-wide assumptions (defaults from intake), tests to run (exact commands) and out of scope. Then ask: "この計画で進めてよいですか？" and stop. Edit only after the user approves, or asks for changes that you then fold into the plan and confirm again.
+Then show only a short summary of that file, without repeating the node fields: one line for the goal and one for done, the dependency graph (`N1 ──► N2`), one line per node (what it changes and where), plan-wide assumptions (defaults from intake), tests to run (exact commands), out of scope and the task file path. Then ask: "この計画で進めてよいですか？" and stop. Edit project files only after the user approves; fold requested changes into the same task JSON, show what changed and confirm again.
 
 When `knowledge = "alter"`, push the plan to alter **before** asking, and accept approval from alter or from this CLI, whichever comes first (file knowledge keeps the inline approval above). Set `A=${ALTER_URL:-http://127.0.0.1:4173}` in each Bash command below.
 
-1. Write the plan as the task JSON (section 3 step 1) and run `ego work alter-plan push --root . --task .ego/state/tasks/<slug>.json --slug <slug>`. If the push fails (`ALTER_UNAVAILABLE`, `INVALID_TASK`, ...), report the error and fall back to the inline approval above with the local task file.
+1. With the task JSON written as above, run `ego work alter-plan push --root . --task .ego/state/tasks/<slug>.json --slug <slug>`. If the push fails (`ALTER_UNAVAILABLE`, `INVALID_TASK`, ...), report the error and fall back to the inline approval above with the local task file.
 2. Save the pushed spec as the edit baseline: `curl -sf "$A/api/tasks/<plan_id>/ego-plan" > .ego/state/alter_plans/<slug>.baseline.json`.
 3. Start the alter-side watcher: in Claude Code Monitor (or Bash `run_in_background`) with `ego work alter-plan wait <plan_id> --root .`; elsewhere skip it and rely on the state check in step 5.
-4. Ask: "この計画で進めてよいですか？ alter のタスク画面（plan_id: <plan_id>）で編集・実行ボタンを押しても承認できます。" and stop. If the user asks for changes here: stop the watcher, fold them into the plan and redo steps 1-4 with the same slug (a new plan_id; tell the user the previous draft in alter is superseded and can be moved to trash).
+4. Ask: "この計画で進めてよいですか？ alter のタスク画面（plan_id: <plan_id>）で編集・実行ボタンを押しても承認できます。" and stop. If the user asks for changes here: stop the watcher, fold them into the task JSON and redo steps 1-4 with the same slug (a new plan_id; tell the user the previous draft in alter is superseded and can be moved to trash).
 5. On the first approval (watcher finished, or the user answered yes), read `curl -sf "$A/api/tasks/<plan_id>/ego-plan"` once, compare its `spec` with the baseline's `spec` (`python3 -c 'import json,sys;a=json.load(open(sys.argv[1]))["spec"];b=json.load(open(sys.argv[2]))["spec"];print("same" if a==b else "edited")' <baseline> <current>`), stop the watcher, and act on `state`:
    - `ready` (confirmed in alter): pull now (section 3, alter flow). If `edited`, list the changed nodes and fields in a few lines; the alter version is the approved plan.
    - `draft`, CLI yes, `same`: mark it confirmed in alter, then pull: `csrf=$(curl -sf "$A/api/session" | python3 -c 'import json,sys;print(json.load(sys.stdin)["csrf"])') && curl -sf -X POST -H "x-alter-csrf: $csrf" "$A/api/tasks/<plan_id>/ego-plan/ready"`. A 422 lists `errors[]`: show them, fix the plan and redo steps 1-4.
@@ -110,7 +119,7 @@ When `knowledge = "alter"`, push the plan to alter **before** asking, and accept
 
 Do not edit project files yourself. The engine runs each node in an isolated copy and enforces roles, `write_allowlist` and the reviewer gate. Your job is to start the run, relay events and report.
 
-1. Write the approved plan as the task JSON in `.ego/state/tasks/<slug>.json`; do not plan it again with `ego work plan`. One node per graph node: `depends_on` from When, `write_allowlist` from Where, 5W1H into `requirement`, How into `steps`, Why into `intent`, Done when into `done_when` (commands as argv arrays in `checks`), Non-goals, Assumptions and Provides into `non_goals`, `assumptions` and `provides`. Intake answers go into task-level `instructions`. Then save an interactive checkpoint: `ego session checkpoint --task-id <slug> --goal "<goal>" --completed "plan approved" --next "run-<slug>" --decision "<decision or none>" --blocker "<blocker or none>" --status IN_PROGRESS --kind plan_ready --root .`.
+1. The approved plan is the task JSON from section 2: use that file as it is; do not rewrite it and do not plan it again with `ego work plan`. Save an interactive checkpoint: `ego session checkpoint --task-id <slug> --goal "<goal>" --completed "plan approved" --next "run-<slug>" --decision "<decision or none>" --blocker "<blocker or none>" --status IN_PROGRESS --kind plan_ready --root .`.
 
    alter flow: Run `ego work alter-plan pull <plan_id> --root . --out .ego/state/tasks/<slug>.json --run-id run-<slug>` (add a numeric suffix to the run id on every repeat). It overwrites the local task file with the approved alter version, then validates and claims the plan (ALTER_PLAN_NOT_READY means it is still `draft`: go back to section 2's alter step 5). If it prints `from_run`, start step 2 with `--from <from_run>` so verified nodes are not run again. The run reports node results to alter by itself; after INTERRUPTED or when `alter_sync.json` shows pending, run `ego work alter-plan sync <run_id> --root . --task <file>`. After a FAILED run tell the user to fix the failed nodes in alter and press the re-run button, then wait and pull again; never edit the plan yourself in this flow.
 2. Start the run: `ego work run --root . --task <task-file> --host <host> --trust-cli --run-id run-<slug>`. In Claude Code use Bash `run_in_background`, elsewhere the foreground (`managed.md` has the flags). Each node is saved as it finishes, also inside a parallel wave, so a crash loses only the nodes still running.
@@ -136,7 +145,7 @@ WORK_REFERENCES = {
 
 For large or cross-component work needing dependency scheduling or several hosts. Check `ego work run --help` before first use.
 
-1. Inspect the project and choose an available authenticated host and a narrow write scope. If the user approved a `work-plan` graph, write that plan as the task file (field mapping in the `work-plan` skill) and do not plan again. Otherwise run `ego work plan --root . --goal "<goal>" --host <host> --scope '<paths>' --execute --out <task-file>`. This invokes an external planning CLI; respect existing execution permissions. Do not use mock for real implementation.
+1. Inspect the project and choose an available authenticated host and a narrow write scope. If the user approved a `work-plan` graph, use the task file that skill already wrote and do not plan again. Otherwise run `ego work plan --root . --goal "<goal>" --host <host> --scope '<paths>' --execute --out <task-file>`. This invokes an external planning CLI; respect existing execution permissions. Do not use mock for real implementation.
 2. Read the generated task JSON. Verify prompts, dependencies, host/model routes, write_allowlist and checks. Node prompts say what to achieve; `requirement` (5W1H) and `steps` say exactly how. Check that every step names the file, the function or section and the exact change, and rewrite vague steps before running. Each node carries `intent` (one sentence: why the goal needs it); agent nodes carry `done_when` (observable acceptance criteria) and, only where they apply, `non_goals`, `assumptions` and `provides` (what dependent nodes rely on). Keep them short, correct any that misread the user's intent, and put answers the user gave during clarification into task-level `instructions` so every worker sees them. Add focused test commands as argv arrays in each node's checks, and a final gate with integration checks depending on all implementation nodes. Explain the short plan in conversation and obtain any required approval. For parallel nodes, put shared contracts/types in an upstream node first and keep parallel write_allowlist scopes disjoint when possible.
 3. Run `ego work run --root . --task <task-file> --host <host> --trust-cli` (add `--run-id <id>` so `ego work watch <id>` streams JSON-line events and `ego work status <id>` shows a `progress` tail while it runs). The output is a compact summary: run_id, final_status, node_status, changed_files, clipped failures and usage. Open `record_path` or pass `--verbose` only when the summary is not enough. A PASSED run without applied=true is verified but unapplied. Report failures; do not apply failed runs. A failure stops only the nodes that depend on it; independent nodes still finish. Each node is saved and merged when it finishes, immediately unblocking dependent nodes (also inside a parallel wave): its staging, `record.json` and the managed checkpoint are written at that moment, so a node that passed stays saved even if a parallel sibling fails or the process dies.
 4. To fix a failed run, correct only the failed nodes in the task file and run `ego work run ... --from <failed-run-id>`: verified agent nodes with an unchanged definition and upstream are carried, not run again. `ego work resume <run-id>` with the unchanged task retries failed nodes with their last failure as feedback.

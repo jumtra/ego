@@ -65,6 +65,18 @@ def test_work_plan_skill_is_graph_format(tmp_path: Path):
     assert (tmp_path / '.claude/skills/work-plan/SKILL.md').read_text() == plan
 
 
+def test_work_plan_writes_task_json_first():
+    from ego.domain.templates import LEGACY_WORK_PLAN_HASHES
+    plan = skill_md('work-plan')
+    section = plan[plan.index('## 2. Plan as a node graph'):plan.index('## 3. Execute')]
+    assert 'directly as the task JSON' in section and '.ego/state/tasks/<slug>.json' in section
+    assert 'never write the node details out as text first' in section
+    assert section.index('directly as the task JSON') < section.index('この計画で進めてよいですか')
+    assert 'Write the approved plan as the task JSON' not in plan
+    assert '48747228d089e900c5caae5bfdc0fe7cf1853ffdea6cfd54de2748b6cf85dd74' in LEGACY_WORK_PLAN_HASHES
+    assert sha256(plan) not in LEGACY_WORK_PLAN_HASHES
+
+
 def test_work_plan_nodes_match_managed_fields():
     plan = skill_md('work-plan')
     assert '**Non-goals / Assumptions / Provides:**' in plan
