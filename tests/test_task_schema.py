@@ -87,7 +87,7 @@ def test_intent_exceeding_max_chars_is_detected_mechanically():
         validate_task(spec)
 
     assert exc_info.value.code == "INVALID_TASK"
-    assert "exceeds max length of 400 characters" in str(exc_info.value)
+    assert f"exceeds max length of {DEFAULT_PLAN_SCHEMA_LIMITS.max_note_chars} characters" in str(exc_info.value)
 
 
 def test_requirement_field_exceeding_max_chars_is_detected_mechanically():
@@ -110,7 +110,7 @@ def test_requirement_field_exceeding_max_chars_is_detected_mechanically():
         validate_task(spec)
 
     assert exc_info.value.code == "INVALID_TASK"
-    assert "exceeds max length of 400 characters" in str(exc_info.value)
+    assert f"exceeds max length of {DEFAULT_PLAN_SCHEMA_LIMITS.max_note_chars} characters" in str(exc_info.value)
 
 
 def test_step_item_exceeding_max_chars_is_detected_mechanically():
@@ -133,7 +133,7 @@ def test_step_item_exceeding_max_chars_is_detected_mechanically():
         validate_task(spec)
 
     assert exc_info.value.code == "INVALID_TASK"
-    assert "exceeds max length of 400 characters" in str(exc_info.value)
+    assert f"exceeds max length of {DEFAULT_PLAN_SCHEMA_LIMITS.max_note_chars} characters" in str(exc_info.value)
 
 
 def test_steps_exceeding_max_items_is_detected_mechanically():

@@ -166,10 +166,10 @@ ego work resume <run_id> --task task.json --host claude --apply --approve --trus
 | `checks` | すべて | 終了コード 0 で成功すべきコマンド（argv 配列） |
 | `argv` | code、gate | 実行するコマンド（`argv` か `checks` のどちらかが必要） |
 | `role` | agent | `coder` / `tester` / `reviewer`（権限を強制）。`tester` は `tests/` 配下のみ書き込める（`write_allowlist` は `tests/` で始まる必要がある）。`reviewer` は読み取り専用で `write_allowlist` を持たない |
-| `inputs`、`outputs` | agent | I/O 契約。読むべき既存ファイル（最大 6 件）と、変更するファイルまたは `path::関数名`。各 output は `write_allowlist` に一致する必要がある。依存先ノードには前段の `outputs` が渡る |
+| `inputs`、`outputs` | agent | I/O 契約。読むべき既存ファイル（最大 10 件）と、変更するファイルまたは `path::関数名`。各 output は `write_allowlist` に一致する必要がある。依存先ノードには前段の `outputs` が渡る |
 | `reviews`、`max_rounds`、`on_exhausted` | reviewer | `reviews`（必須）は差し戻す `coder` ノード。`max_rounds` は 0〜5（既定は config の `max_rounds`、2）。`on_exhausted` は `fail`（既定）か `replan` |
-| `intent`、`done_when`、`non_goals`、`assumptions`、`provides` | agent | そのステージの理由、受け入れ基準、やらないこと、依拠する事実、後続が必要とするもの。短い文字列（`intent`）か、各 400 文字以内の文字列を最大 6 件含むリスト。上限は [設定](configuration.md) の `[tuning.plan_schema]`（`.ego/defaults.toml`）から取ります |
-| `requirement`、`steps` | agent | 5W1H（`who` `what` `when` `where` `why` `how`、各 400 文字以内）と、ワーカーが書かれたとおりに実行する 1〜10 件の手順 |
+| `intent`、`done_when`、`non_goals`、`assumptions`、`provides` | agent | そのステージの理由、受け入れ基準、やらないこと、依拠する事実、後続が必要とするもの。文字列（`intent`）か、文字列を最大 10 件含むリスト（各 800 文字以内）。上限は [設定](configuration.md) の `[tuning.plan_schema]`（`.ego/defaults.toml`）から取ります |
+| `requirement`、`steps` | agent | 5W1H（`who` `what` `when` `where` `why` `how`、各 800 文字以内。`what` と `how` を書き、他は別の項目にない情報がある場合だけ書く）と、ワーカーが書かれたとおりに実行する 1〜20 件の手順 |
 | `host` / `hosts`、`strategy`、`model` / `models`、`fallback_on` | agent | ルーティング。下記参照 |
 | `agent` | agent | 任意のカスタムエージェント名（`.claude/agents/*.md`、`.agents/agents/*.md`、`.opencode/agents/*.md`、`.codex/agents/*.toml` から検出）。定義内容がノードのプロンプトに埋め込まれる |
 | `mcp` | agent | 必要な MCP サーバー名のリスト（1〜8 件、例: `["alter"]`）。`worker_context = "lean"` でもホストの MCP サーバーを有効のままにし、ドメイン知識・用語集の取得指示を付与する。`knowledge = "alter"` のときは alter（`alter_task_context` / `alter_search` / `alter_get_note`）だけから取得し、file ナレッジのときは `.ego/knowledge/index.md`（`ego knowledge`）を読む。`knowledge = "alter"` 時は自動適用 |

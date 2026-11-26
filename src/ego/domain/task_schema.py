@@ -62,15 +62,15 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
     ]
 
     class RequirementSpec(BaseModel):
-        """5W1H implementation requirement breakdown. Each field should be one short concrete sentence."""
+        """5W1H breakdown. Fill what and how; fill another field only when it adds what no other node field says."""
         model_config = ConfigDict(extra="forbid")
 
-        who: note_string | None = Field(default=None, description="Who executes this node (e.g. worker or role name)")
-        what: note_string | None = Field(default=None, description="What concrete deliverable or change to achieve")
-        when: note_string | None = Field(default=None, description="When to run relative to dependencies")
-        where: note_string | None = Field(default=None, description="Where in the codebase (exact files or directories)")
-        why: note_string | None = Field(default=None, description="Why this node is needed to satisfy the goal")
-        how: note_string | None = Field(default=None, description="How to implement it concretely")
+        who: note_string | None = Field(default=None, description="Omit unless it adds something role does not say")
+        what: note_string | None = Field(default=None, description="Observable behavior before and after, including edge and failure cases")
+        when: note_string | None = Field(default=None, description="Only with depends_on: what this node takes from each prerequisite")
+        where: note_string | None = Field(default=None, description="Only when write_allowlist paths are not enough: entry point and role of each file")
+        why: note_string | None = Field(default=None, description="Omit unless it adds something intent does not say")
+        how: note_string | None = Field(default=None, description="Approach, why it was chosen and the existing pattern it reuses (does not repeat steps)")
 
         @model_validator(mode="after")
         def _validate_non_empty(self) -> RequirementSpec:
@@ -104,11 +104,11 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
         ] = None
         intent: Annotated[
             note_string | None,
-            Field(default=None, description="One sentence explaining why the goal needs this node"),
+            Field(default=None, description="The current problem and why the goal needs it solved (no solution)"),
         ] = None
         prompt: Annotated[
             str | None,
-            Field(default=None, description="Required for agent nodes: what to achieve (concise summary; put detailed implementation steps in steps)"),
+            Field(default=None, description="Required for agent nodes: node title, one plain sentence naming the finished result (put implementation detail in steps)"),
         ] = None
         write_allowlist: Annotated[
             list[str] | None,
@@ -132,12 +132,12 @@ def build_task_schema_models(limits: PlanSchemaLimits = DEFAULT_PLAN_SCHEMA_LIMI
                 default=None,
                 min_length=1,
                 max_length=limits.max_step_items,
-                description=f"1-{limits.max_step_items} concrete ordered steps naming file, section, and exact change. Never write 'consider', 'as appropriate' or 'refactor as needed'; inspect candidate files until specific.",
+                description=f"1-{limits.max_step_items} concrete ordered steps, one action each, naming file, section, exact change and resulting behavior. Never write 'consider', 'as appropriate' or 'refactor as needed'; inspect candidate files until specific.",
             ),
         ] = None
         done_when: Annotated[
             note_list | None,
-            Field(default=None, description="1-4 observable acceptance criteria for node completion"),
+            Field(default=None, description="Observable acceptance criteria, each a condition and expected result; commands go in checks"),
         ] = None
         non_goals: Annotated[
             note_list | None,

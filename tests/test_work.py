@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 
+from ego.domain.task_schema import DEFAULT_PLAN_SCHEMA_LIMITS
 from ego.adapters import hosts
 from ego.adapters.codeintel import text_fallback
 from ego.adapters.runner import RunResult
@@ -80,7 +81,7 @@ def test_work_plan_writes_task_json_first():
 def test_work_plan_nodes_match_managed_fields():
     plan = skill_md('work-plan')
     assert '**Non-goals / Assumptions / Provides:**' in plan
-    assert '1-4 observable acceptance criteria' in plan
+    assert 'observable acceptance criteria' in plan
     assert "assumptions turns out false, stop and ask" in plan
     for field in ('`requirement`', '`steps`', '`intent`', '`done_when`', '`non_goals`', '`assumptions`', '`provides`'):
         assert field in plan
@@ -1201,7 +1202,7 @@ def test_outputs_must_be_in_write_allowlist_and_inputs_bounded():
     with pytest.raises(EgoError, match="outside write_allowlist"):
         validate_task({"nodes": [node("a", outputs=["docs/x.md"])]})
     with pytest.raises(EgoError, match="INVALID_TASK|must be"):
-        validate_task({"nodes": [node("a", inputs=["f"] * 7)]})
+        validate_task({"nodes": [node("a", inputs=["f"] * (DEFAULT_PLAN_SCHEMA_LIMITS.max_note_items + 1))]})
 
 
 def test_tester_may_only_write_tests(project, writing_agent):
