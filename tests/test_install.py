@@ -14,6 +14,7 @@ import tomllib
 import zipfile
 
 from ego import __version__
+from ego.domain.task_schema import DEFAULT_PLAN_SCHEMA_LIMITS
 from ego.adapters import hostcompat
 from ego.adapters import selfupdate
 from ego.adapters.codeintel import impact, affected_tests, search, health
@@ -916,10 +917,10 @@ def test_node_notes_reach_worker_and_successor_prompts(tmp_path):
     assert 'Later stages rely on this stage for\n- docs/plan.md' in first and 'Done when' not in first
 
 
-@pytest.mark.parametrize('notes',[{'intent':''},{'intent':['why']},{'intent':'x'*401},
-                                  {'done_when':'passes'},{'done_when':['']},{'provides':['a']*7},
+@pytest.mark.parametrize('notes',[{'intent':''},{'intent':['why']},{'intent':'x'*(DEFAULT_PLAN_SCHEMA_LIMITS.max_note_chars+1)},
+                                  {'done_when':'passes'},{'done_when':['']},{'provides':['a']*(DEFAULT_PLAN_SCHEMA_LIMITS.max_note_items+1)},
                                   {'requirement':'x'},{'requirement':{}},{'requirement':{'whom':'x'}},
-                                  {'steps':[]},{'steps':['s']*11}])
+                                  {'steps':[]},{'steps':['s']*(DEFAULT_PLAN_SCHEMA_LIMITS.max_step_items+1)}])
 def test_node_notes_are_bounded(notes):
     task={'goal':'g','nodes':[{'id':'a','prompt':'p','write_allowlist':['src/*'],**notes}]}
     with pytest.raises(EgoError,match='INVALID_TASK|must be'):

@@ -56,7 +56,7 @@ Choose the **smallest useful workflow** and keep context small: read only the fi
 
 Prefer direct user instructions over ceremonial workflow. Write formal documents only when requested or needed for a decision.
 
-**Planning:** when you show a plan, use the node-graph format of the `work-plan` skill: 5W1H per node, and How steps that can be implemented exactly as written (file, function or section, exact change), so the implementer cannot drift in a different direction. Do not invoke external brainstorming or planning skills.
+**Planning:** when you show a plan, use the node-graph format of the `work-plan` skill: per node the why, the behavior before and after, the approach, and How steps that can be implemented exactly as written (file, function or section, exact change), so the implementer cannot drift in a different direction. Do not invoke external brainstorming or planning skills.
 
 **Intent first, questions only when needed:** at any size, before editing you can state in one line each why the user wants this and what will show it is done. When the request, the code and memory answer both, proceed without asking. Ask when an open point would change what you build and a wrong guess would be costly to undo: one question at a time, each with your recommended answer. Stop asking once the remaining points have safe defaults, and state those assumptions in the report. In a managed run, put the answers in task-level `instructions`.
 
@@ -94,12 +94,35 @@ Ask the user about the points that would change what you build. Rules:
 
 The graph is both the requirements and the plan. Do not invoke external brainstorming or planning skills, and do not write spec or other plan files unless the user asks.
 
-Write the plan **directly as the task JSON** in `.ego/state/tasks/<slug>.json`. It is the only full copy of the plan: never write the node details out as text first and convert them afterwards. One node per graph node, with task-level `goal` and intake answers in task-level `instructions`. For each node:
+Write the plan **directly as the task JSON** in `.ego/state/tasks/<slug>.json`. It is the only full copy of the plan: never write the node details out as text first and convert them afterwards. One node per graph node.
 
-- **Who / What / When / Where / Why:** one line each, in `requirement` (5W1H). When = the nodes it waits for, also in `depends_on`. Where = exact file paths, also in `write_allowlist`. Why = why the goal needs this node, also in `intent`.
-- **How** (`steps`): numbered steps written so they can be implemented exactly as written, so whoever implements them cannot drift in a different direction. Each step names the file, the function or section (or line), and the exact change: code, text or command. Leave no design decision open (no "consider" or "as appropriate"); if a step cannot be written concretely, read more code or ask first.
-- **Done when** (`done_when`, commands as argv arrays in `checks`): 1-4 observable acceptance criteria, each a test, command or behavior that proves it.
-- **Non-goals / Assumptions / Provides:** (`non_goals`, `assumptions`, `provides`) only where they apply, one short line each. Non-goals = tempting work this node must not do. Assumptions = unverified facts the node relies on. Provides = what dependent nodes rely on.
+The user reads and edits the plan (with `knowledge = "alter"`, on the alter tasks screen), so each node must be understandable on its own, without this chat or other nodes:
+
+- Write every human-readable field in the user's language (code identifiers, paths and commands stay as they are).
+- Spell out abbreviations and internal names on first use. Never write filler that carries no information ("first", "follow the steps exactly", "see above", "same as N1").
+- Say each fact in one field only; do not restate another field in different words.
+- Every string in a node is a single line: alter reads node text line by line and drops anything after a line break.
+
+Task-level fields:
+
+- `goal`: the first line is a short title (at most 120 characters; it names the plan in alter). Following lines: the problem and the result the user wants.
+- `done`: how the user can tell the whole plan succeeded: the end-to-end behavior and the commands that show it.
+- `instructions`: only what applies to every node: intake answers, plan-wide assumptions, constraints and out of scope. Every worker receives it. Do not start a line with `## `.
+
+Node fields (the 5W1H keys go in `requirement`):
+
+- `prompt` is the node title: one plain sentence naming the finished result, without file lists or implementation detail.
+- `intent` (why): the current problem, and why the goal needs it solved. No solution here.
+- `requirement.what`: the observable behavior before and after, including the edge and failure cases that must work. No file names or procedure.
+- `requirement.how`: the approach, why it was chosen, and the existing pattern or function it reuses. It summarizes the design; it does not repeat `steps`.
+- `requirement.when` (only with `depends_on`): what this node takes from each prerequisite, so the reason for the order is clear.
+- `requirement.where` (only when paths are not enough): the entry point and the role each file plays. `write_allowlist` already lists the paths.
+- Omit `requirement.who` and `requirement.why` unless they add something `role` and `intent` do not say.
+- **How** (`steps`): numbered steps written so they can be implemented exactly as written, so whoever implements them cannot drift in a different direction. Each step is one action (split a step that holds several) and names the file, the function or section (or line), the exact change (code, text or command) and the behavior it produces, including the tests to add or change. Leave no design decision open (no "consider" or "as appropriate"); if a step cannot be written concretely, read more code or ask first.
+- **Done when** (`done_when`): observable acceptance criteria, one per item, each a condition and its expected result. Cover the normal case and the failure cases of `requirement.what`. Commands go in `checks` as argv arrays, not in `done_when`; `checks` run the tests that prove those criteria.
+- `write_allowlist`: the exact files the steps change, including test files. `depends_on`: only real prerequisites.
+- `inputs`: existing files to read, only when the steps rely on them. `outputs`: the changed `path::function`, only when a later node relies on it.
+- **Non-goals / Assumptions / Provides:** (`non_goals`, `assumptions`, `provides`) only where they apply, one self-contained sentence each. Non-goals = tempting work this node must not do, with the reason. Assumptions = facts you have not verified that the node relies on, written so the worker can check them (a verified fact is not an assumption). Provides = what dependent nodes rely on, with exact names, signatures or formats.
 
 Then show only a short summary of that file, without repeating the node fields: one line for the goal and one for done, the dependency graph (`N1 ──► N2`), one line per node (what it changes and where), plan-wide assumptions (defaults from intake), tests to run (exact commands), out of scope and the task file path. Then ask: "この計画で進めてよいですか？" and stop. Edit project files only after the user approves; fold requested changes into the same task JSON, show what changed and confirm again.
 
